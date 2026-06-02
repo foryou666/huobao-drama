@@ -232,6 +232,14 @@
             </div>
             <div class="toolbar-right">
               <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景</span>
+              <button class="btn btn-sm" @click="openManualEntity('character')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                添加角色
+              </button>
+              <button class="btn btn-sm" @click="openManualEntity('scene')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                添加场景
+              </button>
               <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="assistantRunning">
                 <Loader2 v-if="assistantRunning && assistantAgentType === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -245,11 +253,15 @@
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </div>
             <div class="empty-title">从剧本提取角色与场景</div>
-            <div class="empty-desc">AI 自动分析剧本，提取角色信息和场景列表，与项目已有数据智能去重合并</div>
-            <button class="btn btn-primary" @click="doExtract">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              开始提取
-            </button>
+            <div class="empty-desc">AI 自动分析剧本，提取角色信息和场景列表，与项目已有数据智能去重合并；也可手动添加</div>
+            <div class="step-empty-actions">
+              <button class="btn btn-primary" @click="doExtract">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                开始提取
+              </button>
+              <button class="btn btn-sm" @click="openManualEntity('character')">手动添加角色</button>
+              <button class="btn btn-sm" @click="openManualEntity('scene')">手动添加场景</button>
+            </div>
           </div>
           <div v-else-if="assistantRunning && assistantAgentType === 'extractor'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
@@ -541,9 +553,9 @@
                       <div class="detail-preview-media">
                         <img
                           v-if="getFirstFrame(selectedSb)"
-                          :src="'/' + getFirstFrame(selectedSb)"
+                          :src="displayUrl(getFirstFrame(selectedSb))"
                           class="previewable-image"
-                          @click.stop="openImageViewer('/' + getFirstFrame(selectedSb), `镜头 #${sbs.indexOf(selectedSb) + 1} 首帧`)"
+                          @click.stop="openImageViewer(displayUrl(getFirstFrame(selectedSb)), `镜头 #${sbs.indexOf(selectedSb) + 1} 首帧`)"
                         />
                         <div v-else class="detail-preview-empty">待生成</div>
                       </div>
@@ -553,9 +565,9 @@
                       <div class="detail-preview-media">
                         <img
                           v-if="getLastFrame(selectedSb)"
-                          :src="'/' + getLastFrame(selectedSb)"
+                          :src="displayUrl(getLastFrame(selectedSb))"
                           class="previewable-image"
-                          @click.stop="openImageViewer('/' + getLastFrame(selectedSb), `镜头 #${sbs.indexOf(selectedSb) + 1} 尾帧`)"
+                          @click.stop="openImageViewer(displayUrl(getLastFrame(selectedSb)), `镜头 #${sbs.indexOf(selectedSb) + 1} 尾帧`)"
                         />
                         <div v-else class="detail-preview-empty">待生成</div>
                       </div>
@@ -655,7 +667,7 @@
                           :title="img.readonly ? `${img.label}（只读，点击预览）` : img.label"
                           @click="onStoryboardSceneImageClick(selectedSb, img)"
                         >
-                          <img v-if="img.url" :src="'/' + normalizeMediaPath(img.url)" :alt="img.label" />
+                          <img v-if="img.url" :src="displayUrl(img.url)" :alt="img.label" />
                           <span v-else class="scene-angle-empty">{{ img.label }}</span>
                           <span class="scene-angle-label">{{ img.label }}</span>
                         </button>
@@ -736,7 +748,7 @@
                   @gen-first="genFirstFrameFromBlocking(selectedSb, 'first_frame')"
                   @gen-last="genFirstFrameFromBlocking(selectedSb, 'last_frame')"
                   @clear="clearBlockingImage(selectedSb)"
-                  @preview="openImageViewer('/' + normalizeMediaPath(getBlockingImage(selectedSb)), `镜头 #${selectedSb.storyboard_number || selectedSb.storyboardNumber || sbs.indexOf(selectedSb) + 1} 站位图`)"
+                  @preview="openImageViewer(displayUrl(getBlockingImage(selectedSb)), `镜头 #${selectedSb.storyboard_number || selectedSb.storyboardNumber || sbs.indexOf(selectedSb) + 1} 站位图`)"
                 />
                 <GenerationTimer v-if="isPendingBlocking(selectedSb.id)" :task-key="blockingTimerKey(selectedSb.id)" />
                 </div>
@@ -862,6 +874,10 @@
               <span v-if="lockedImageConfigProvider && !imageReferenceSupported" class="tag tag-warn">当前图片模型不支持参考图生图</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" @click="openManualEntity('character')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  添加角色
+                </button>
                 <button class="btn btn-sm" :disabled="assistantRunning" @click="batchCharImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
@@ -870,8 +886,11 @@
             </div>
             <div v-if="!chars.length" class="step-empty" style="padding: 28px 16px">
               <div class="empty-title">尚未提取角色</div>
-              <div class="empty-desc">请先在「提取」步骤中从剧本提取角色，再回来生成形象。</div>
-              <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
+              <div class="empty-desc">可 AI 从剧本提取，或手动添加角色后再生成形象。</div>
+              <div class="step-empty-actions">
+                <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
+                <button type="button" class="btn btn-sm" @click="openManualEntity('character')">手动添加角色</button>
+              </div>
             </div>
             <div v-else-if="!visualChars.length" class="step-empty" style="padding: 28px 16px">
               <div class="empty-title">无需生成形象</div>
@@ -882,9 +901,9 @@
                 <div class="asset-cover">
                   <img
                     v-if="c.image_url || c.imageUrl"
-                    :src="'/' + (c.image_url || c.imageUrl)"
+                    :src="displayUrl(c.image_url || c.imageUrl)"
                     class="previewable-image"
-                    @click.stop="openImageViewer('/' + (c.image_url || c.imageUrl), `${c.name} 角色形象`)"
+                    @click.stop="openImageViewer(displayUrl(c.image_url || c.imageUrl), `${c.name} 角色形象`)"
                   />
                   <label v-else class="asset-cover-empty asset-cover-upload" :class="{ 'is-disabled': isPendingCharImage(c.id) || isPendingCharUpload(c.id) }">
                     <input type="file" accept="image/*" hidden :disabled="isPendingCharImage(c.id) || isPendingCharUpload(c.id)" @change="uploadCharImage(c.id, $event)" />
@@ -905,9 +924,9 @@
                       <button
                         type="button"
                         class="char-image-variant-thumb"
-                        @click.stop="openImageViewer('/' + normalizeMediaPath(img.url), `${c.name} · ${variantLabel(img)}`)"
+                        @click.stop="openImageViewer(displayUrl(img.url), `${c.name} · ${variantLabel(img)}`)"
                       >
-                        <img :src="'/' + normalizeMediaPath(img.url)" :alt="variantLabel(img)" />
+                        <img :src="displayUrl(img.url)" :alt="variantLabel(img)" />
                       </button>
                       <span class="char-image-variant-label">{{ variantLabel(img) }}</span>
                     </div>
@@ -918,9 +937,9 @@
                         <button
                           type="button"
                           class="char-outfit-thumb"
-                          @click.stop="openImageViewer('/' + normalizeMediaPath(outfit.url), `${c.name} · ${outfit.label}`)"
+                          @click.stop="openImageViewer(displayUrl(outfit.url), `${c.name} · ${outfit.label}`)"
                         >
-                          <img :src="'/' + normalizeMediaPath(outfit.url)" :alt="outfit.label" />
+                          <img :src="displayUrl(outfit.url)" :alt="outfit.label" />
                         </button>
                         <span class="char-outfit-name">{{ outfit.label }}</span>
                       </div>
@@ -1004,20 +1023,32 @@
               <span class="tag">{{ lockedImageConfigLabel }}</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" @click="openManualEntity('scene')">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  添加场景
+                </button>
                 <button class="btn btn-sm" :disabled="assistantRunning" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
               </div>
             </div>
-            <div class="asset-grid">
+            <div v-if="!scenes.length" class="step-empty" style="padding: 28px 16px">
+              <div class="empty-title">尚未添加场景</div>
+              <div class="empty-desc">可 AI 从剧本提取，或手动添加场景后再生成场景图。</div>
+              <div class="step-empty-actions">
+                <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
+                <button type="button" class="btn btn-sm" @click="openManualEntity('scene')">手动添加场景</button>
+              </div>
+            </div>
+            <div v-else class="asset-grid">
               <div v-for="s in scenes" :key="s.id" class="card asset-card">
                 <div class="asset-cover wide">
                   <img
                     v-if="s.image_url || s.imageUrl"
-                    :src="'/' + (s.image_url || s.imageUrl)"
+                    :src="displayUrl(s.image_url || s.imageUrl)"
                     class="previewable-image"
-                    @click.stop="openImageViewer('/' + (s.image_url || s.imageUrl), `${s.location} 场景图`)"
+                    @click.stop="openImageViewer(displayUrl(s.image_url || s.imageUrl), `${s.location} 场景图`)"
                   />
                   <label v-else class="asset-cover-empty asset-cover-upload" :class="{ 'is-disabled': isPendingSceneImage(s.id) || isPendingSceneUpload(s.id) }">
                     <input type="file" accept="image/*" hidden :disabled="isPendingSceneImage(s.id) || isPendingSceneUpload(s.id)" @change="uploadSceneImage(s.id, $event)" />
@@ -1107,9 +1138,9 @@
                       <button
                         type="button"
                         class="scene-angle-preview"
-                        @click="img.url && openImageViewer('/' + normalizeMediaPath(img.url), `${s.location} · ${img.label}`)"
+                        @click="img.url && openImageViewer(displayUrl(img.url), `${s.location} · ${img.label}`)"
                       >
-                        <img v-if="img.url" :src="'/' + normalizeMediaPath(img.url)" :alt="img.label" />
+                        <img v-if="img.url" :src="displayUrl(img.url)" :alt="img.label" />
                         <span>{{ img.label }}</span>
                       </button>
                       <button
@@ -1199,8 +1230,8 @@
 
             <div v-if="gridHistory.length" class="grid-history-panel">
               <div v-if="gridImagePath" class="latest-grid-strip">
-                <button class="latest-grid-strip-thumb" @click="openImageViewer('/' + gridImagePath, '当前宫格图')">
-                  <img :src="'/' + gridImagePath" class="previewable-image" />
+                <button class="latest-grid-strip-thumb" @click="openImageViewer(displayUrl(gridImagePath), '当前宫格图')">
+                  <img :src="displayUrl(gridImagePath)" class="previewable-image" />
                 </button>
                 <div class="latest-grid-strip-copy">
                   <div class="latest-grid-strip-head">
@@ -1236,7 +1267,7 @@
                   @click="selectGridHistory(item)"
                 >
                   <div class="grid-history-thumb">
-                    <img :src="'/' + item.localPath" class="previewable-image" />
+                    <img :src="displayUrl(item.localPath)" class="previewable-image" />
                   </div>
                   <div class="grid-history-copy">
                     <div class="grid-history-tags">
@@ -1283,9 +1314,9 @@
                       >
                         <img
                           v-if="getBlockingImage(sb)"
-                          :src="'/' + normalizeMediaPath(getBlockingImage(sb))"
+                          :src="displayUrl(getBlockingImage(sb))"
                           class="previewable-image"
-                          @click.stop="openImageViewer('/' + normalizeMediaPath(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
+                          @click.stop="openImageViewer(displayUrl(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
                         />
                         <div v-else class="frame-thumb-empty">
                           <Loader2 v-if="isPendingBlocking(sb.id)" :size="14" class="animate-spin" />
@@ -1299,9 +1330,9 @@
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
                         <img
                           v-if="getFirstFrame(sb)"
-                          :src="'/' + getFirstFrame(sb)"
+                          :src="displayUrl(getFirstFrame(sb))"
                           class="previewable-image"
-                          @click.stop="openImageViewer('/' + getFirstFrame(sb), `镜头 #${String(i + 1).padStart(2, '0')} 首帧`)"
+                          @click.stop="openImageViewer(displayUrl(getFirstFrame(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 首帧`)"
                         />
                         <div v-else class="frame-thumb-empty">
                           <Loader2 v-if="isPendingShotFrame(sb.id, 'first_frame')" :size="14" class="animate-spin" />
@@ -1318,9 +1349,9 @@
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'last_frame') && genShotFrame(sb, 'last_frame')">
                         <img
                           v-if="getLastFrame(sb)"
-                          :src="'/' + getLastFrame(sb)"
+                          :src="displayUrl(getLastFrame(sb))"
                           class="previewable-image"
-                          @click.stop="openImageViewer('/' + getLastFrame(sb), `镜头 #${String(i + 1).padStart(2, '0')} 尾帧`)"
+                          @click.stop="openImageViewer(displayUrl(getLastFrame(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 尾帧`)"
                         />
                         <div v-else class="frame-thumb-empty">
                           <Loader2 v-if="isPendingShotFrame(sb.id, 'last_frame')" :size="14" class="animate-spin" />
@@ -1362,7 +1393,7 @@
                 @gen-first="genFirstFrameFromBlocking(selectedSb, 'first_frame')"
                 @gen-last="genFirstFrameFromBlocking(selectedSb, 'last_frame')"
                 @clear="clearBlockingImage(selectedSb)"
-                @preview="openImageViewer('/' + normalizeMediaPath(getBlockingImage(selectedSb)), `镜头 #${String(sbs.indexOf(selectedSb) + 1).padStart(2, '0')} 站位图`)"
+                @preview="openImageViewer(displayUrl(getBlockingImage(selectedSb)), `镜头 #${String(sbs.indexOf(selectedSb) + 1).padStart(2, '0')} 站位图`)"
               />
             </aside>
             <div v-else class="shot-blocking-side card shot-blocking-placeholder">
@@ -1479,9 +1510,9 @@
                       <div class="grid-preview-wrap">
                         <div class="grid-preview-stage">
                           <img
-                            :src="'/' + gridImagePath"
+                            :src="displayUrl(gridImagePath)"
                             class="grid-preview-img previewable-image"
-                            @click.stop="openImageViewer('/' + gridImagePath, '宫格图预览')"
+                            @click.stop="openImageViewer(displayUrl(gridImagePath), '宫格图预览')"
                           />
                           <div class="grid-overlay" :style="gridOverlayStyle">
                             <button
@@ -1581,39 +1612,47 @@
             </div>
             <div class="prod-grid prod-grid-wide">
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
-                <div class="prod-cover">
+                <div class="prod-cover" :class="{ 'prod-cover-clickable': hasVid(sb) }" @click="hasVid(sb) && openVideoHistory(sb, i)">
                   <video
                     v-if="hasVid(sb)"
-                    :src="'/' + getVideoUrl(sb)"
+                    :src="displayUrl(getVideoUrl(sb))"
                     class="prod-video"
                     controls
                     preload="metadata"
                     playsinline
+                    @click.stop
                   />
                   <img
                     v-else-if="hasImg(sb)"
-                    :src="'/' + getStoryboardCover(sb)"
+                    :src="displayUrl(getStoryboardCover(sb))"
                     class="previewable-image"
-                    @click.stop="openImageViewer('/' + getStoryboardCover(sb), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
+                    @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   </div>
                   <span class="prod-idx">#{{ String(i+1).padStart(2,'0') }}</span>
+                  <span v-if="videoGenCount(sb.id) > 1" class="prod-overlay-badge prod-version-badge">{{ videoGenCount(sb.id) }} 个版本</span>
                   <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
                 </div>
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
                   <div class="prod-meta-line">{{ sb.shot_type || sb.shotType || '未设景别' }} · {{ sb.duration || 10 }}s</div>
                   <div class="prod-prompt-block">
-                    <label class="prod-prompt-field">
-                      <span class="prod-prompt-label">视频提示词</span>
+                    <label class="prod-prompt-field prod-prompt-field-video">
+                      <div class="prod-prompt-head">
+                        <span class="prod-prompt-label">视频提示词</span>
+                        <button type="button" class="btn btn-ghost btn-xs prod-prompt-expand" @click="openVideoPromptEditor(sb, i)">
+                          展开编辑 / AI 优化
+                        </button>
+                      </div>
                       <textarea
                         :value="sb.video_prompt || sb.videoPrompt || ''"
                         class="textarea prod-video-prompt"
-                        rows="4"
+                        rows="6"
                         placeholder="拆解分镜时生成，可在此微调后重新生成"
                         @blur="onVideoPromptBlur(sb, $event)"
+                        @dblclick.prevent="openVideoPromptEditor(sb, i)"
                       />
                     </label>
                     <label class="prod-duration-field">
@@ -1666,7 +1705,7 @@
                             :title="variantLabel(img)"
                             @click="setStoryboardCharacterImage(sb, charId, img.url)"
                           >
-                            <img :src="'/' + normalizeMediaPath(img.url)" :alt="variantLabel(img)" />
+                            <img :src="displayUrl(img.url)" :alt="variantLabel(img)" />
                             <span>{{ variantLabel(img) }}</span>
                           </button>
                         </div>
@@ -1695,11 +1734,11 @@
                           type="button"
                           class="video-blocking-slot"
                           :class="{ pending: isPendingBlocking(sb.id), empty: !getBlockingImage(sb) }"
-                          @click="getBlockingImage(sb) && openImageViewer('/' + normalizeMediaPath(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
+                          @click="getBlockingImage(sb) && openImageViewer(displayUrl(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
                         >
                           <img
                             v-if="getBlockingImage(sb)"
-                            :src="'/' + normalizeMediaPath(getBlockingImage(sb))"
+                            :src="displayUrl(getBlockingImage(sb))"
                             alt="站位图"
                           />
                           <div v-else-if="isPendingBlocking(sb.id)" class="video-blocking-slot-empty">
@@ -1788,9 +1827,9 @@
                           v-if="ref.url && ref.type === 'image'"
                           type="button"
                           class="video-ref-thumb"
-                          @click="openImageViewer('/' + normalizeMediaPath(ref.url), ref.label)"
+                          @click="openImageViewer(displayUrl(ref.url), ref.label)"
                         >
-                          <img :src="'/' + normalizeMediaPath(ref.url)" :alt="ref.label" />
+                          <img :src="displayUrl(ref.url)" :alt="ref.label" />
                         </button>
                         <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
                           <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
@@ -1843,6 +1882,13 @@
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
+                  <button
+                    v-if="hasVid(sb) || videoGenCount(sb.id) > 0"
+                    class="btn btn-sm"
+                    @click="openVideoHistory(sb, i)"
+                  >
+                    历史视频
+                  </button>
                 </div>
               </div>
             </div>
@@ -1873,7 +1919,7 @@
                   />
                   <video
                     v-else-if="hasVid(sb)"
-                    :src="'/' + getVideoUrl(sb)"
+                    :src="displayUrl(getVideoUrl(sb))"
                     class="prod-video"
                     controls
                     preload="metadata"
@@ -1881,9 +1927,9 @@
                   />
                   <img
                     v-else-if="hasImg(sb)"
-                    :src="'/' + getStoryboardCover(sb)"
+                    :src="displayUrl(getStoryboardCover(sb))"
                     class="previewable-image"
-                    @click.stop="openImageViewer('/' + getStoryboardCover(sb), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
+                    @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
@@ -2066,6 +2112,35 @@
       @preview="openImageViewer($event, sceneAngleRegen.previewTitle)"
     />
 
+    <VideoHistoryModal
+      :open="videoHistory.open"
+      :storyboard-id="videoHistory.storyboardId"
+      :storyboard-title="videoHistory.title"
+      :current-video-url="videoHistory.currentVideoUrl"
+      @close="closeVideoHistory"
+      @selected="applyVideoHistorySelection"
+    />
+
+    <VideoPromptEditorModal
+      :open="videoPromptEditor.open"
+      :storyboard-id="videoPromptEditor.storyboardId"
+      :shot-label="videoPromptEditor.shotLabel"
+      :initial-prompt="videoPromptEditor.initialPrompt"
+      :video-model-label="lockedVideoConfigLabel"
+      :context-lines="videoPromptEditor.contextLines"
+      @close="closeVideoPromptEditor"
+      @saved="onVideoPromptEditorSaved"
+    />
+
+    <ManualEntityModal
+      :open="manualEntity.open"
+      :type="manualEntity.type"
+      :drama-id="dramaId"
+      :episode-id="epId"
+      @close="closeManualEntity"
+      @created="refresh"
+    />
+
     <EpisodeAssistantPanel
       v-if="epId"
       v-model:input="assistantInput"
@@ -2101,8 +2176,12 @@ import { useEpisodeAssistant } from '~/composables/useEpisodeAssistant'
 import BaseSelect from '~/components/BaseSelect.vue'
 import AssetPickerModal from '~/components/AssetPickerModal.vue'
 import SceneAngleRegenModal from '~/components/SceneAngleRegenModal.vue'
+import VideoHistoryModal from '~/components/VideoHistoryModal.vue'
+import VideoPromptEditorModal from '~/components/VideoPromptEditorModal.vue'
+import ManualEntityModal from '~/components/ManualEntityModal.vue'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues } from '~/utils/video-ref-order.js'
+import { mediaDisplayUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
 import {
@@ -2229,6 +2308,16 @@ function charTransformTimerKeyFor(charId, transformId, source = 'primary') {
 const failedVideoMessages = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
+const videoHistory = ref({ open: false, storyboardId: null, title: '', currentVideoUrl: '' })
+const videoPromptEditor = ref({
+  open: false,
+  storyboardId: null,
+  shotLabel: '',
+  initialPrompt: '',
+  contextLines: [],
+})
+const manualEntity = ref({ open: false, type: 'character' })
+const videoGenCounts = ref({})
 const assetPicker = ref({ open: false, type: 'character', targetId: null })
 const sceneAnglePromptDrafts = ref({})
 const blockingPromptDrafts = ref({})
@@ -2303,6 +2392,106 @@ function openImageViewer(src, title = '') {
 
 function closeImageViewer() {
   imageViewer.value = { open: false, src: '', title: '' }
+}
+
+function videoGenCount(storyboardId) {
+  return videoGenCounts.value[storyboardId] || 0
+}
+
+function openVideoHistory(sb, index = null) {
+  if (!sb?.id) return
+  const idx = index != null ? index : sbs.value.findIndex(item => item.id === sb.id)
+  const label = idx >= 0 ? `镜头 #${String(idx + 1).padStart(2, '0')} 视频历史` : '镜头视频历史'
+  videoHistory.value = {
+    open: true,
+    storyboardId: sb.id,
+    title: label,
+    currentVideoUrl: getVideoUrl(sb) || '',
+  }
+}
+
+function closeVideoHistory() {
+  videoHistory.value = { ...videoHistory.value, open: false }
+}
+
+async function applyVideoHistorySelection(payload) {
+  const { storyboardId, videoUrl } = payload || {}
+  if (!storyboardId || !videoUrl) return
+  try {
+    await storyboardAPI.update(storyboardId, { video_url: videoUrl })
+    toast.success('已切换当前视频')
+    closeVideoHistory()
+    await refresh()
+    await loadVideoGenCounts()
+  } catch (e) {
+    toast.error(e.message || '切换视频失败')
+  }
+}
+
+async function loadVideoGenCounts() {
+  try {
+    const rows = await videoAPI.list({ drama_id: dramaId })
+    const counts = {}
+    for (const row of rows || []) {
+      const sid = row?.storyboard_id ?? row?.storyboardId
+      if (!sid) continue
+      counts[sid] = (counts[sid] || 0) + 1
+    }
+    videoGenCounts.value = counts
+  } catch {
+    videoGenCounts.value = {}
+  }
+}
+
+function buildVideoPromptContextLines(sb) {
+  if (!sb) return []
+  const sceneId = sb.scene_id || sb.sceneId
+  const scene = scenes.value.find(s => s.id === sceneId)
+  return [
+    sb.description || sb.title ? `描述：${sb.description || sb.title}` : '',
+    sb.shot_type || sb.shotType ? `景别：${sb.shot_type || sb.shotType}` : '',
+    sb.duration ? `时长：${sb.duration}s` : '',
+    getStoryboardCharacterNames(sb).length ? `角色：${getStoryboardCharacterNames(sb).join('、')}` : '',
+    scene?.location || sb.location ? `场景：${scene?.location || sb.location}` : '',
+    sb.dialogue ? `对白：${sb.dialogue}` : '',
+  ].filter(Boolean)
+}
+
+function openVideoPromptEditor(sb, index = null) {
+  if (!sb?.id) return
+  const idx = index != null ? index : sbs.value.findIndex(item => item.id === sb.id)
+  videoPromptEditor.value = {
+    open: true,
+    storyboardId: sb.id,
+    shotLabel: idx >= 0 ? `镜头 #${String(idx + 1).padStart(2, '0')}` : '镜头',
+    initialPrompt: sb.video_prompt || sb.videoPrompt || '',
+    contextLines: buildVideoPromptContextLines(sb),
+  }
+}
+
+function closeVideoPromptEditor() {
+  videoPromptEditor.value = { ...videoPromptEditor.value, open: false }
+}
+
+function openManualEntity(type) {
+  manualEntity.value = { open: true, type }
+}
+
+function closeManualEntity() {
+  manualEntity.value = { ...manualEntity.value, open: false }
+}
+
+function onVideoPromptEditorSaved(payload) {
+  const { storyboardId, videoPrompt } = payload || {}
+  const sb = sbs.value.find(item => item.id === storyboardId)
+  if (sb) {
+    sb.video_prompt = videoPrompt
+    sb.videoPrompt = videoPrompt
+    if (selectedSb.value?.id === storyboardId) {
+      selectedSb.value.video_prompt = videoPrompt
+      selectedSb.value.videoPrompt = videoPrompt
+    }
+  }
 }
 
 function openAssetPicker(type, targetId) {
@@ -2640,7 +2829,7 @@ function onBlockingThumbClick(sb) {
   selectedSb.value = sb
   if (getBlockingImage(sb)) {
     openImageViewer(
-      '/' + normalizeMediaPath(getBlockingImage(sb)),
+      displayUrl(getBlockingImage(sb)),
       `镜头 #${String(sbs.value.indexOf(sb) + 1).padStart(2, '0')} 站位图`,
     )
   }
@@ -3747,6 +3936,12 @@ async function refresh() {
     try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
     try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
     sbs.value = await episodeAPI.storyboards(ep.id)
+    pendingVideoIds.value = pendingVideoIds.value.filter(id => {
+      const sb = sbs.value.find(s => s.id === id)
+      return sb && !hasVid(sb)
+    })
+    await prefetchMediaUrls(collectDisplayMediaPaths(), { force: true })
+    await loadVideoGenCounts()
     if (sbs.value.length) {
       if (selectedSb.value?.id) {
         selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
@@ -4097,7 +4292,7 @@ function getSceneImagesForStoryboard(sb) {
 function onStoryboardSceneImageClick(sb, img) {
   if (!img?.url) return
   if (img.readonly || img.angle_id === 'blocking' || String(img.angle_id).startsWith('blocking:')) {
-    openImageViewer('/' + normalizeMediaPath(img.url), `${img.label || '站位图'}`)
+    openImageViewer(displayUrl(img.url), `${img.label || '站位图'}`)
     return
   }
   setStoryboardSceneAngle(sb, img.angle_id)
@@ -4465,8 +4660,35 @@ function getRefs(sb) {
   try { return JSON.parse(raw) } catch { return [] }
 }
 
-function normalizeMediaPath(raw) {
-  return String(raw || '').replace(/^\/+/, '')
+function collectDisplayMediaPaths() {
+  const paths = []
+  const push = (v) => { if (v) paths.push(v) }
+  for (const c of chars.value) {
+    push(c.image_url || c.imageUrl || c.local_path || c.localPath)
+    for (const img of listCharacterImages(c)) push(img.url)
+    for (const outfit of listCharacterOutfits(c.reference_images || c.referenceImages)) {
+      push(outfit.url)
+      for (const v of Object.values(outfit.variants || {})) push(v?.url)
+    }
+  }
+  for (const s of scenes.value) {
+    push(s.image_url || s.imageUrl || s.local_path || s.localPath)
+    for (const img of listSceneImages(s)) push(img.url)
+  }
+  for (const sb of sbs.value) {
+    push(sb.composed_image || sb.composedImage)
+    push(sb.first_frame_image || sb.firstFrameImage)
+    push(sb.last_frame_image || sb.lastFrameImage)
+    push(sb.blocking_image || sb.blockingImage)
+    push(getStoryboardCover(sb))
+    for (const ref of getRefs(sb)) push(ref)
+  }
+  if (gridImagePath.value) push(gridImagePath.value)
+  return paths
+}
+
+function displayUrl(raw) {
+  return mediaDisplayUrl(raw)
 }
 
 function videoRefHelpers() {
@@ -4636,15 +4858,16 @@ async function pollVideoGeneration(generationId, storyboardId) {
     }, 60, 4000, () => genTimer.endTask(videoTimerKey(storyboardId)))
     return
   }
-  for (let i = 0; i < 120; i++) {
-    await sleep(4000)
+  for (let i = 0; i < 300; i++) {
+    await sleep(5000)
     try {
       const res = await videoAPI.get(generationId)
       await refresh()
-      if (res?.status === 'completed') {
+      if (res?.status === 'completed' || hasVid(sbs.value.find(s => s.id === storyboardId))) {
         pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
         genTimer.endTask(videoTimerKey(storyboardId))
         delete failedVideoMessages.value[storyboardId]
+        await loadVideoGenCounts()
         toast.success('视频生成完成')
         return
       }
@@ -6089,14 +6312,27 @@ watch(() => route.params.episodeNumber, () => {
   gap: 4px;
 }
 .prod-prompt-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-3);
 }
-.prod-video-prompt {
+.prod-prompt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.prod-prompt-expand {
+  flex-shrink: 0;
   font-size: 11px;
-  line-height: 1.45;
-  min-height: 72px;
+  padding: 2px 8px;
+  height: auto;
+}
+.prod-video-prompt {
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 108px;
   resize: vertical;
 }
 .prod-duration-field .input {
@@ -6340,6 +6576,14 @@ watch(() => route.params.episodeNumber, () => {
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }
+.prod-cover-clickable { cursor: pointer; }
+.prod-cover-clickable:hover .prod-video { opacity: 0.92; }
+.prod-version-badge {
+  top: auto;
+  bottom: 8px;
+  right: 8px;
+  left: auto;
+}
 
 /* Image viewer */
 .image-viewer-overlay {

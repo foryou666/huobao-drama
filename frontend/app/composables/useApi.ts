@@ -71,6 +71,11 @@ export const api = {
   del: <T = any>(p: string) => req<T>('DELETE', p),
 }
 
+export const mediaAPI = {
+  resolveUrls: (paths: string[]) => api.post<{ urls: Record<string, string> }>('/media/resolve-urls', { paths }),
+  resolveUrl: (path: string) => api.get<{ path: string; url: string }>(`/media/url?path=${encodeURIComponent(path)}`),
+}
+
 export const dramaAPI = {
   list: (opts?: { includeArchived?: boolean }) =>
     api.get<{ items: any[] }>(`/dramas${opts?.includeArchived ? '?include_archived=1' : ''}`),
@@ -118,6 +123,16 @@ export const storyboardAPI = {
     api.post(`/storyboards/${id}/generate-blocking`, data || {}),
   generateFrameFromBlocking: (id: number, data?: { frame_type?: 'first_frame' | 'last_frame'; prompt?: string }) =>
     api.post(`/storyboards/${id}/generate-frame-from-blocking`, data || {}),
+  optimizeVideoPrompt: (id: number, data?: {
+    current_prompt?: string
+    feedback?: string
+    mode?: 'polish' | 'rewrite'
+    focus?: 'transition' | 'shot' | 'camera' | 'dialogue' | 'general'
+  }) =>
+    api.post(`/storyboards/${id}/optimize-video-prompt`, data || {}),
+  videoPromptHistory: (id: number) => api.get(`/storyboards/${id}/video-prompt-history`),
+  restoreVideoPromptHistory: (id: number, historyId: number) =>
+    api.post(`/storyboards/${id}/video-prompt-history/${historyId}/restore`),
   del: (id: number) => api.del(`/storyboards/${id}`),
 }
 
@@ -314,6 +329,16 @@ export const portraitAPI = {
 }
 
 export const characterAPI = {
+  create: (data: {
+    drama_id: number
+    episode_id?: number
+    name: string
+    role?: string
+    description?: string
+    appearance?: string
+    personality?: string
+    image_prompt?: string
+  }) => api.post('/characters', data),
   update: (id: number, data: any) => api.put(`/characters/${id}`, data),
   voiceSample: (id: number, episodeId: number) => api.post(`/characters/${id}/generate-voice-sample`, { episode_id: episodeId }),
   uploadImage: (id: number, file: File) => {
@@ -336,6 +361,14 @@ export const characterAPI = {
 }
 
 export const sceneAPI = {
+  create: (data: {
+    drama_id: number
+    episode_id?: number
+    location: string
+    time?: string
+    prompt?: string
+    description?: string
+  }) => api.post('/scenes', data),
   update: (id: number, data: any) => api.put(`/scenes/${id}`, data),
   uploadImage: (id: number, file: File) => {
     const form = new FormData()
@@ -392,6 +425,12 @@ export const gridAPI = {
 export const videoAPI = {
   generate: (d: any) => api.post('/videos', d),
   get: (id: number) => api.get(`/videos/${id}`),
+  list: (params?: { drama_id?: number; storyboard_id?: number }) => {
+    const query = new URLSearchParams()
+    if (params?.drama_id) query.set('drama_id', String(params.drama_id))
+    if (params?.storyboard_id) query.set('storyboard_id', String(params.storyboard_id))
+    return api.get(`/videos${query.size ? `?${query.toString()}` : ''}`)
+  },
 }
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),

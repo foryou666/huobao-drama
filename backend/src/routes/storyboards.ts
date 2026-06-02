@@ -25,6 +25,12 @@ import {
   parseStoryboardCharacterImageRefs,
   resolveCharacterImageForStoryboard,
 } from '../utils/character-image-variants.js'
+import { optimizeVideoPrompt } from '../services/video-prompt-optimize.js'
+import {
+  appendVideoPromptHistory,
+  getVideoPromptHistoryEntry,
+  listVideoPromptHistory,
+} from '../services/video-prompt-history.js'
 
 const app = new Hono()
 
@@ -150,6 +156,7 @@ app.put('/:id', async (c) => {
     scene_angle_id: 'sceneAngleId',
     first_frame_image: 'firstFrameImage',
     last_frame_image: 'lastFrameImage',
+    video_url: 'videoUrl',
   }
 
   const updates: Record<string, any> = { updatedAt: now() }
@@ -178,6 +185,17 @@ app.put('/:id', async (c) => {
     'character_ids' in body ? body.character_ids : getStoryboardCharacterIds(id),
   )
 
+  let historyEntry = null
+  if (updates.videoPrompt !== undefined && updates.videoPrompt !== storyboard.videoPrompt) {
+    historyEntry = appendVideoPromptHistory({
+      storyboardId: id,
+      beforePrompt: storyboard.videoPrompt || '',
+      afterPrompt: String(updates.videoPrompt),
+      source: body.history_source || 'manual_save',
+      label: body.history_label,
+    })
+  }
+
   db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, id)).run()
   if ('character_ids' in body) syncStoryboardCharacters(id, body.character_ids || [])
   logTaskSuccess('StoryboardAPI', 'update', {
@@ -185,7 +203,7 @@ app.put('/:id', async (c) => {
     updatedFields: Object.keys(updates),
     characterIds: body.character_ids,
   })
-  return success(c)
+  return success(c, historyEntry ? { history: historyEntry } : undefined)
 })
 
 // POST /storyboards/:id/generate-blocking — 3D 预可视化场景站位图
@@ -553,6 +571,100 @@ app.post('/:id/generate-tts', async (c) => {
     logTaskError('StoryboardAPI', 'generate-tts', { storyboardId: id, voiceId, error: err.message })
     return badRequest(c, err.message)
   }
+})
+
+// POST /storyboards/:id/optimize-video-prompt
+app.post('/:id/optimize-video-prompt', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const [storyboard] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!storyboard) return badRequest(c, '镜头不存在')
+
+  try {
+    logTaskStart('StoryboardAPI', 'optimize-video-prompt', { storyboardId: id })
+    const beforePrompt = String(body.current_prompt ?? body.video_prompt ?? storyboard.videoPrompt ?? '')
+    const videoPrompt = await optimizeVideoPrompt({
+      storyboardId: id,
+      currentPrompt: beforePrompt,
+      feedback: body.feedback,
+      mode: body.mode === 'rewrite' ? 'rewrite' : 'polish',
+      focus: body.focus,
+    })
+    const source = body.focus || (body.mode === 'rewrite' ? 'rewrite' : 'polish')
+    const history = appendVideoPromptHistory({
+      storyboardId: id,
+      beforePrompt,
+      afterPrompt: videoPrompt,
+      source,
+    })
+    logTaskSuccess('StoryboardAPI', 'optimize-video-prompt', {
+      storyboardId: id,
+      length: videoPrompt.length,
+      focus: body.focus || 'general',
+      historyId: history?.id,
+    })
+    logActivity(getAuthUser(c), {
+      action: 'storyboard.optimize_video_prompt',
+      summary: `优化镜头 #${storyboard.storyboardNumber} 视频提示词${body.focus ? `（${body.focus}）` : ''}`,
+      resourceType: 'storyboard',
+      resourceId: id,
+      episodeId: storyboard.episodeId,
+    })
+    return success(c, {
+      video_prompt: videoPrompt,
+      before_prompt: beforePrompt,
+      after_prompt: videoPrompt,
+      history,
+    })
+  } catch (err: any) {
+    logTaskError('StoryboardAPI', 'optimize-video-prompt', { storyboardId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
+// GET /storyboards/:id/video-prompt-history
+app.get('/:id/video-prompt-history', (c) => {
+  const id = Number(c.req.param('id'))
+  const [storyboard] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!storyboard) return badRequest(c, '镜头不存在')
+  return success(c, listVideoPromptHistory(id))
+})
+
+// POST /storyboards/:id/video-prompt-history/:historyId/restore
+app.post('/:id/video-prompt-history/:historyId/restore', async (c) => {
+  const id = Number(c.req.param('id'))
+  const historyId = Number(c.req.param('historyId'))
+  const [storyboard] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!storyboard) return badRequest(c, '镜头不存在')
+  const entry = getVideoPromptHistoryEntry(id, historyId)
+  if (!entry) return badRequest(c, '历史记录不存在')
+
+  const beforePrompt = storyboard.videoPrompt || ''
+  const afterPrompt = entry.after_prompt
+  if (beforePrompt === afterPrompt) {
+    return success(c, { video_prompt: afterPrompt, history: null })
+  }
+
+  const history = appendVideoPromptHistory({
+    storyboardId: id,
+    beforePrompt,
+    afterPrompt,
+    source: 'restore',
+    label: `恢复：${entry.label}`,
+  })
+  db.update(schema.storyboards)
+    .set({ videoPrompt: afterPrompt, updatedAt: now() })
+    .where(eq(schema.storyboards.id, id))
+    .run()
+  logActivity(getAuthUser(c), {
+    action: 'storyboard.restore_video_prompt',
+    summary: `恢复镜头 #${storyboard.storyboardNumber} 视频提示词`,
+    resourceType: 'storyboard',
+    resourceId: id,
+    episodeId: storyboard.episodeId,
+    metadata: { history_id: historyId },
+  })
+  return success(c, { video_prompt: afterPrompt, history })
 })
 
 // DELETE /storyboards/:id

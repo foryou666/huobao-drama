@@ -34,10 +34,12 @@ import portraits from './routes/portraits.js'
 import assistant from './routes/assistant.js'
 import credits from './routes/credits.js'
 import assets from './routes/assets.js'
+import media from './routes/media.js'
 import teams from './routes/teams.js'
 import { applyCreditPricingDefaultsIfNeeded } from './services/credits.js'
 import { migrateDefaultTeamIfNeeded } from './services/teams.js'
 import { migrateChengmengBaseUrlIfNeeded } from './services/chengmeng-migrate.js'
+import { resumeProcessingVideoTasks } from './services/video-generation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -89,6 +91,7 @@ api.route('/scenes', scenes)
 api.route('/characters', characters)
 api.route('/credits', credits)
 api.route('/assets', assets)
+api.route('/media', media)
 api.route('/images', images)
 api.route('/videos', videos)
 api.route('/upload', upload)
@@ -122,6 +125,7 @@ const host = process.env.HOST || '0.0.0.0'
 applyCreditPricingDefaultsIfNeeded()
 migrateDefaultTeamIfNeeded()
 migrateChengmengBaseUrlIfNeeded()
+resumeProcessingVideoTasks()
 
 function getLanAddresses() {
   const addrs: string[] = []

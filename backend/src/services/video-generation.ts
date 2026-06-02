@@ -365,17 +365,69 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
 }
 
 async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
-  const localPath = await downloadFile(videoUrl, 'videos')
+  const ts = now()
+  // 先写入远程 URL 并标记完成，避免下载耗时导致前端轮询超时仍显示「生成中」
   db.update(schema.videoGenerations)
-    .set({ videoUrl, localPath, status: 'completed', completedAt: now(), updatedAt: now() })
+    .set({ videoUrl, status: 'completed', completedAt: ts, updatedAt: ts })
     .where(eq(schema.videoGenerations.id, id))
     .run()
-  logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId, duration })
-
   if (storyboardId) {
     db.update(schema.storyboards)
-      .set({ videoUrl: localPath, duration: duration || undefined, updatedAt: now() })
+      .set({ videoUrl, duration: duration || undefined, updatedAt: ts })
       .where(eq(schema.storyboards.id, storyboardId))
       .run()
+  }
+  logTaskProgress('VideoTask', 'remote-ready', { id, videoUrl: redactUrl(videoUrl), storyboardId })
+
+  try {
+    const localPath = await downloadFile(videoUrl, 'videos')
+    db.update(schema.videoGenerations)
+      .set({ localPath, updatedAt: now() })
+      .where(eq(schema.videoGenerations.id, id))
+      .run()
+    if (storyboardId) {
+      db.update(schema.storyboards)
+        .set({ videoUrl: localPath, updatedAt: now() })
+        .where(eq(schema.storyboards.id, storyboardId))
+        .run()
+    }
+    logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId, duration })
+  } catch (err: any) {
+    logTaskWarn('VideoTask', 'download-failed', {
+      id,
+      storyboardId,
+      error: err?.message || String(err),
+      hint: '已保留远程 videoUrl，页面可播放外链',
+    })
+  }
+}
+
+/** 服务重启后恢复 processing 任务的轮询 */
+function getVideoConfigForProvider(provider: string): AIConfig | null {
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
+    .all()
+    .filter(r => r.isActive && r.provider === provider)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
+  const match = rows[0]
+  return match ? getConfigById(match.id) : null
+}
+
+export function resumeProcessingVideoTasks() {
+  const rows = db.select()
+    .from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.status, 'processing'))
+    .all()
+  for (const row of rows) {
+    if (!row.taskId || !row.provider) continue
+    const config = getVideoConfigForProvider(row.provider) || getActiveConfig('video')
+    if (!config) {
+      logTaskWarn('VideoTask', 'resume-skipped', { id: row.id, reason: 'no config' })
+      continue
+    }
+    logTaskProgress('VideoTask', 'resume-poll', { id: row.id, taskId: row.taskId, provider: row.provider })
+    pollVideoTask(row.id, config, row.taskId, row.storyboardId).catch(err => {
+      logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
+    })
   }
 }

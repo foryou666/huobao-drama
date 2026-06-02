@@ -157,6 +157,18 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_storyboard_characters_character_id
     ON storyboard_characters (character_id);
 
+  CREATE TABLE IF NOT EXISTS video_prompt_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    storyboard_id INTEGER NOT NULL,
+    before_prompt TEXT NOT NULL,
+    after_prompt TEXT NOT NULL,
+    source TEXT NOT NULL,
+    label TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_prompt_history_storyboard_id
+    ON video_prompt_history (storyboard_id);
+
   CREATE TABLE IF NOT EXISTS ai_service_configs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     service_type TEXT NOT NULL,

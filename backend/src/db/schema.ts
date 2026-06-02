@@ -151,6 +151,16 @@ export const storyboardCharacters = sqliteTable('storyboard_characters', {
   pk: primaryKey({ columns: [table.storyboardId, table.characterId] }),
 }))
 
+export const videoPromptHistory = sqliteTable('video_prompt_history', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  storyboardId: integer('storyboard_id').notNull(),
+  beforePrompt: text('before_prompt').notNull(),
+  afterPrompt: text('after_prompt').notNull(),
+  source: text('source').notNull(),
+  label: text('label'),
+  createdAt: text('created_at').notNull(),
+})
+
 export const aiServiceConfigs = sqliteTable('ai_service_configs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   serviceType: text('service_type').notNull(),

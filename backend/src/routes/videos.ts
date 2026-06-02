@@ -129,6 +129,8 @@ app.get('/', async (c) => {
 
   if (storyboardId) rows = rows.filter(r => r.storyboardId === Number(storyboardId))
   if (dramaId) rows = rows.filter(r => r.dramaId === Number(dramaId))
+  rows = rows.filter(r => !r.deletedAt)
+  rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
 
   return success(c, rows)
 })

@@ -17,6 +17,7 @@ import { imageReferenceSupportHint, supportsImageReference } from '../utils/imag
 import { buildSceneAnglePromptById, buildSceneAngleSheetPrompt } from '../utils/scene-angle-prompts.js'
 import { getSceneAnglePreset, listSceneAnglePresets, SCENE_MULTI_VIEW_SHEET_ID } from '../constants/scene-angles.js'
 import { listMissingSceneAngleIds } from '../utils/scene-image-variants.js'
+import { linkSceneToEpisode } from '../utils/episode-entity-links.js'
 
 function resolveSceneAngleContext(sceneId: number, episodeId: number) {
   const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
@@ -45,19 +46,46 @@ const app = new Hono()
 // POST /scenes
 app.post('/', async (c) => {
   const body = await c.req.json()
+  if (!body.drama_id) return badRequest(c, 'drama_id is required')
+  if (!String(body.location || '').trim()) return badRequest(c, 'location is required')
+
   const ts = now()
+  const location = String(body.location).trim()
+  const time = String(body.time || '').trim()
+  const dramaId = Number(body.drama_id)
+
+  const existing = db.select().from(schema.scenes)
+    .where(eq(schema.scenes.dramaId, dramaId))
+    .all()
+    .find(s => !s.deletedAt && s.location === location && (s.time || '') === time)
+
+  if (existing) {
+    if (body.episode_id) linkSceneToEpisode(Number(body.episode_id), existing.id)
+    syncSceneAsset(existing.id)
+    return success(c, { ...existing, merged: true, message: '相同地点与时间的场景已存在，已关联到本集' })
+  }
+
   const res = db.insert(schema.scenes).values({
-    dramaId: body.drama_id,
-    episodeId: body.episode_id,
-    location: body.location,
-    time: body.time || '',
-    prompt: body.prompt || body.location,
+    dramaId,
+    episodeId: body.episode_id ? Number(body.episode_id) : null,
+    location,
+    time,
+    prompt: body.prompt || body.description || location,
     createdAt: ts,
     updatedAt: ts,
   }).run()
-  const [result] = db.select().from(schema.scenes)
-    .where(eq(schema.scenes.id, Number(res.lastInsertRowid))).all()
-  if (result) syncSceneAsset(result.id)
+  const sceneId = Number(res.lastInsertRowid)
+  if (body.episode_id) linkSceneToEpisode(Number(body.episode_id), sceneId)
+  syncSceneAsset(sceneId)
+  const [result] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
+  logActivity(getAuthUser(c), {
+    action: 'scene.create',
+    summary: `手动添加场景：${location}`,
+    resourceType: 'scene',
+    resourceId: sceneId,
+    dramaId,
+    episodeId: body.episode_id ? Number(body.episode_id) : undefined,
+  })
   return created(c, result)
 })
 

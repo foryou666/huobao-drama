@@ -24,8 +24,54 @@ import {
 import { buildOutfitChangePrompt, slugifyOutfitId } from '../utils/character-outfit-prompts.js'
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
 import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { linkCharacterToEpisode } from '../utils/episode-entity-links.js'
 
 const app = new Hono()
+
+// POST /characters — 手动创建角色（可选关联到某一集）
+app.post('/', async (c) => {
+  const body = await c.req.json()
+  if (!body.drama_id) return badRequest(c, 'drama_id is required')
+  if (!String(body.name || '').trim()) return badRequest(c, 'name is required')
+
+  const ts = now()
+  const name = String(body.name).trim()
+  const existing = db.select().from(schema.characters)
+    .where(eq(schema.characters.dramaId, Number(body.drama_id)))
+    .all()
+    .find(ch => !ch.deletedAt && ch.name === name)
+
+  if (existing) {
+    if (body.episode_id) linkCharacterToEpisode(Number(body.episode_id), existing.id)
+    syncCharacterAsset(existing.id)
+    return success(c, { ...existing, merged: true, message: '同名角色已存在，已关联到本集' })
+  }
+
+  const res = db.insert(schema.characters).values({
+    dramaId: Number(body.drama_id),
+    name,
+    role: body.role || '',
+    description: body.description || '',
+    appearance: body.appearance || '',
+    personality: body.personality || '',
+    imagePrompt: body.image_prompt || body.appearance || body.description || '',
+    createdAt: ts,
+    updatedAt: ts,
+  }).run()
+  const charId = Number(res.lastInsertRowid)
+  if (body.episode_id) linkCharacterToEpisode(Number(body.episode_id), charId)
+  syncCharacterAsset(charId)
+  const [created] = db.select().from(schema.characters).where(eq(schema.characters.id, charId)).all()
+  logActivity(getAuthUser(c), {
+    action: 'character.create',
+    summary: `手动添加角色：${name}`,
+    resourceType: 'character',
+    resourceId: charId,
+    dramaId: Number(body.drama_id),
+    episodeId: body.episode_id ? Number(body.episode_id) : undefined,
+  })
+  return success(c, created)
+})
 
 // GET /characters/transform-presets — Seedance 适配风格预设（须在 /:id 之前注册）
 app.get('/transform-presets', (c) => {

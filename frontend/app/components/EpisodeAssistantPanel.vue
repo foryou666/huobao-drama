@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { AssistantAttachment, AssistantMessage } from '~/composables/useEpisodeAssistant'
+import { mediaDisplayUrl } from '~/utils/media-url.js'
 
 const props = defineProps<{
   messages: AssistantMessage[]
@@ -73,8 +74,7 @@ function isStreamingMessage(msg: AssistantMessage) {
 }
 
 function mediaUrl(raw?: string | null) {
-  if (!raw) return null
-  return raw.startsWith('/') ? raw : `/${raw}`
+  return mediaDisplayUrl(raw)
 }
 
 function resolveAttachmentUrl(att: AssistantAttachment) {

@@ -117,11 +117,22 @@ export function lookupOssObjectKey(localPath: string): string | null {
   return null
 }
 
+function applyPublicBase(signedUrl: string): string {
+  const publicBase = (process.env.OSS_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '')
+  if (!publicBase) return signedUrl
+  try {
+    const origin = new URL(signedUrl).origin
+    return signedUrl.replace(origin, publicBase)
+  } catch {
+    return signedUrl
+  }
+}
+
 export function signOssObjectKey(objectKey: string): string {
-  return getClient().signatureUrl(objectKey, {
+  return applyPublicBase(getClient().signatureUrl(objectKey, {
     expires: SIGNED_URL_EXPIRES_SEC,
     method: 'GET',
-  })
+  }))
 }
 
 /** 上传本地文件到指定 OSS objectKey（覆盖写入） */

@@ -80,7 +80,7 @@
           class="blocking-preview"
           @click="blockingImage && emit('preview')"
         >
-          <img v-if="blockingImage" :src="'/' + normalizePath(blockingImage)" alt="站位图" />
+          <img v-if="blockingImage" :src="mediaDisplayUrl(blockingImage)" alt="站位图" />
           <div v-else class="blocking-preview-empty">
             <Loader2 v-if="pending" :size="18" class="animate-spin" />
             <span v-else>尚未生成站位图</span>
@@ -128,6 +128,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import { Loader2 } from 'lucide-vue-next'
+import { mediaDisplayUrl } from '~/utils/media-url.js'
 import {
   BLOCKING_ZONES,
   BLOCKING_FACINGS,
