@@ -22,7 +22,7 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Data (database and uploaded files)
+# Data (local runtime database and uploaded files)
 data/drama_generator.db
 data/drama_generator.db-wal
 data/drama_generator.db-shm
@@ -33,6 +33,12 @@ data/public.sql
 data/*.bak*
 data/static/
 data/storage/
+# Keep committed seed snapshot for developer sync
+!data/seed/
+!data/seed/**
+data/seed/*.db-wal
+data/seed/*.db-shm
+data/seed/*.sql
 
 # Config
 configs/config.yaml

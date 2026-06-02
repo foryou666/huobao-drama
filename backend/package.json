@@ -9,7 +9,9 @@
     "build": "tsc",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:export": "node scripts/export-db.mjs",
+    "db:import": "node scripts/import-db.mjs"
   },
   "keywords": [],
   "author": "",

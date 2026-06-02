@@ -235,6 +235,24 @@ cd ../backend && npm start
 DB_PATH=/path/to/your.db npm start
 ```
 
+#### 同步开发数据
+
+仓库内提交了种子数据库 `data/seed/huobao_drama.db`，其他开发者可一键导入：
+
+```bash
+cd backend && npm run db:import
+```
+
+维护者更新种子数据（合并 WAL 后导出）：
+
+```bash
+cd backend && npm run db:export
+git add data/seed/
+git commit -m "chore: update dev database seed"
+```
+
+> 注意：提交到 Git 的种子库会自动**脱敏 API Key**（替换为 `REPLACE_WITH_YOUR_KEY`），导入后请在设置中填入自己的 Key。本地生成的图片/视频在 `data/static/`，需另行同步。
+
 ---
 
 ## 📦 部署指南
