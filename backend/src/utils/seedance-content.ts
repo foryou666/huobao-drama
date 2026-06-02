@@ -2,6 +2,7 @@ import type { ProviderRequest } from '../services/adapters/types.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { isSeedance2Model, seedanceDurationBounds } from '../constants/seedance.js'
 import type { AIConfig, VideoGenerationRecord } from '../services/adapters/types.js'
+import { seedanceRatioRequestFields } from './video-aspect-ratio.js'
 
 export type VideoContentRefType = 'image' | 'video' | 'audio'
 export type VideoImageRole = 'first_frame' | 'last_frame' | 'reference_image'
@@ -121,7 +122,7 @@ export function buildSeedance2GenerateRequest(
     model,
     content: buildSeedance2Content(record.prompt || '', refs),
     generate_audio: true,
-    ratio: record.aspectRatio || 'adaptive',
+    ...seedanceRatioRequestFields(record.aspectRatio, model, true, config.baseUrl),
     duration: normalizeSeedanceDuration(record.duration, model),
     watermark: false,
   }
