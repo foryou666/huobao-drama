@@ -707,7 +707,8 @@ const providerPresets = {
 const huobaoPresetCards = [
   { serviceType: 'text', label: '文本', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 100 },
   { serviceType: 'image', label: '图片', provider: 'gemini', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
-  { serviceType: 'video', label: '视频 · Seedance 2.0', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-2-0-260128', priority: 100 },
+  { serviceType: 'video', label: '视频 · 火山官方 Seedance 2.0', provider: 'volcengine', baseUrl: 'https://ark.cn-beijing.volces.com', model: 'doubao-seedance-2-0-260128', priority: 101 },
+  { serviceType: 'video', label: '视频 · ChatFire Seedance 2.0', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-2-0-260128', priority: 100 },
   { serviceType: 'video', label: '视频 · Seedance 2.0 Fast', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-2-0-fast-260128', priority: 99 },
   { serviceType: 'video', label: '视频 · Seedance 1.5 Pro', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
   { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },

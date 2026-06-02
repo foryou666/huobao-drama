@@ -2136,12 +2136,6 @@ const fallbackVoiceProfiles = [
 ]
 const voiceProfiles = ref(fallbackVoiceProfiles)
 const voiceSelectOptions = computed(() => voiceProfiles.value.map(v => ({ label: `${v.label} · ${v.traits}`, value: v.id })))
-const videoConfigSelectOptions = computed(() => videoConfigs.value.map(c => {
-  let modelName = ''
-  try { const m = JSON.parse(c.model || '[]'); modelName = Array.isArray(m) ? (m[0] || '') : (m || '') } catch { modelName = c.model || '' }
-  const label = modelName ? `${modelName} (${c.provider})` : `${c.name} (${c.provider})`
-  return { label, value: c.id }
-}))
 const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 const imageAspectOptions = [
   { value: '9:16', label: '9:16 竖屏' },
@@ -2638,6 +2632,16 @@ const visualChars = computed(() => chars.value.filter(c => !isNarratorCharacter(
 
 const lockedImageConfigId = computed(() => episode.value?.image_config_id || episode.value?.imageConfigId || null)
 const lockedVideoConfigId = computed(() => episode.value?.video_config_id || episode.value?.videoConfigId || null)
+const resolvedVideoConfig = computed(() => {
+  if (lockedVideoConfigId.value) {
+    const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+    if (cfg) return cfg
+  }
+  const active = [...videoConfigs.value]
+    .filter(c => c.is_active !== false)
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0))
+  return active[0] || null
+})
 const lockedAudioConfigId = computed(() => episode.value?.audio_config_id || episode.value?.audioConfigId || null)
 const lockedAudioProvider = computed(() => audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)?.provider || '')
 const resolvedImageConfig = computed(() => {
@@ -2653,13 +2657,15 @@ const lockedImageConfigProvider = computed(() => resolvedImageConfig.value?.prov
 const imageReferenceSupported = computed(() =>
   supportsImageReference(lockedImageConfigProvider.value, resolveImageConfigModel(resolvedImageConfig.value)),
 )
-const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)))
-const isChengmengVideoActive = computed(() => {
-  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
-  return cfg?.provider === 'chengmeng'
+const lockedVideoConfigLabel = computed(() => {
+  const cfg = resolvedVideoConfig.value
+  if (!cfg) return '未配置'
+  const prefix = lockedVideoConfigId.value ? '' : '默认 · '
+  return prefix + configLabel(cfg)
 })
+const isChengmengVideoActive = computed(() => resolvedVideoConfig.value?.provider === 'chengmeng')
 const isSeedance2VideoActive = computed(() => {
-  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  const cfg = resolvedVideoConfig.value
   if (!cfg) return false
   if (cfg.provider === 'chengmeng') return true
   let model = ''
@@ -3740,7 +3746,7 @@ async function batchGenSamples() {
   sendAssistant(`请为以下角色逐个生成音色试听，调用 generate_voice_sample：${list}`, refresh)
 }
 function doBreakdown() {
-  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  const cfg = resolvedVideoConfig.value
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
   sendAssistant(
     `请拆解分镜并生成 video_prompt。必须输出工业级 video_prompt（首行「图片1是…，图片2是…」自然语言引用，禁止 @图片 + 多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词），禁止简写为 0-3秒 时间轴。本集视频模型为 ${label}，单条 storyboard 最长 15 秒，duration 等于子块时长之和。`,

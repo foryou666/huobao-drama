@@ -17,6 +17,17 @@ const app = new Hono()
 
 const EPISODE_MEMBER_FIELDS = ['content', 'script_content'] as const
 const EPISODE_ADMIN_FIELDS = ['title', 'description', 'status'] as const
+const EPISODE_CONFIG_FIELDS = ['image_config_id', 'video_config_id', 'audio_config_id'] as const
+
+function validateServiceConfigId(configId: unknown, serviceType: string): string | null {
+  const id = Number(configId)
+  if (!Number.isFinite(id) || id <= 0) return '无效的配置 ID'
+  const [cfg] = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.id, id)).all()
+  if (!cfg) return '配置不存在'
+  if (cfg.serviceType !== serviceType) return `请选择${serviceType}类型的配置`
+  return null
+}
 
 // POST /episodes — Create a new episode (team admin only)
 app.post('/', async (c) => {
@@ -67,7 +78,8 @@ app.put('/:id', async (c) => {
 
   const hasAdminFields = EPISODE_ADMIN_FIELDS.some(key => key in body)
   const hasMemberFields = EPISODE_MEMBER_FIELDS.some(key => key in body)
-  if (!hasAdminFields && !hasMemberFields) return badRequest(c, 'no valid fields')
+  const hasConfigFields = EPISODE_CONFIG_FIELDS.some(key => key in body)
+  if (!hasAdminFields && !hasMemberFields && !hasConfigFields) return badRequest(c, 'no valid fields')
 
   const access = assertEpisodeTeamAccess(c, id)
   if (access.error) return access.error
@@ -84,7 +96,37 @@ app.put('/:id', async (c) => {
   if ('description' in body) drizzleUpdates.description = body.description
   if ('status' in body) drizzleUpdates.status = body.status
 
+  if ('image_config_id' in body) {
+    const err = validateServiceConfigId(body.image_config_id, 'image')
+    if (err) return badRequest(c, err)
+    drizzleUpdates.imageConfigId = Number(body.image_config_id)
+  }
+  if ('video_config_id' in body) {
+    const err = validateServiceConfigId(body.video_config_id, 'video')
+    if (err) return badRequest(c, err)
+    drizzleUpdates.videoConfigId = Number(body.video_config_id)
+  }
+  if ('audio_config_id' in body) {
+    const err = validateServiceConfigId(body.audio_config_id, 'audio')
+    if (err) return badRequest(c, err)
+    drizzleUpdates.audioConfigId = Number(body.audio_config_id)
+  }
+
   await db.update(schema.episodes).set(drizzleUpdates).where(eq(schema.episodes.id, id))
+
+  if ('video_config_id' in body) {
+    const [cfg] = db.select().from(schema.aiServiceConfigs)
+      .where(eq(schema.aiServiceConfigs.id, Number(body.video_config_id))).all()
+    logActivity(getAuthUser(c), {
+      action: 'episode.video_config',
+      summary: `第 ${access.episode!.episodeNumber} 集切换视频服务为 ${cfg?.name || body.video_config_id}`,
+      resourceType: 'episode',
+      resourceId: id,
+      dramaId: access.drama!.id,
+      metadata: { video_config_id: Number(body.video_config_id), provider: cfg?.provider || null },
+    })
+  }
+
   return success(c)
 })
 

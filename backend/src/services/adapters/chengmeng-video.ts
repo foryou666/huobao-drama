@@ -52,10 +52,8 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
       group_id: groupId,
       prompt: buildChengmengPrompt(record.prompt || '', images.length, videos.length),
       duration: normalizeChengmengDuration(record.duration),
-      aspectRatio: 'adaptive',
       values: {
         orientation: aspectRatioToOrientation(record.aspectRatio),
-        aspectRatio: 'adaptive',
         size,
         watermark,
       },

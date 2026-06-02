@@ -10,8 +10,17 @@ export interface VideoServicePreset {
   priority: number
 }
 
-/** 红果推荐一键写入的视频服务（统一 ChatFire 网关，含 Seedance 1.5 / 2.0 / 2.0 Fast） */
+/** 红果推荐一键写入的视频服务 */
 export const SEEDANCE_VIDEO_PRESETS: VideoServicePreset[] = [
+  {
+    serviceType: 'video',
+    name: '火山官方 Seedance 2.0',
+    label: '视频',
+    provider: 'volcengine',
+    baseUrl: 'https://ark.cn-beijing.volces.com',
+    model: SEEDANCE_MODELS.V2_0,
+    priority: 101,
+  },
   {
     serviceType: 'video',
     name: '红果视频 Seedance 2.0',

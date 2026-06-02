@@ -1,3 +1,7 @@
+/**
+ * Seedance 官方 Ark / ChatFire 网关用的 ratio 字段。
+ * 仅 volcengine-video / seedance-content 使用；橙盟 chengmeng 走 values.orientation，勿复用本模块。
+ */
 import { isSeedance2Model } from '../constants/seedance.js'
 
 const FIXED_SEEDANCE_RATIOS = new Set(['16:9', '9:16', '4:3', '3:4', '1:1', '21:9'])
