@@ -49,6 +49,21 @@
       </div>
     </header>
 
+    <div
+      v-if="genTimer.activeList.length"
+      class="studio-gen-banner"
+      :class="{ 'studio-gen-banner-slow': genTimer.hasSlowTask }"
+    >
+      <Loader2 :size="13" class="animate-spin" />
+      <span class="studio-gen-banner-main">{{ genTimer.activeList.length }} 项生成进行中</span>
+      <span v-if="genTimer.primaryTask" class="studio-gen-banner-detail">
+        {{ genTimer.primaryTask.label }} · {{ genTimer.statusText(genTimer.primaryTask.key) }}
+      </span>
+      <span v-if="genTimer.activeList.length > 1" class="studio-gen-banner-more">
+        另有 {{ genTimer.activeList.length - 1 }} 项
+      </span>
+    </div>
+
     <div class="studio-body" :class="{ 'assistant-collapsed': !assistantOpen }">
     <!-- ========== LEFT SIDEBAR ========== -->
     <aside class="sidebar">
@@ -710,6 +725,7 @@
                   @clear="clearBlockingImage(selectedSb)"
                   @preview="openImageViewer('/' + normalizeMediaPath(getBlockingImage(selectedSb)), `镜头 #${selectedSb.storyboard_number || selectedSb.storyboardNumber || sbs.indexOf(selectedSb) + 1} 站位图`)"
                 />
+                <GenerationTimer v-if="isPendingBlocking(selectedSb.id)" :task-key="blockingTimerKey(selectedSb.id)" />
                 </div>
                 <div class="detail-section">
                   <div class="detail-section-head">
@@ -801,6 +817,23 @@
             </div>
           </div>
 
+          <div v-if="genTimer.activeList.length" class="gen-timer-panel card">
+            <div class="gen-timer-panel-head">
+              <Loader2 :size="14" class="animate-spin" />
+              <span>进行中的生成（{{ genTimer.activeList.length }}）</span>
+            </div>
+            <ul class="gen-timer-list">
+              <li
+                v-for="task in genTimer.activeList"
+                :key="task.key"
+                :class="{ 'gen-timer-item-slow': genTimer.isSlow(task.key) }"
+              >
+                <span class="gen-timer-label">{{ task.label }}</span>
+                <span class="gen-timer-meta">{{ genTimer.statusText(task.key) }}</span>
+              </li>
+            </ul>
+          </div>
+
           <!-- Sub: Characters -->
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
@@ -876,6 +909,10 @@
                           >
                             {{ isPendingCharTransform(c.id, preset.id, outfit.outfit_id) ? '转换中' : preset.label }}
                           </button>
+                          <GenerationTimer
+                            v-if="isPendingCharTransform(c.id, preset.id, outfit.outfit_id)"
+                            :task-key="charTransformTimerKeyFor(c.id, preset.id, outfit.outfit_id)"
+                          />
                         </div>
                       </div>
                     </div>
@@ -894,6 +931,7 @@
                   <div class="asset-foot-row">
                     <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
                     <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
+                    <GenerationTimer v-if="isPendingCharImage(c.id)" :task-key="charTimerKey(c.id)" />
                     <button class="btn btn-sm" :disabled="isPendingCharImage(c.id)" @click="openAssetPicker('character', c.id)">人物资产</button>
                     <button class="btn btn-sm" :disabled="charOutfitDisabled(c)" @click="openAssetPicker('costume', c.id)">选服装换装</button>
                     <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id) || assistantRunning" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
@@ -913,6 +951,10 @@
                       >
                         {{ isPendingCharTransform(c.id, preset.id, 'primary') ? '转换中' : preset.label }}
                       </button>
+                      <GenerationTimer
+                        v-if="isPendingCharTransform(c.id, preset.id, 'primary')"
+                        :task-key="charTransformTimerKeyFor(c.id, preset.id, 'primary')"
+                      />
                     </div>
                   </div>
                   <div v-if="!imageReferenceSupported" class="char-transform-note dim">{{ imageReferenceSupportHint() }}</div>
@@ -968,6 +1010,7 @@
                     <button class="btn btn-sm" :disabled="isPendingSceneImage(s.id)" @click="openAssetPicker('scene', s.id)">资产库</button>
                     <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id) || assistantRunning" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成主视角' }}</button>
                   </div>
+                  <GenerationTimer v-if="isPendingSceneImage(s.id)" :task-key="sceneTimerKey(s.id)" />
                   <div v-if="s.image_url || s.imageUrl" class="char-transform-row">
                     <span class="char-transform-label">多角度</span>
                     <span class="dim char-transform-size-hint">基于主视角 · 6积分/张</span>
@@ -1000,6 +1043,17 @@
                       >
                         {{ isPendingSceneAngle(s.id, SCENE_ANGLE_SHEET_ID) ? '生成中' : SCENE_ANGLE_SHEET_LABEL }}
                       </button>
+                    </div>
+                    <div v-if="isPendingSceneAllAngles(s.id) || SCENE_ANGLE_PRESETS.some(p => isPendingSceneAngle(s.id, p.id)) || isPendingSceneAngle(s.id, SCENE_ANGLE_SHEET_ID)" class="scene-angle-timers">
+                      <GenerationTimer
+                        v-for="preset in SCENE_ANGLE_PRESETS.filter(p => isPendingSceneAngle(s.id, p.id))"
+                        :key="`${s.id}:timer:${preset.id}`"
+                        :task-key="sceneAngleTimerKeyFor(s.id, preset.id)"
+                      />
+                      <GenerationTimer
+                        v-if="isPendingSceneAngle(s.id, SCENE_ANGLE_SHEET_ID)"
+                        :task-key="sceneAngleTimerKeyFor(s.id, SCENE_ANGLE_SHEET_ID)"
+                      />
                     </div>
                   </div>
                   <div v-if="listSceneImagesWithStoryboardBlockings(s, sbs, getBlockingImage).length > 1" class="scene-angle-preview-row">
@@ -1197,6 +1251,7 @@
                         </div>
                       </div>
                       <span class="frame-thumb-label">{{ isPendingBlocking(sb.id) ? '站位生成中' : (getBlockingImage(sb) ? '站位' : '站位·配置') }}</span>
+                      <GenerationTimer v-if="isPendingBlocking(sb.id)" :task-key="blockingTimerKey(sb.id)" />
                     </div>
                     <div class="frame-thumb-wrap">
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
@@ -1215,6 +1270,7 @@
                         </span>
                       </div>
                       <span class="frame-thumb-label">{{ isPendingShotFrame(sb.id, 'first_frame') ? '首帧生成中' : '首帧' }}</span>
+                      <GenerationTimer v-if="isPendingShotFrame(sb.id, 'first_frame')" :task-key="frameTimerKey(sb.id, 'first_frame')" />
                     </div>
                     <div v-if="frameMode === 'first_last'" class="frame-thumb-wrap">
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'last_frame') && genShotFrame(sb, 'last_frame')">
@@ -1233,6 +1289,7 @@
                         </span>
                       </div>
                       <span class="frame-thumb-label">{{ isPendingShotFrame(sb.id, 'last_frame') ? '尾帧生成中' : '尾帧' }}</span>
+                      <GenerationTimer v-if="isPendingShotFrame(sb.id, 'last_frame')" :task-key="frameTimerKey(sb.id, 'last_frame')" />
                     </div>
                   </div>
                 </div>
@@ -1369,6 +1426,7 @@
                 <div v-else-if="gridStep === 2" class="grid-tool-body" style="align-items:center;justify-content:center;min-height:300px">
                   <Loader2 :size="28" class="animate-spin" style="color:var(--accent)" />
                   <div class="loading-text" style="margin-top:12px">宫格图生成中...</div>
+                  <GenerationTimer :task-key="GRID_TIMER_KEY" />
                   <div class="dim" style="font-size:11px;margin-top:6px">{{ gridStatusText }}</div>
                 </div>
 
@@ -1601,6 +1659,7 @@
                           <div v-else-if="isPendingBlocking(sb.id)" class="video-blocking-slot-empty">
                             <Loader2 :size="16" class="animate-spin" />
                             <span>生成中</span>
+                            <GenerationTimer :task-key="blockingTimerKey(sb.id)" />
                           </div>
                           <div v-else class="video-blocking-slot-empty">
                             <span>尚未生成站位图</span>
@@ -1636,6 +1695,10 @@
                             >
                               从站位图生成首帧
                             </button>
+                            <GenerationTimer
+                              v-if="isPendingShotFrame(sb.id, 'first_frame')"
+                              :task-key="frameTimerKey(sb.id, 'first_frame')"
+                            />
                             <button
                               v-if="getBlockingVideoPromptSnippet(sb)"
                               type="button"
@@ -1725,6 +1788,7 @@
                   <div class="prod-dots">
                     <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
                     <span :class="['dot', hasVid(sb) && 'ok', isPendingVideo(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingVideo(sb.id) ? '视频生成中' : '视频' }}</span>
+                    <GenerationTimer v-if="isPendingVideo(sb.id)" :task-key="videoTimerKey(sb.id)" />
                   </div>
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
@@ -1788,6 +1852,7 @@
                     <span :class="['dot', hasVid(sb) && 'ok']" /><span style="font-size:10px">视频</span>
                     <span :class="['dot', hasTTS(sb) && 'ok']" /><span style="font-size:10px">配音</span>
                     <span :class="['dot', hasComposed(sb) && 'ok', isPendingCompose(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingCompose(sb.id) ? '合成中' : '合成' }}</span>
+                    <GenerationTimer v-if="isPendingCompose(sb.id)" :task-key="composeTimerKey(sb.id)" />
                   </div>
                   <div v-if="composeFailMessage(sb.id)" class="prod-error">{{ composeFailMessage(sb.id) }}</div>
                 </div>
@@ -2092,6 +2157,25 @@ const pendingBlockingIds = ref([])
 const blockingAssistantMsgIds = ref({})
 const pendingVideoIds = ref([])
 const pendingComposeIds = ref([])
+const genTimer = useGenerationTimer()
+const GRID_TIMER_KEY = 'grid:main'
+
+function blockingTimerKey(id) { return `blocking:${id}` }
+function frameTimerKey(id, frameType) { return `frame:${id}:${frameType}` }
+function videoTimerKey(id) { return `video:${id}` }
+function charTimerKey(id) { return `char:${id}` }
+function charTransformTimerKey(key) { return `char-transform:${key}` }
+function charOutfitTimerKey(key) { return `char-outfit:${key}` }
+function sceneTimerKey(id) { return `scene:${id}` }
+function sceneAngleTimerKey(key) { return `scene-angle:${key}` }
+function composeTimerKey(id) { return `compose:${id}` }
+function sceneAngleTimerKeyFor(sceneId, angleId) {
+  return sceneAngleTimerKey(sceneAngleKey(sceneId, angleId))
+}
+function charTransformTimerKeyFor(charId, transformId, source = 'primary') {
+  return charTransformTimerKey(charTransformKey(charId, transformId, source))
+}
+
 const failedVideoMessages = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
@@ -2301,6 +2385,7 @@ async function genBlocking(sb, prompt) {
   if (!pendingBlockingIds.value.includes(sb.id)) pendingBlockingIds.value.push(sb.id)
   ensureAssistantVisible()
   const idx = shotIndex(sb)
+  genTimer.startTask(blockingTimerKey(sb.id), `镜头 #${idx} 站位图`, 'image')
   const activity = await assistantRecordActivity(
     `为镜头 #${idx} 生成站位图`,
     '站位图生成中，请稍候…',
@@ -2326,6 +2411,7 @@ async function genBlocking(sb, prompt) {
     pollBlockingGeneration(res?.image_generation_id, sb.id)
   } catch (e) {
     pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== sb.id)
+    genTimer.endTask(blockingTimerKey(sb.id))
     const msgId = blockingAssistantMsgIds.value[sb.id]
     if (msgId) {
       await assistantPatchActivity(msgId, {
@@ -2348,6 +2434,7 @@ async function genBlocking(sb, prompt) {
 async function pollBlockingGeneration(generationId, storyboardId) {
   if (!generationId) {
     pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+    genTimer.endTask(blockingTimerKey(storyboardId))
     return
   }
   const sbAtStart = sbs.value.find(item => item.id === storyboardId)
@@ -2362,6 +2449,7 @@ async function pollBlockingGeneration(generationId, storyboardId) {
       const msgId = blockingAssistantMsgIds.value[storyboardId]
       if (res?.status === 'completed') {
         pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+        genTimer.endTask(blockingTimerKey(storyboardId))
         if (msgId) {
           const blockingUrl = sb ? getBlockingImage(sb) : null
           await assistantPatchActivity(msgId, {
@@ -2383,6 +2471,7 @@ async function pollBlockingGeneration(generationId, storyboardId) {
       }
       if (res?.status === 'failed') {
         pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+        genTimer.endTask(blockingTimerKey(storyboardId))
         const errText = formatImageGenerationError(res?.error_msg || res?.errorMsg || '站位图生成失败')
         if (msgId) {
           await assistantPatchActivity(msgId, {
@@ -2404,6 +2493,7 @@ async function pollBlockingGeneration(generationId, storyboardId) {
     } catch {}
   }
   pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+  genTimer.endTask(blockingTimerKey(storyboardId))
   const msgId = blockingAssistantMsgIds.value[storyboardId]
   if (msgId) {
     await assistantPatchActivity(msgId, {
@@ -2445,12 +2535,14 @@ async function genFirstFrameFromBlocking(sb, frameType = 'first_frame') {
   const key = framePendingKey(sb.id, frameType)
   const label = frameType === 'first_frame' ? '首帧' : '尾帧'
   if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
+  genTimer.startTask(frameTimerKey(sb.id, frameType), `镜头 #${shotIndex(sb)} ${label}`, 'image')
   try {
     const res = await storyboardAPI.generateFrameFromBlocking(sb.id, { frame_type: frameType })
     toast.success(`从站位图生成${label}中…`)
     pollShotFrameGeneration(res?.image_generation_id, sb.id, frameType, key)
   } catch (e) {
     pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
+    genTimer.endTask(frameTimerKey(sb.id, frameType))
     toast.error(e?.message || `从站位图生成${label}失败`)
   }
 }
@@ -2458,6 +2550,7 @@ async function genFirstFrameFromBlocking(sb, frameType = 'first_frame') {
 async function pollShotFrameGeneration(generationId, storyboardId, frameType, pendingKey) {
   if (!generationId) {
     pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+    genTimer.endTask(frameTimerKey(storyboardId, frameType))
     return
   }
   const label = frameType === 'first_frame' ? '首帧' : '尾帧'
@@ -2468,17 +2561,20 @@ async function pollShotFrameGeneration(generationId, storyboardId, frameType, pe
       await refresh()
       if (res?.status === 'completed') {
         pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+        genTimer.endTask(frameTimerKey(storyboardId, frameType))
         toast.success(`${label}已更新`)
         return
       }
       if (res?.status === 'failed') {
         pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+        genTimer.endTask(frameTimerKey(storyboardId, frameType))
         toast.error(formatImageGenerationError(res?.error_msg || res?.errorMsg || `${label}生成失败`))
         return
       }
     } catch {}
   }
   pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+  genTimer.endTask(frameTimerKey(storyboardId, frameType))
   toast.warning(`${label}生成超时，请稍后刷新查看`)
 }
 
@@ -2930,6 +3026,7 @@ async function startGridGen() {
   if (!gridAssignmentsState.value.length) resetGridAssignments()
   gridStep.value = 2
   gridStatusText.value = '提交生成请求...'
+  genTimer.startTask(GRID_TIMER_KEY, '宫格图', 'image')
   try {
     const res = await gridAPI.generate({
       storyboard_ids: ids,
@@ -2944,6 +3041,7 @@ async function startGridGen() {
     gridStatusText.value = '等待图片生成...'
     pollGridStatus()
   } catch (e) {
+    genTimer.endTask(GRID_TIMER_KEY)
     toast.error(e.message)
     gridStep.value = 0
   }
@@ -2960,15 +3058,18 @@ async function pollGridStatus() {
         gridGenId.value = gridGenId.value || res.id || null
         persistGridImagePath(res.local_path)
         gridStep.value = 3
+        genTimer.endTask(GRID_TIMER_KEY)
         return
       }
       if (res.status === 'failed') {
+        genTimer.endTask(GRID_TIMER_KEY)
         toast.error(res.error_msg || '生成失败')
         gridStep.value = 0
         return
       }
     } catch {}
   }
+  genTimer.endTask(GRID_TIMER_KEY)
   toast.error('生成超时'); gridStep.value = 0
 }
 
@@ -3632,13 +3733,17 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function watchAsyncResult(check, attempts = 24, delay = 2500) {
+function watchAsyncResult(check, attempts = 24, delay = 2500, onComplete) {
   void (async () => {
     for (let i = 0; i < attempts; i++) {
       await sleep(delay)
       await refresh()
-      if (check()) return
+      if (check()) {
+        onComplete?.(true)
+        return
+      }
     }
+    onComplete?.(false)
   })()
 }
 
@@ -3646,13 +3751,15 @@ function genCharImg(id) {
   const char = chars.value.find(c => c.id === id)
   if (!char) return
   if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
+  const timerKey = charTimerKey(id)
+  genTimer.startTask(timerKey, `角色「${char.name}」形象`, 'image')
   sendAssistant(`请为角色「${char.name}」（character_id=${id}）生成图片，直接调用 generate_character_image`, () => {
     watchAsyncResult(() => {
       const target = chars.value.find(c => c.id === id)
       const done = !!(target?.image_url || target?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       return done
-    }, 36)
+    }, 36, () => genTimer.endTask(timerKey))
   })
 }
 
@@ -3670,6 +3777,8 @@ async function generateCharOutfit(charId, asset, customPrompt) {
   const outfitKey = charOutfitKey(charId, `asset_${asset.id}`)
   if (!isPendingCharImage(charId)) pendingCharImageIds.value.push(charId)
   if (!isPendingCharOutfit(charId, outfitKey)) pendingCharOutfitKeys.value.push(outfitKey)
+  const timerKey = charOutfitTimerKey(outfitKey)
+  genTimer.startTask(timerKey, `角色换装「${asset.name}」`, 'image')
   try {
     const payload = {
       episode_id: epId.value,
@@ -3683,12 +3792,18 @@ async function generateCharOutfit(charId, asset, customPrompt) {
   } catch (e) {
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
     pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
+    genTimer.endTask(timerKey)
     toast.error(e?.message || '换装生成失败')
   }
 }
 
 async function pollCharImageGeneration(generationId, charId, transformKey, outfitKey) {
-  if (!generationId) return
+  if (!generationId) {
+    genTimer.endTask(charTimerKey(charId))
+    if (transformKey) genTimer.endTask(charTransformTimerKey(transformKey))
+    if (outfitKey) genTimer.endTask(charOutfitTimerKey(outfitKey))
+    return
+  }
   for (let i = 0; i < 120; i++) {
     await sleep(3000)
     try {
@@ -3702,6 +3817,9 @@ async function pollCharImageGeneration(generationId, charId, transformKey, outfi
         if (outfitKey) {
           pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
         }
+        genTimer.endTask(charTimerKey(charId))
+        if (transformKey) genTimer.endTask(charTransformTimerKey(transformKey))
+        if (outfitKey) genTimer.endTask(charOutfitTimerKey(outfitKey))
         toast.success(outfitKey ? '换装图已添加' : transformKey ? '角色变体图已添加' : '角色图已更新')
         return
       }
@@ -3713,6 +3831,9 @@ async function pollCharImageGeneration(generationId, charId, transformKey, outfi
         if (outfitKey) {
           pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
         }
+        genTimer.endTask(charTimerKey(charId))
+        if (transformKey) genTimer.endTask(charTransformTimerKey(transformKey))
+        if (outfitKey) genTimer.endTask(charOutfitTimerKey(outfitKey))
         toast.error(res?.error_msg || res?.errorMsg || '图片生成失败')
         return
       }
@@ -3725,6 +3846,9 @@ async function pollCharImageGeneration(generationId, charId, transformKey, outfi
   if (outfitKey) {
     pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
   }
+  genTimer.endTask(charTimerKey(charId))
+  if (transformKey) genTimer.endTask(charTransformTimerKey(transformKey))
+  if (outfitKey) genTimer.endTask(charOutfitTimerKey(outfitKey))
   toast.warning('图片生成超时，请稍后刷新查看')
 }
 
@@ -3742,6 +3866,8 @@ async function transformCharImg(charId, transformType, label, source = 'primary'
   const key = charTransformKey(charId, transformType, source)
   if (!isPendingCharImage(charId)) pendingCharImageIds.value.push(charId)
   if (!isPendingCharTransform(charId, transformType, source)) pendingCharTransformKeys.value.push(key)
+  const timerKey = charTransformTimerKey(key)
+  genTimer.startTask(timerKey, `角色「${char.name}」${label}`, 'image')
   try {
     const res = await characterAPI.transformImage(charId, epId.value, transformType, source === 'primary' ? undefined : source)
     toast.success(`${label} 转换中…`)
@@ -3749,6 +3875,7 @@ async function transformCharImg(charId, transformType, label, source = 'primary'
   } catch (e) {
     pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
     pendingCharTransformKeys.value = pendingCharTransformKeys.value.filter(item => item !== key)
+    genTimer.endTask(timerKey)
     toast.error(e?.message || '转换失败')
   }
 }
@@ -3756,26 +3883,32 @@ function batchCharImages() {
   const ids = visualChars.value.filter(c => !(c.image_url || c.imageUrl)).map(c => c.id)
   if (!ids.length) { toast.info('所有角色图片已生成'); return }
   pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
+  ids.forEach((id) => {
+    const char = chars.value.find(c => c.id === id)
+    genTimer.startTask(charTimerKey(id), `角色「${char?.name || id}」形象`, 'image')
+  })
   sendAssistant('请为所有尚未生成图片的角色批量生成图片，调用 batch_generate_character_images', () => {
     watchAsyncResult(() => ids.every(id => {
       const char = chars.value.find(c => c.id === id)
       const done = !!(char?.image_url || char?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       return done
-    }), 36)
+    }), 36, () => ids.forEach(id => genTimer.endTask(charTimerKey(id))))
   })
 }
 function genSceneImg(id) {
   const scene = scenes.value.find(s => s.id === id)
   if (!scene) return
   if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
+  const timerKey = sceneTimerKey(id)
+  genTimer.startTask(timerKey, `场景「${scene.location}」主视角`, 'image')
   sendAssistant(`请为场景「${scene.location}」（scene_id=${id}）生成图片，直接调用 generate_scene_image`, () => {
     watchAsyncResult(() => {
       const target = scenes.value.find(s => s.id === id)
       const done = !!(target?.image_url || target?.imageUrl)
       if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
       return done
-    }, 36)
+    }, 36, () => genTimer.endTask(timerKey))
   })
 }
 
@@ -3843,6 +3976,7 @@ async function genSceneAngle(sceneId, angleId, label, prompt) {
   }
   const key = sceneAngleKey(sceneId, angleId)
   if (!isPendingSceneAngle(sceneId, angleId)) pendingSceneAngleKeys.value.push(key)
+  genTimer.startTask(sceneAngleTimerKey(key), `场景「${scene.location}」· ${label}`, 'image')
   try {
     const payload = {
       episode_id: epId.value,
@@ -3854,6 +3988,7 @@ async function genSceneAngle(sceneId, angleId, label, prompt) {
     pollSceneAngleGeneration(res?.image_generation_id, sceneId, key)
   } catch (e) {
     pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== key)
+    genTimer.endTask(sceneAngleTimerKey(key))
     toast.error(e?.message || '场景多角度生成失败')
   }
 }
@@ -3880,6 +4015,7 @@ async function genSceneAllAngles(sceneId) {
     for (const item of items) {
       const key = sceneAngleKey(sceneId, item.angle_id)
       if (!isPendingSceneAngle(sceneId, item.angle_id)) pendingSceneAngleKeys.value.push(key)
+      genTimer.startTask(sceneAngleTimerKey(key), `场景「${scene.location}」· ${sceneAngleLabel(item.angle_id)}`, 'image')
       pollSceneAngleGeneration(item.image_generation_id, sceneId, key)
     }
     const failed = res?.failed || []
@@ -3903,6 +4039,7 @@ async function genSceneAngleSheet(sceneId, prompt) {
   }
   const key = sceneAngleKey(sceneId, SCENE_ANGLE_SHEET_ID)
   if (!isPendingSceneAngle(sceneId, SCENE_ANGLE_SHEET_ID)) pendingSceneAngleKeys.value.push(key)
+  genTimer.startTask(sceneAngleTimerKey(key), `场景「${scene.location}」· ${SCENE_ANGLE_SHEET_LABEL}`, 'image')
   try {
     const payload = { episode_id: epId.value }
     if (prompt?.trim()) payload.prompt = prompt.trim()
@@ -3911,6 +4048,7 @@ async function genSceneAngleSheet(sceneId, prompt) {
     pollSceneAngleGeneration(res?.image_generation_id, sceneId, key)
   } catch (e) {
     pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== key)
+    genTimer.endTask(sceneAngleTimerKey(key))
     toast.error(e?.message || '场景多视角拼板生成失败')
   }
 }
@@ -3953,6 +4091,7 @@ async function confirmSceneAngleRegen(prompt) {
 async function pollSceneAngleGeneration(generationId, sceneId, pendingKey) {
   if (!generationId) {
     pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+    genTimer.endTask(sceneAngleTimerKey(pendingKey))
     return
   }
   for (let i = 0; i < 120; i++) {
@@ -3962,30 +4101,37 @@ async function pollSceneAngleGeneration(generationId, sceneId, pendingKey) {
       await refresh()
       if (res?.status === 'completed') {
         pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+        genTimer.endTask(sceneAngleTimerKey(pendingKey))
         toast.success('场景多角度图已更新')
         return
       }
       if (res?.status === 'failed') {
         pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+        genTimer.endTask(sceneAngleTimerKey(pendingKey))
         toast.error(res?.error_msg || res?.errorMsg || '场景多角度生成失败')
         return
       }
     } catch {}
   }
   pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+  genTimer.endTask(sceneAngleTimerKey(pendingKey))
   toast.warning('场景多角度生成超时，请稍后刷新查看')
 }
 function batchSceneImages() {
   const ids = scenes.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
   if (!ids.length) { toast.info('所有场景图片已生成'); return }
   pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
+  ids.forEach((id) => {
+    const scene = scenes.value.find(s => s.id === id)
+    genTimer.startTask(sceneTimerKey(id), `场景「${scene?.location || id}」主视角`, 'image')
+  })
   sendAssistant('请为所有尚未生成图片的场景批量生成图片，调用 batch_generate_scene_images', () => {
     watchAsyncResult(() => ids.every(id => {
       const scene = scenes.value.find(s => s.id === id)
       const done = !!(scene?.image_url || scene?.imageUrl)
       if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
       return done
-    }), 36)
+    }), 36, () => ids.forEach(id => genTimer.endTask(sceneTimerKey(id))))
   })
 }
 
@@ -4140,13 +4286,15 @@ function genShotFrame(sb, frameType) {
   const key = framePendingKey(sb.id, frameType)
   const label = frameType === 'first_frame' ? '首帧' : '尾帧'
   if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
+  const timerKey = frameTimerKey(sb.id, frameType)
+  genTimer.startTask(timerKey, `镜头 #${shotIndex(sb)} ${label}`, 'image')
   sendAssistant(`请为镜头 #${shotIndex(sb)}（storyboard_id=${sb.id}）生成${label}，调用 generate_shot_frame，frame_type=${frameType}`, () => {
     watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === sb.id)
       const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
       if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
       return done
-    }, 36)
+    }, 36, () => genTimer.endTask(timerKey))
   })
 }
 
@@ -4303,12 +4451,14 @@ async function genVid(sb) {
   try {
     delete failedVideoMessages.value[sb.id]
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
+    genTimer.startTask(videoTimerKey(sb.id), `镜头 #${shotIndex(sb)} 视频`, 'video')
     const generation = await videoAPI.generate(params)
     toast.success('视频生成中')
     await refresh()
     pollVideoGeneration(generation?.id, sb.id)
   } catch (e) {
     pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
+    genTimer.endTask(videoTimerKey(sb.id))
     toast.error(e.message)
   }
 }
@@ -4320,7 +4470,7 @@ async function pollVideoGeneration(generationId, storyboardId) {
       const done = !!hasVid(target)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
       return done
-    }, 60, 4000)
+    }, 60, 4000, () => genTimer.endTask(videoTimerKey(storyboardId)))
     return
   }
   for (let i = 0; i < 120; i++) {
@@ -4330,12 +4480,14 @@ async function pollVideoGeneration(generationId, storyboardId) {
       await refresh()
       if (res?.status === 'completed') {
         pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        genTimer.endTask(videoTimerKey(storyboardId))
         delete failedVideoMessages.value[storyboardId]
         toast.success('视频生成完成')
         return
       }
       if (res?.status === 'failed') {
         pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        genTimer.endTask(videoTimerKey(storyboardId))
         failedVideoMessages.value = {
           ...failedVideoMessages.value,
           [storyboardId]: res?.error_msg || res?.errorMsg || '视频生成失败',
@@ -4346,13 +4498,16 @@ async function pollVideoGeneration(generationId, storyboardId) {
     } catch {}
   }
   pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+  genTimer.endTask(videoTimerKey(storyboardId))
   toast.warning('视频生成超时，请稍后刷新查看')
 }
 function doCompose(sb) {
   delete failedComposeMessages.value[sb.id]
   if (!isPendingCompose(sb.id)) pendingComposeIds.value.push(sb.id)
+  genTimer.startTask(composeTimerKey(sb.id), `镜头 #${shotIndex(sb)} 合成`, 'compose')
   sendAssistant(`请合成镜头 #${shotIndex(sb)}（storyboard_id=${sb.id}），调用 compose_shot`, () => {
     pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
+    genTimer.endTask(composeTimerKey(sb.id))
   })
 }
 function batchVideos() {
@@ -4362,13 +4517,17 @@ function batchVideos() {
     return
   }
   pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
+  pendingIds.forEach((id) => {
+    const sb = sbs.value.find(s => s.id === id)
+    genTimer.startTask(videoTimerKey(id), `镜头 #${sb ? shotIndex(sb) : id} 视频`, 'video')
+  })
   sendAssistant('请为所有尚无视频的镜头批量生成视频，调用 batch_generate_shot_videos', () => {
     watchAsyncResult(() => pendingIds.every(id => {
       const target = sbs.value.find(s => s.id === id)
       const done = !!hasVid(target)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
       return done
-    }), 80, 4000)
+    }), 80, 4000, () => pendingIds.forEach(id => genTimer.endTask(videoTimerKey(id))))
   })
 }
 function batchCompose() {
@@ -4397,7 +4556,17 @@ async function pollComposeStatus() {
       await refresh()
       const items = Array.isArray(res?.items) ? res.items : []
       const processingIds = items.filter(item => item.status === 'compose_processing').map(item => item.id)
+      const prevIds = new Set(pendingComposeIds.value)
       pendingComposeIds.value = processingIds
+      for (const id of processingIds) {
+        if (!prevIds.has(id)) {
+          const sb = sbs.value.find(s => s.id === id)
+          genTimer.startTask(composeTimerKey(id), `镜头 #${sb ? shotIndex(sb) : id} 合成`, 'compose')
+        }
+      }
+      for (const id of prevIds) {
+        if (!processingIds.includes(id)) genTimer.endTask(composeTimerKey(id))
+      }
 
       const failedItems = items.filter(item => item.status === 'compose_failed')
       if (failedItems.length) {
@@ -4415,6 +4584,7 @@ async function pollComposeStatus() {
       }
     } catch {}
   }
+  pendingComposeIds.value.forEach(id => genTimer.endTask(composeTimerKey(id)))
 }
 async function loadConfigs() {
   try {
@@ -4489,6 +4659,37 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   border: 1px solid rgba(27, 41, 64, 0.08);
   box-shadow: 0 14px 36px rgba(20, 32, 54, 0.07), 0 3px 10px rgba(20, 32, 54, 0.04);
   backdrop-filter: blur(16px);
+}
+
+.studio-gen-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(240, 247, 255, 0.92);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.studio-gen-banner-slow {
+  background: rgba(255, 248, 230, 0.95);
+  border-color: color-mix(in srgb, var(--warning, #e6a700) 35%, transparent);
+}
+.studio-gen-banner-main {
+  font-weight: 600;
+  color: var(--text-1);
+}
+.studio-gen-banner-detail,
+.studio-gen-banner-more {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.studio-gen-banner-slow .studio-gen-banner-detail {
+  color: var(--warning, #e6a700);
 }
 
 .studio-topbar-main,
@@ -5218,6 +5419,59 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 
 /* Production tabs */
 .prod-tabs { display: flex; gap: 0; background: var(--bg-2); border-radius: var(--radius); padding: 2px; }
+.gen-timer-panel {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.gen-timer-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.gen-timer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gen-timer-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-1);
+}
+.gen-timer-item-slow {
+  border: 1px solid color-mix(in srgb, var(--warning, #e6a700) 40%, transparent);
+}
+.gen-timer-label {
+  color: var(--text-1);
+  font-weight: 500;
+}
+.gen-timer-meta {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
+.gen-timer-item-slow .gen-timer-meta {
+  color: var(--warning, #e6a700);
+}
+.scene-angle-timers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
 .prod-tab {
   display: flex; align-items: center; gap: 4px; padding: 6px 12px; font-size: 12px;
   border: none; background: transparent; color: var(--text-2); cursor: pointer;
