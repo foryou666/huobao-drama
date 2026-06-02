@@ -1,4 +1,5 @@
 import { logTaskWarn } from './task-logger.js'
+import { isOssConfigured, resolveMediaUrlForExternalApi } from './oss-upload.js'
 import type { VideoContentRef } from './seedance-content.js'
 import { parseVideoContentRefs } from './seedance-content.js'
 import { CHENGMENT_DEFAULT_GROUP_ID, CHENGMENT_DEFAULT_MODEL_ID, CHENGMENT_DURATION_BOUNDS } from '../constants/chengmeng.js'
@@ -23,18 +24,21 @@ export async function resolveChengmengMediaUrl(value: string | null | undefined)
 
   const staticPath = normalizeStaticPath(raw)
   if (staticPath) {
+    if (isOssConfigured()) {
+      return resolveMediaUrlForExternalApi(staticPath)
+    }
     const base = publicBaseUrl()
     if (base) return `${base}/${staticPath}`
     logTaskWarn('ChengmengVideo', 'missing-public-base-url', {
       path: staticPath,
-      hint: '设置 PUBLIC_BASE_URL 后第三方网关才能拉取本地参考图',
+      hint: '请配置 OSS（OSS_ACCESS_KEY_ID/SECRET）或 PUBLIC_BASE_URL',
     })
     return null
   }
 
   if (raw.startsWith('data:')) {
     logTaskWarn('ChengmengVideo', 'data-url-skipped', {
-      hint: '第三方 Seedance 接口不支持 data URI，请配置 PUBLIC_BASE_URL 或使用公网图片 URL',
+      hint: '第三方 Seedance 接口不支持 data URI，请配置 OSS 或 PUBLIC_BASE_URL',
     })
     return null
   }

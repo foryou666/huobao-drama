@@ -22,6 +22,15 @@ storage:
   type: "local"
   local_path: "./data/storage"
   base_url: "http://localhost:5678/static"
+  # 第三方视频接口（橙盟等）需公网图片 URL，本地 static/ 会自动上传 OSS
+  oss:
+    bucket: "llingjingmanju"
+    region: "oss-cn-qingdao"
+    public_base_url: "https://llingjingmanju.oss-cn-qingdao.aliyuncs.com"
+    key_prefix: "hongguoduanju"
+    # 凭证请写在 backend/.env（勿提交 git）
+    # access_key_id: ""
+    # access_key_secret: ""
 
 ai:
   default_text_provider: "openai"

@@ -8,6 +8,7 @@ import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 import type { VideoContentRef } from '../utils/seedance-content.js'
+import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/video-content-refs.js'
 import { isChengmengProvider } from '../constants/chengmeng.js'
 import {
@@ -146,6 +147,17 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       ? await normalizeChengmengContentRefs(record.referencePayload)
       : await normalizeVideoContentRefs(record.referencePayload)
 
+    if (useChengmeng) {
+      const rawRefs = parseVideoContentRefs(record.referencePayload)
+      if (rawRefs.length > 0 && resolvedContentRefs.length === 0) {
+        throw new Error('参考图无法转为公网 URL，请检查 OSS 配置（backend/.env 中的 OSS_ACCESS_KEY_ID/SECRET）')
+      }
+    }
+
+    const referencePayload = useChengmeng
+      ? JSON.stringify(resolvedContentRefs)
+      : (resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload)
+
     // 使用 Adapter 构建请求
     const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
       id: record.id,
@@ -156,7 +168,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       firstFrameUrl: resolvedFirstFrameUrl,
       lastFrameUrl: resolvedLastFrameUrl,
       referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
-      referencePayload: resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload,
+      referencePayload,
       duration: record.duration,
       aspectRatio: record.aspectRatio,
     })

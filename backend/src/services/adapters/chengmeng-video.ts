@@ -79,6 +79,9 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
     }
 
     if (mode === 'references' && images.length) body.images = images
+    if (mode === 'references' && !images.length && !videos.length && !audios.length) {
+      throw new Error('参考素材无法转为公网 URL，请检查 OSS 配置（backend/.env 中的 OSS_ACCESS_KEY_ID/SECRET）')
+    }
 
     return {
       url: joinProviderUrl(config.baseUrl, '', '/api/tasks'),
