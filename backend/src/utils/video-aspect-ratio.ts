@@ -11,11 +11,10 @@ export function isOfficialArkVolcengine(baseUrl?: string | null): boolean {
   return String(baseUrl || '').toLowerCase().includes('volces.com')
 }
 
-/** ChatFire 等第三方火山代理会额外校验 aspectRatio，且只接受 adaptive */
+/** ChatFire / GeekNow / 火山代理等第三方网关会额外校验 aspectRatio，且多模态参考时只接受 adaptive */
 export function shouldSendSeedanceAspectRatioField(baseUrl?: string | null): boolean {
-  if (isOfficialArkVolcengine(baseUrl)) return false
-  const url = String(baseUrl || '').toLowerCase()
-  return url.includes('chatfire') || url.includes('/volcengine')
+  // 官方火山方舟仅使用 ratio 字段；其余代理网关均需 aspectRatio
+  return !isOfficialArkVolcengine(baseUrl)
 }
 
 /**
@@ -43,9 +42,9 @@ export function seedanceRatioRequestFields(
 ): Record<string, string> {
   const ratio = normalizeSeedanceRatio(aspectRatio, model, { hasReferenceMedia })
   const fields: Record<string, string> = { ratio }
-  // 第三方网关（ChatFire 等）的 aspectRatio 字段仅接受 adaptive，不能与 ratio 共用 9:16
+  // 第三方网关（ChatFire / GeekNow / volcengine_proxy 等）需单独传 aspectRatio；多模态参考时固定 adaptive
   if (shouldSendSeedanceAspectRatioField(baseUrl)) {
-    fields.aspectRatio = 'adaptive'
+    fields.aspectRatio = ratio === 'adaptive' ? 'adaptive' : ratio
   }
   return fields
 }

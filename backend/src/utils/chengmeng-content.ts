@@ -76,9 +76,21 @@ export function normalizeChengmengDuration(duration?: number | null): number {
 }
 
 export function aspectRatioToOrientation(aspectRatio?: string | null): 'landscape' | 'portrait' {
-  const ratio = String(aspectRatio || '').trim()
-  if (ratio === '9:16' || ratio === '3:4' || ratio === 'portrait') return 'portrait'
+  const ratio = normalizeChengmengAspectRatio(aspectRatio)
+  if (ratio === '9:16' || ratio === '3:4') return 'portrait'
   return 'landscape'
+}
+
+const CHENGMENT_ASPECT_RATIOS = new Set(['1:1', '3:4', '4:3', '9:16', '16:9', '21:9'])
+
+/** 橙盟 values.aspect_ratio 仅接受固定比例，不接受 adaptive */
+export function normalizeChengmengAspectRatio(aspectRatio?: string | null, fallback = '16:9'): string {
+  const ratio = String(aspectRatio || '').trim()
+  if (CHENGMENT_ASPECT_RATIOS.has(ratio)) return ratio
+  if (ratio === 'portrait') return '9:16'
+  if (ratio === 'landscape') return '16:9'
+  if (ratio === 'adaptive') return CHENGMENT_ASPECT_RATIOS.has(fallback) ? fallback : '16:9'
+  return CHENGMENT_ASPECT_RATIOS.has(fallback) ? fallback : '16:9'
 }
 
 /**
@@ -115,7 +127,7 @@ export function collectChengmengImages(refs: VideoContentRef[], extraUrls: strin
     push(ref.url)
   }
   for (const url of extraUrls) push(url)
-  return urls.slice(0, 4)
+  return urls.slice(0, 9)
 }
 
 export function collectChengmengVideos(refs: VideoContentRef[]): string[] {
@@ -130,6 +142,27 @@ export function collectChengmengVideos(refs: VideoContentRef[]): string[] {
   }
   return urls.slice(0, 3)
 }
+
+export function collectChengmengAudios(refs: VideoContentRef[]): string[] {
+  const urls: string[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    if (ref.type !== 'audio') continue
+    const next = String(ref.url || '').trim()
+    if (!next || seen.has(next)) continue
+    seen.add(next)
+    urls.push(next)
+  }
+  return urls.slice(0, 3)
+}
+
+export function normalizeChengmengResolution(value?: string | null): string {
+  const resolution = String(value || '').trim().toLowerCase()
+  if (resolution === '480p' || resolution === '720p' || resolution === '1080p') return resolution
+  return '720p'
+}
+
+export type ChengmengVideoMode = 'references' | 'frames'
 
 export function parseChengmengModelIds(config: { model?: string; models?: string[] }) {
   const models = config.models?.length

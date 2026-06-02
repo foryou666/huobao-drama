@@ -13,9 +13,11 @@ import { isChengmengProvider } from '../constants/chengmeng.js'
 import {
   normalizeChengmengContentRefs,
   normalizeChengmengReferenceUrls,
+  normalizeChengmengAspectRatio,
   resolveChengmengMediaUrl,
 } from '../utils/chengmeng-content.js'
 import { failVideoGeneration } from '../utils/generation-failure.js'
+import { normalizeSeedanceRatio } from '../utils/video-aspect-ratio.js'
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -58,6 +60,16 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     }
   }
 
+  const hasReferenceMedia = !!(params.contentRefs?.length)
+    || !!(params.referenceImageUrls?.length)
+    || !!(params.imageUrl || params.firstFrameUrl || params.lastFrameUrl)
+  const defaultAspect = params.dramaId ? getDramaImageAspectRatio(params.dramaId) : '16:9'
+  const rawAspect = params.aspectRatio || defaultAspect
+  const useChengmeng = isChengmengProvider(config.provider)
+  const aspectRatio = useChengmeng
+    ? normalizeChengmengAspectRatio(rawAspect, defaultAspect)
+    : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
+
   const res = db.insert(schema.videoGenerations).values({
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
@@ -71,7 +83,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
     referencePayload: params.contentRefs?.length ? JSON.stringify(params.contentRefs) : null,
     duration: params.duration || 15,
-    aspectRatio: params.aspectRatio || (params.dramaId ? getDramaImageAspectRatio(params.dramaId) : '16:9'),
+    aspectRatio,
     creditTransactionId: params.creditTransactionId ?? null,
     status: 'processing',
     createdAt: ts,

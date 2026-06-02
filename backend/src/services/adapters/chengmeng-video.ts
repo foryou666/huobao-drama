@@ -13,12 +13,15 @@ import type {
 } from './types'
 import { joinProviderUrl } from './url'
 import {
-  aspectRatioToOrientation,
   buildChengmengPrompt,
+  collectChengmengAudios,
   collectChengmengImages,
   collectChengmengVideos,
+  normalizeChengmengAspectRatio,
   normalizeChengmengDuration,
+  normalizeChengmengResolution,
   parseChengmengModelIds,
+  type ChengmengVideoMode,
 } from '../../utils/chengmeng-content.js'
 import { parseVideoContentRefs } from '../../utils/seedance-content.js'
 
@@ -28,41 +31,54 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
     const { modelId, groupId } = parseChengmengModelIds(config)
     const refs = parseVideoContentRefs(record.referencePayload)
-    const extraImages: string[] = []
+    const settings = config.settings || {}
+    const aspectRatio = normalizeChengmengAspectRatio(record.aspectRatio)
+    const duration = normalizeChengmengDuration(record.duration)
+    const resolution = normalizeChengmengResolution(settings.resolution as string | undefined)
 
-    if (record.referenceMode === 'single' && record.imageUrl) {
-      extraImages.push(record.imageUrl)
-    } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
-      try {
-        extraImages.push(...JSON.parse(record.referenceImageUrls))
-      } catch {}
-    } else if (record.referenceMode === 'first_last') {
-      if (record.firstFrameUrl) extraImages.push(record.firstFrameUrl)
-      if (record.lastFrameUrl) extraImages.push(record.lastFrameUrl)
+    const videos = collectChengmengVideos(refs)
+    const audios = collectChengmengAudios(refs)
+    const useFramesMode = record.referenceMode === 'first_last'
+      && !!(record.firstFrameUrl || record.lastFrameUrl)
+
+    let mode: ChengmengVideoMode = useFramesMode ? 'frames' : 'references'
+    let images: string[] = []
+    const values: Record<string, unknown> = {
+      mode,
+      aspect_ratio: aspectRatio,
+      duration,
+      resolution,
     }
 
-    const images = collectChengmengImages(refs, extraImages)
-    const videos = collectChengmengVideos(refs)
-    const settings = config.settings || {}
-    const size = String(settings.size || 'large')
-    const watermark = settings.watermark === true
+    if (mode === 'frames') {
+      if (record.firstFrameUrl) values.first_frame = record.firstFrameUrl
+      if (record.lastFrameUrl) values.last_frame = record.lastFrameUrl
+    } else {
+      const extraImages: string[] = []
+      if (record.referenceMode === 'single' && record.imageUrl) {
+        extraImages.push(record.imageUrl)
+      } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
+        try {
+          extraImages.push(...JSON.parse(record.referenceImageUrls))
+        } catch {}
+      }
+      images = collectChengmengImages(refs, extraImages)
+      if (videos.length) values.videos = videos
+      if (audios.length) values.audioUrls = audios
+    }
 
     const body: Record<string, unknown> = {
       model_id: modelId,
       group_id: groupId,
-      prompt: buildChengmengPrompt(record.prompt || '', images.length, videos.length),
-      duration: normalizeChengmengDuration(record.duration),
-      values: {
-        orientation: aspectRatioToOrientation(record.aspectRatio),
-        size,
-        watermark,
-      },
+      prompt: buildChengmengPrompt(
+        record.prompt || '',
+        mode === 'references' ? images.length : 0,
+        videos.length,
+      ),
+      values,
     }
 
-    if (images.length) body.images = images
-    if (videos.length) {
-      body.values = { ...(body.values as Record<string, unknown>), videos }
-    }
+    if (mode === 'references' && images.length) body.images = images
 
     return {
       url: joinProviderUrl(config.baseUrl, '', '/api/tasks'),

@@ -4588,14 +4588,16 @@ async function genVid(sb) {
     toast.error(formatPromptImageRefIssues(refIssues))
     return
   }
+  const contentRefs = buildVideoContentRefs(sb)
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
     prompt,
     duration: Number(sb.duration || 10),
-    aspect_ratio: dramaImageAspect.value,
+    aspect_ratio: (contentRefs.length && isSeedance2VideoActive.value && !isChengmengVideoActive.value)
+      ? 'adaptive'
+      : dramaImageAspect.value,
   }
-  const contentRefs = buildVideoContentRefs(sb)
   if (contentRefs.length) params.content_refs = contentRefs
 
   const first = getFirstFrame(sb)
