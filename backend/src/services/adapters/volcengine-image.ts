@@ -34,6 +34,17 @@ export class VolcEngineImageAdapter implements ImageProviderAdapter {
       }
     }
 
+    // Seedream 4.x/5.x 支持参考图（单图/多图生图）
+    if (record.referenceImages) {
+      try {
+        const refs = JSON.parse(record.referenceImages)
+        if (Array.isArray(refs) && refs.length > 0) {
+          body.image = refs.length === 1 ? refs[0] : refs
+          body.sequential_image_generation = 'disabled'
+        }
+      } catch {}
+    }
+
     return {
       url: joinProviderUrl(config.baseUrl, '/api/v3', '/images/generations'),
       method: 'POST',

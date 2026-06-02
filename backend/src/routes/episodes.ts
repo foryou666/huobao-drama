@@ -3,19 +3,35 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
+import { logActivity } from '../services/activity.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { assessEpisodeDeletion } from '../services/deletion-guards.js'
+import {
+  assertDramaAdminAccess,
+  assertDramaTeamAccess,
+  assertEpisodeTeamAccess,
+  loadDramaById,
+} from '../services/team-access.js'
 
 const app = new Hono()
 
-// POST /episodes — Create a new episode
+const EPISODE_MEMBER_FIELDS = ['content', 'script_content'] as const
+const EPISODE_ADMIN_FIELDS = ['title', 'description', 'status'] as const
+
+// POST /episodes — Create a new episode (team admin only)
 app.post('/', async (c) => {
   const body = await c.req.json()
   if (!body.drama_id) return badRequest(c, 'drama_id required')
   if (!body.image_config_id || !body.video_config_id || !body.audio_config_id) {
     return badRequest(c, 'image_config_id, video_config_id and audio_config_id are required')
   }
-  const ts = now()
 
-  // Get next episode number
+  const drama = loadDramaById(body.drama_id)
+  if (!drama) return notFound(c, '剧本不存在')
+  const denied = assertDramaAdminAccess(c, drama)
+  if (denied) return denied
+
+  const ts = now()
   const existing = db.select().from(schema.episodes)
     .where(eq(schema.episodes.dramaId, body.drama_id))
     .orderBy(schema.episodes.episodeNumber).all()
@@ -49,28 +65,54 @@ app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
 
-  const allowed = ['content', 'script_content', 'title', 'description', 'status']
-  const updates: Record<string, any> = {}
-  for (const key of allowed) {
-    if (key in body) updates[key] = body[key]
-  }
-  if (Object.keys(updates).length === 0) return badRequest(c, 'no valid fields')
+  const hasAdminFields = EPISODE_ADMIN_FIELDS.some(key => key in body)
+  const hasMemberFields = EPISODE_MEMBER_FIELDS.some(key => key in body)
+  if (!hasAdminFields && !hasMemberFields) return badRequest(c, 'no valid fields')
 
-  // Map snake_case to camelCase for drizzle
+  const access = assertEpisodeTeamAccess(c, id)
+  if (access.error) return access.error
+
+  if (hasAdminFields) {
+    const denied = assertDramaAdminAccess(c, access.drama!)
+    if (denied) return denied
+  }
+
   const drizzleUpdates: Record<string, any> = { updatedAt: now() }
-  if ('content' in updates) drizzleUpdates.content = updates.content
-  if ('script_content' in updates) drizzleUpdates.scriptContent = updates.script_content
-  if ('title' in updates) drizzleUpdates.title = updates.title
-  if ('description' in updates) drizzleUpdates.description = updates.description
-  if ('status' in updates) drizzleUpdates.status = updates.status
+  if ('content' in body) drizzleUpdates.content = body.content
+  if ('script_content' in body) drizzleUpdates.scriptContent = body.script_content
+  if ('title' in body) drizzleUpdates.title = body.title
+  if ('description' in body) drizzleUpdates.description = body.description
+  if ('status' in body) drizzleUpdates.status = body.status
 
   await db.update(schema.episodes).set(drizzleUpdates).where(eq(schema.episodes.id, id))
+  return success(c)
+})
+
+// DELETE /episodes/:id — soft delete (empty episodes only, team admin)
+app.delete('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  const access = assertEpisodeTeamAccess(c, id)
+  if (access.error) return access.error
+  const denied = assertDramaAdminAccess(c, access.drama!)
+  if (denied) return denied
+  const check = assessEpisodeDeletion(id)
+  if (!check.allowed) return badRequest(c, check.reason || '该集含制作内容，无法删除')
+  await db.update(schema.episodes).set({ deletedAt: now(), updatedAt: now() }).where(eq(schema.episodes.id, id))
+  logActivity(getAuthUser(c), {
+    action: 'episode.delete',
+    summary: `删除第 ${access.episode!.episodeNumber} 集`,
+    resourceType: 'episode',
+    resourceId: id,
+    dramaId: access.drama!.id,
+  })
   return success(c)
 })
 
 // GET /episodes/:id/characters — characters linked to this episode
 app.get('/:id/characters', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  const access = assertEpisodeTeamAccess(c, episodeId)
+  if (access.error) return access.error
   const links = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
   const charIds = links.map(l => l.characterId)
@@ -83,6 +125,8 @@ app.get('/:id/characters', async (c) => {
 // GET /episodes/:id/scenes — scenes linked to this episode
 app.get('/:id/scenes', async (c) => {
   const episodeId = Number(c.req.param('id'))
+  const access = assertEpisodeTeamAccess(c, episodeId)
+  if (access.error) return access.error
   const links = db.select().from(schema.episodeScenes)
     .where(eq(schema.episodeScenes.episodeId, episodeId)).all()
   const sceneIds = links.map(l => l.sceneId)
@@ -95,6 +139,8 @@ app.get('/:id/scenes', async (c) => {
 // GET /episodes/:episode_id/storyboards
 app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
+  const access = assertEpisodeTeamAccess(c, episodeId)
+  if (access.error) return access.error
   const rows = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
     .orderBy(schema.storyboards.storyboardNumber)
@@ -125,16 +171,17 @@ app.get('/:episode_id/storyboards', async (c) => {
 // GET /episodes/:id/pipeline-status — 流水线进度
 app.get('/:id/pipeline-status', async (c) => {
   const episodeId = Number(c.req.param('id'))
-  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-  if (!ep) return notFound(c, 'Episode not found')
+  const access = assertEpisodeTeamAccess(c, episodeId)
+  if (access.error) return access.error
+  const ep = access.episode!
 
   const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
   const scenes = db.select().from(schema.scenes).where(eq(schema.scenes.dramaId, ep.dramaId)).all()
   const sbs = db.select().from(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).all()
   const merges = db.select().from(schema.videoMerges).where(eq(schema.videoMerges.episodeId, episodeId)).all()
 
-  const charsWithVoice = chars.filter(c => c.voiceStyle)
-  const charsWithSample = chars.filter(c => c.voiceSampleUrl)
+  const charsWithVoice = chars.filter(ch => ch.voiceStyle)
+  const charsWithSample = chars.filter(ch => ch.voiceSampleUrl)
   const sbsWithImage = sbs.filter(s => s.composedImage)
   const sbsWithVideo = sbs.filter(s => s.videoUrl)
   const sbsComposed = sbs.filter(s => s.composedVideoUrl)

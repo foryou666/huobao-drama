@@ -20,6 +20,22 @@
       </div>
 
       <div class="studio-topbar-side">
+        <div v-if="showImageSizeControl" class="studio-aspect-control">
+          <span class="studio-aspect-label">画面比例</span>
+          <div class="studio-aspect-options">
+            <button
+              v-for="opt in imageAspectOptions"
+              :key="opt.value"
+              type="button"
+              :class="['studio-aspect-btn', { active: dramaImageAspect === opt.value }]"
+              :disabled="imageAspectSaving"
+              @click="setDramaImageAspect(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
+          <span class="studio-aspect-size">{{ dramaImageSizeLabel }}</span>
+        </div>
         <div class="studio-actions">
           <button class="btn" @click="refresh">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
@@ -33,7 +49,7 @@
       </div>
     </header>
 
-    <div class="studio-body">
+    <div class="studio-body" :class="{ 'assistant-collapsed': !assistantOpen }">
     <!-- ========== LEFT SIDEBAR ========== -->
     <aside class="sidebar">
       <nav class="pipeline">
@@ -143,15 +159,15 @@
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/><path d="M13 18l6-6-6-6"/></svg>
                 跳过改写
               </button>
-              <button v-if="scriptContent" class="btn btn-sm" @click="doRewrite" :disabled="rn">
-                <Loader2 v-if="rn && rt === 'script_rewriter'" :size="11" class="animate-spin" />
+              <button v-if="scriptContent" class="btn btn-sm" @click="doRewrite" :disabled="assistantRunning">
+                <Loader2 v-if="assistantRunning && assistantAgentType === 'script_rewriter'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
                 重新改写
               </button>
             </div>
           </div>
 
-          <div v-if="!scriptContent && !rn" class="step-empty">
+          <div v-if="!scriptContent && !assistantRunning" class="step-empty">
             <div class="empty-visual">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
                 <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
@@ -170,7 +186,7 @@
               </button>
             </div>
           </div>
-          <div v-else-if="rn && rt === 'script_rewriter'" class="step-loading">
+          <div v-else-if="assistantRunning && assistantAgentType === 'script_rewriter'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在改写剧本...</div>
           </div>
@@ -188,15 +204,15 @@
             </div>
             <div class="toolbar-right">
               <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景</span>
-              <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="rn">
-                <Loader2 v-if="rn && rt === 'extractor'" :size="11" class="animate-spin" />
+              <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="assistantRunning">
+                <Loader2 v-if="assistantRunning && assistantAgentType === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 重新提取
               </button>
             </div>
           </div>
 
-          <div v-if="!chars.length && !rn" class="step-empty">
+          <div v-if="!chars.length && !assistantRunning" class="step-empty">
             <div class="empty-visual">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             </div>
@@ -207,7 +223,7 @@
               开始提取
             </button>
           </div>
-          <div v-else-if="rn && rt === 'extractor'" class="step-loading">
+          <div v-else-if="assistantRunning && assistantAgentType === 'extractor'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在提取角色和场景...</div>
           </div>
@@ -285,19 +301,19 @@
             <div class="toolbar-right">
               <span v-if="charsVoiced" class="char-count">{{ charsVoiced }}/{{ chars.length }} 已分配</span>
               <span v-if="voiceSampleCount" class="char-count">{{ voiceSampleCount }}/{{ charsVoiced }} 试听文件</span>
-              <button v-if="charsVoiced" class="btn btn-sm" @click="doVoice" :disabled="rn">
-                <Loader2 v-if="rn && rt === 'voice_assigner'" :size="11" class="animate-spin" />
+              <button v-if="charsVoiced" class="btn btn-sm" @click="doVoice" :disabled="assistantRunning">
+                <Loader2 v-if="assistantRunning && assistantAgentType === 'voice_assigner'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
                 重新分配
               </button>
-              <button v-if="charsVoiced" class="btn btn-sm" @click="batchGenSamples">
+              <button v-if="charsVoiced" class="btn btn-sm" :disabled="assistantRunning" @click="batchGenSamples">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19 5v14"/></svg>
                 生成试听文件
               </button>
             </div>
           </div>
 
-          <div v-if="!charsVoiced && !rn" class="step-empty">
+          <div v-if="!charsVoiced && !assistantRunning" class="step-empty">
             <div class="empty-visual">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
             </div>
@@ -308,7 +324,7 @@
               AI 自动分配
             </button>
           </div>
-          <div v-else-if="rn && rt === 'voice_assigner'" class="step-loading">
+          <div v-else-if="assistantRunning && assistantAgentType === 'voice_assigner'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在分配音色...</div>
           </div>
@@ -384,7 +400,7 @@
                 </div>
 
                 <div class="voice-actions-row">
-                  <button class="btn btn-sm" :disabled="!(c.voice_style || c.voiceStyle)" @click="genSample(c.id)">
+                  <button class="btn btn-sm" :disabled="!(c.voice_style || c.voiceStyle) || assistantRunning" @click="genSample(c.id)">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                     {{ (c.voice_sample_url || c.voiceSampleUrl) ? '重新试听' : '生成试听' }}
                   </button>
@@ -417,8 +433,8 @@
               <template v-if="!sbs.length">
                 <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
               </template>
-              <button class="btn btn-sm" :disabled="rn" @click="doBreakdown">
-                <Loader2 v-if="rt === 'storyboard_breaker'" :size="11" class="animate-spin" />
+              <button class="btn btn-sm" :disabled="assistantRunning" @click="doBreakdown">
+                <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                 {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
               </button>
@@ -588,12 +604,34 @@
                     <label class="field">
                       <span class="field-label">绑定场景</span>
                       <select class="input" :value="selectedSb.scene_id || selectedSb.sceneId || ''"
-                        @change="updateField(selectedSb, 'scene_id', $event.target.value ? Number($event.target.value) : null)">
+                        @change="onStoryboardSceneChange(selectedSb, $event.target.value ? Number($event.target.value) : null)">
                         <option value="">未绑定场景</option>
                         <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
                           {{ scene.location }} · {{ scene.time || '未设时间' }}
                         </option>
                       </select>
+                    </label>
+                    <label v-if="selectedSb.scene_id || selectedSb.sceneId" class="field">
+                      <span class="field-label">场景视角</span>
+                      <div class="scene-angle-options">
+                        <button
+                          v-for="img in getSceneImagesForStoryboard(selectedSb)"
+                          :key="`${selectedSb.id}:scene:${img.angle_id}`"
+                          type="button"
+                          class="scene-angle-option"
+                          :class="{
+                            active: !img.readonly && isStoryboardSceneAngleSelected(selectedSb, img.angle_id),
+                            missing: !img.url,
+                            'scene-angle-blocking': img.readonly,
+                          }"
+                          :title="img.readonly ? `${img.label}（只读，点击预览）` : img.label"
+                          @click="onStoryboardSceneImageClick(selectedSb, img)"
+                        >
+                          <img v-if="img.url" :src="'/' + normalizeMediaPath(img.url)" :alt="img.label" />
+                          <span v-else class="scene-angle-empty">{{ img.label }}</span>
+                          <span class="scene-angle-label">{{ img.label }}</span>
+                        </button>
+                      </div>
                     </label>
                     <label class="field">
                       <span class="field-label">地点</span>
@@ -648,6 +686,32 @@
                   </label>
                 </div>
                 <div class="detail-section">
+                <StoryboardBlockingPanel
+                  :sb="selectedSb"
+                  :frame-mode="frameMode"
+                  :character-ids="getStoryboardCharacterIds(selectedSb)"
+                  :layout="getBlockingLayout(selectedSb)"
+                  :blocking-image="getBlockingImage(selectedSb) || ''"
+                  :blocking-image-index="getBlockingVideoImageIndex(selectedSb)"
+                  :pending="isPendingBlocking(selectedSb.id)"
+                  :pending-first-frame="isPendingShotFrame(selectedSb.id, 'first_frame')"
+                  :pending-last-frame="isPendingShotFrame(selectedSb.id, 'last_frame')"
+                  :generate-disabled="blockingGenerateDisabled(selectedSb)"
+                  :disable-reason="blockingDisableReason(selectedSb)"
+                  :shot-mode-hint="getBlockingShotModeHint(selectedSb)"
+                  :initial-prompt="getBlockingPromptDraft(selectedSb)"
+                  :image-reference-supported="imageReferenceSupported"
+                  :character-name="getCharacterName"
+                  @entry-change="(charId, patch) => onBlockingEntryChange(selectedSb, charId, patch)"
+                  @notes-blur="onBlockingNotesBlur(selectedSb, $event)"
+                  @generate="genBlocking(selectedSb, $event)"
+                  @gen-first="genFirstFrameFromBlocking(selectedSb, 'first_frame')"
+                  @gen-last="genFirstFrameFromBlocking(selectedSb, 'last_frame')"
+                  @clear="clearBlockingImage(selectedSb)"
+                  @preview="openImageViewer('/' + normalizeMediaPath(getBlockingImage(selectedSb)), `镜头 #${selectedSb.storyboard_number || selectedSb.storyboardNumber || sbs.indexOf(selectedSb) + 1} 站位图`)"
+                />
+                </div>
+                <div class="detail-section">
                   <div class="detail-section-head">
                     <span class="detail-section-title">生成提示</span>
                     <span class="detail-section-copy">分别服务图片、视频、配乐和音效生成</span>
@@ -679,7 +743,7 @@
             </div>
           </div>
 
-          <div v-else-if="rn && rt === 'storyboard_breaker'" class="step-loading">
+          <div v-else-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在拆解分镜并生成提示词...</div>
           </div>
@@ -694,7 +758,7 @@
             <div class="empty-desc">AI 自动分析剧本，生成镜头列表和视频提示词</div>
             <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
             <button class="btn btn-primary" @click="doBreakdown">
-              <Loader2 v-if="rt === 'storyboard_breaker'" :size="13" class="animate-spin" />
+              <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="13" class="animate-spin" />
               <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
               AI 拆解分镜
             </button>
@@ -742,9 +806,12 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
               <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <span class="tag">{{ dramaImageAspectLabel }}</span>
+              <span v-if="isSeedance2VideoActive" class="tag tag-warn">Seedance 2.0 勿用真人图</span>
+              <span v-if="lockedImageConfigProvider && !imageReferenceSupported" class="tag tag-warn">当前图片模型不支持参考图生图</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchCharImages">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchCharImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
@@ -767,11 +834,88 @@
                 <div class="asset-body">
                   <div class="asset-name">{{ c.name }}</div>
                   <div class="asset-meta dim">{{ c.role || '角色' }}</div>
+                  <div v-if="getCharacterImages(c).length" class="char-image-variants">
+                    <div
+                      v-for="img in getCharacterImages(c)"
+                      :key="`${c.id}:${img.url}`"
+                      class="char-image-variant"
+                    >
+                      <button
+                        type="button"
+                        class="char-image-variant-thumb"
+                        @click.stop="openImageViewer('/' + normalizeMediaPath(img.url), `${c.name} · ${variantLabel(img)}`)"
+                      >
+                        <img :src="'/' + normalizeMediaPath(img.url)" :alt="variantLabel(img)" />
+                      </button>
+                      <span class="char-image-variant-label">{{ variantLabel(img) }}</span>
+                    </div>
+                  </div>
+                  <div v-if="getCharacterOutfits(c).length" class="char-outfit-list">
+                    <div v-for="outfit in getCharacterOutfits(c)" :key="outfit.outfit_id" class="char-outfit-block">
+                      <div class="char-outfit-head">
+                        <button
+                          type="button"
+                          class="char-outfit-thumb"
+                          @click.stop="openImageViewer('/' + normalizeMediaPath(outfit.url), `${c.name} · ${outfit.label}`)"
+                        >
+                          <img :src="'/' + normalizeMediaPath(outfit.url)" :alt="outfit.label" />
+                        </button>
+                        <span class="char-outfit-name">{{ outfit.label }}</span>
+                      </div>
+                      <div class="char-transform-row char-outfit-transform">
+                        <span class="char-transform-label">Seedance</span>
+                        <div class="char-transform-btns">
+                          <button
+                            v-for="preset in CHARACTER_IMAGE_TRANSFORMS"
+                            :key="`${outfit.outfit_id}:${preset.id}`"
+                            type="button"
+                            class="btn btn-sm char-transform-btn"
+                            :title="charTransformTitle(c, preset, outfit.outfit_id)"
+                            :disabled="charTransformDisabled(c, outfit.outfit_id)"
+                            @click="transformCharImg(c.id, preset.id, preset.label, outfit.outfit_id)"
+                          >
+                            {{ isPendingCharTransform(c.id, preset.id, outfit.outfit_id) ? '转换中' : preset.label }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <label class="asset-prompt-field">
+                    <span class="asset-prompt-label">图片提示词</span>
+                    <textarea
+                      :value="getCharImagePrompt(c)"
+                      class="textarea asset-image-prompt"
+                      rows="3"
+                      @blur="onCharImagePromptBlur(c, $event)"
+                    />
+                  </label>
                 </div>
-                <div class="asset-foot">
-                  <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
-                  <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id)" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                <div class="asset-foot asset-foot-col">
+                  <div class="asset-foot-row">
+                    <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
+                    <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
+                    <button class="btn btn-sm" :disabled="isPendingCharImage(c.id)" @click="openAssetPicker('character', c.id)">人物资产</button>
+                    <button class="btn btn-sm" :disabled="charOutfitDisabled(c)" @click="openAssetPicker('costume', c.id)">选服装换装</button>
+                    <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id) || assistantRunning" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                  </div>
+                  <div class="char-transform-row">
+                    <span class="char-transform-label">原图 Seedance</span>
+                    <span class="dim char-transform-size-hint">按原图尺寸</span>
+                    <div class="char-transform-btns">
+                      <button
+                        v-for="preset in CHARACTER_IMAGE_TRANSFORMS"
+                        :key="preset.id"
+                        type="button"
+                        class="btn btn-sm char-transform-btn"
+                        :title="charTransformTitle(c, preset, 'primary')"
+                        :disabled="charTransformDisabled(c, 'primary')"
+                        @click="transformCharImg(c.id, preset.id, preset.label, 'primary')"
+                      >
+                        {{ isPendingCharTransform(c.id, preset.id, 'primary') ? '转换中' : preset.label }}
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="!imageReferenceSupported" class="char-transform-note dim">{{ imageReferenceSupportHint() }}</div>
                 </div>
               </div>
             </div>
@@ -782,8 +926,9 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
               <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchSceneImages">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
@@ -806,11 +951,82 @@
                 <div class="asset-body">
                   <div class="asset-name">{{ s.location }}</div>
                   <div class="asset-meta dim">{{ s.time || '—' }}</div>
+                  <label class="asset-prompt-field">
+                    <span class="asset-prompt-label">图片提示词</span>
+                    <textarea
+                      :value="getSceneImagePrompt(s)"
+                      class="textarea asset-image-prompt"
+                      rows="3"
+                      @blur="onScenePromptBlur(s, $event)"
+                    />
+                  </label>
                 </div>
-                <div class="asset-foot">
-                  <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isPendingSceneImage(s.id) && 'pending']" />
-                  <span class="dim" style="font-size:10px">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
-                  <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id)" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成' }}</button>
+                <div class="asset-foot asset-foot-col">
+                  <div class="asset-foot-row">
+                    <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isPendingSceneImage(s.id) && 'pending']" />
+                    <span class="dim" style="font-size:10px">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
+                    <button class="btn btn-sm" :disabled="isPendingSceneImage(s.id)" @click="openAssetPicker('scene', s.id)">资产库</button>
+                    <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id) || assistantRunning" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成主视角' }}</button>
+                  </div>
+                  <div v-if="s.image_url || s.imageUrl" class="char-transform-row">
+                    <span class="char-transform-label">多角度</span>
+                    <span class="dim char-transform-size-hint">基于主视角 · 6积分/张</span>
+                    <div class="char-transform-btns">
+                      <button
+                        v-for="preset in SCENE_ANGLE_PRESETS"
+                        :key="`${s.id}:${preset.id}`"
+                        class="btn btn-sm"
+                        :title="preset.description"
+                        :disabled="sceneAngleDisabled(s)"
+                        @click="genSceneAngle(s.id, preset.id, preset.label)"
+                      >
+                        {{ isPendingSceneAngle(s.id, preset.id) ? '生成中' : preset.label }}
+                      </button>
+                    </div>
+                    <div class="char-transform-btns" style="margin-top:6px">
+                      <button
+                        class="btn btn-sm"
+                        title="一键生成全部尚未生成的角度（跳过已有）"
+                        :disabled="sceneAngleDisabled(s) || isPendingSceneAllAngles(s.id)"
+                        @click="genSceneAllAngles(s.id)"
+                      >
+                        {{ isPendingSceneAllAngles(s.id) ? '批量生成中' : '一键全部角度' }}
+                      </button>
+                      <button
+                        class="btn btn-sm"
+                        title="一张图内拼接同场景多个机位视角"
+                        :disabled="sceneAngleDisabled(s) || isPendingSceneAngle(s.id, SCENE_ANGLE_SHEET_ID)"
+                        @click="genSceneAngleSheet(s.id)"
+                      >
+                        {{ isPendingSceneAngle(s.id, SCENE_ANGLE_SHEET_ID) ? '生成中' : SCENE_ANGLE_SHEET_LABEL }}
+                      </button>
+                    </div>
+                  </div>
+                  <div v-if="listSceneImagesWithStoryboardBlockings(s, sbs, getBlockingImage).length > 1" class="scene-angle-preview-row">
+                    <div
+                      v-for="img in listSceneImagesWithStoryboardBlockings(s, sbs, getBlockingImage)"
+                      :key="`${s.id}:preview:${img.angle_id}`"
+                      class="scene-angle-preview-item"
+                    >
+                      <button
+                        type="button"
+                        class="scene-angle-preview"
+                        @click="img.url && openImageViewer('/' + normalizeMediaPath(img.url), `${s.location} · ${img.label}`)"
+                      >
+                        <img v-if="img.url" :src="'/' + normalizeMediaPath(img.url)" :alt="img.label" />
+                        <span>{{ img.label }}</span>
+                      </button>
+                      <button
+                        v-if="img.angle_id !== 'hero' && !img.readonly"
+                        type="button"
+                        class="btn btn-sm scene-angle-regen-btn"
+                        :disabled="sceneAngleDisabled(s) || isPendingSceneAngle(s.id, img.angle_id)"
+                        @click="openSceneAngleRegen(s, img)"
+                      >
+                        {{ isPendingSceneAngle(s.id, img.angle_id) ? '生成中' : '调整' }}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -823,7 +1039,7 @@
               <span class="tag mono">{{ ttsGeneratedCount }}/{{ ttsEligibleCount }} 已生成</span>
               <span class="tag">{{ lockedAudioConfigLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchShotTTS">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchShotTTS">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
                   批量生成
                 </button>
@@ -858,7 +1074,7 @@
                 <div class="dub-foot">
                   <audio v-if="hasTTS(sb)" :src="'/' + getTTSUrl(sb)" controls preload="none" class="dub-audio" />
                   <div v-else class="dim" style="font-size:12px">尚未生成语音文件</div>
-                  <button class="btn btn-sm ml-auto" @click="genShotTTS(sb)">生成配音</button>
+                  <button class="btn btn-sm ml-auto" :disabled="assistantRunning" @click="genShotTTS(sb)">生成配音</button>
                 </div>
               </div>
             </div>
@@ -869,7 +1085,9 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotImgCount }}/{{ sbs.length }} 已有帧图</span>
+              <span class="tag mono">{{ blockingCount }}/{{ sbs.length }} 站位图</span>
               <span class="tag">{{ lockedImageConfigLabel }}</span>
+              <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
                 <BaseSelect v-model="frameMode" :options="frameModeOptions" placeholder="帧模式" searchable style="width:100px" />
                 <button v-if="gridImagePath" class="btn btn-sm" @click="reopenGridPreview">
@@ -936,6 +1154,7 @@
               </div>
             </div>
 
+            <div class="shots-workbench">
             <div class="frame-scroll">
               <div class="frame-grid">
                 <div v-for="(sb, i) in sbs" :key="sb.id"
@@ -949,6 +1168,8 @@
                     </div>
                     <div class="frame-desc">{{ sb.description || sb.title || '—' }}</div>
                     <div class="frame-meta">
+                      <span :class="['dot', getBlockingImage(sb) && 'ok', isPendingBlocking(sb.id) && 'pending']" />
+                      <span class="dim" style="font-size:11px">站位</span>
                       <span :class="['dot', getFirstFrame(sb) && 'ok', isPendingShotFrame(sb.id, 'first_frame') && 'pending']" />
                       <span class="dim" style="font-size:11px">首帧</span>
                       <span v-if="frameMode === 'first_last'" style="display:flex;align-items:center;gap:4px">
@@ -959,6 +1180,24 @@
                   </div>
                   <!-- Thumbnails -->
                   <div class="frame-thumbs">
+                    <div class="frame-thumb-wrap">
+                      <div
+                        class="frame-thumb blocking-thumb"
+                        @click.stop="onBlockingThumbClick(sb)"
+                      >
+                        <img
+                          v-if="getBlockingImage(sb)"
+                          :src="'/' + normalizeMediaPath(getBlockingImage(sb))"
+                          class="previewable-image"
+                          @click.stop="openImageViewer('/' + normalizeMediaPath(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
+                        />
+                        <div v-else class="frame-thumb-empty">
+                          <Loader2 v-if="isPendingBlocking(sb.id)" :size="14" class="animate-spin" />
+                          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2l4 7H8l4-7z"/><path d="M4 14h16"/><path d="M6 18h12"/><path d="M8 22h8"/></svg>
+                        </div>
+                      </div>
+                      <span class="frame-thumb-label">{{ isPendingBlocking(sb.id) ? '站位生成中' : (getBlockingImage(sb) ? '站位' : '站位·配置') }}</span>
+                    </div>
                     <div class="frame-thumb-wrap">
                       <div class="frame-thumb" @click.stop="!isPendingShotFrame(sb.id, 'first_frame') && genShotFrame(sb, 'first_frame')">
                         <img
@@ -998,6 +1237,39 @@
                   </div>
                 </div>
               </div>
+            </div>
+
+            <aside v-if="selectedSb" class="shot-blocking-side card">
+              <StoryboardBlockingPanel
+                :sb="selectedSb"
+                :shot-label="`镜头 #${String(sbs.indexOf(selectedSb) + 1).padStart(2, '0')}`"
+                :frame-mode="frameMode"
+                :character-ids="getStoryboardCharacterIds(selectedSb)"
+                :layout="getBlockingLayout(selectedSb)"
+                :blocking-image="getBlockingImage(selectedSb) || ''"
+                :blocking-image-index="getBlockingVideoImageIndex(selectedSb)"
+                :pending="isPendingBlocking(selectedSb.id)"
+                :pending-first-frame="isPendingShotFrame(selectedSb.id, 'first_frame')"
+                :pending-last-frame="isPendingShotFrame(selectedSb.id, 'last_frame')"
+                :generate-disabled="blockingGenerateDisabled(selectedSb)"
+                :disable-reason="blockingDisableReason(selectedSb)"
+                :shot-mode-hint="getBlockingShotModeHint(selectedSb)"
+                :initial-prompt="getBlockingPromptDraft(selectedSb)"
+                :image-reference-supported="imageReferenceSupported"
+                :character-name="getCharacterName"
+                @entry-change="(charId, patch) => onBlockingEntryChange(selectedSb, charId, patch)"
+                @notes-blur="onBlockingNotesBlur(selectedSb, $event)"
+                @generate="genBlocking(selectedSb, $event)"
+                @gen-first="genFirstFrameFromBlocking(selectedSb, 'first_frame')"
+                @gen-last="genFirstFrameFromBlocking(selectedSb, 'last_frame')"
+                @clear="clearBlockingImage(selectedSb)"
+                @preview="openImageViewer('/' + normalizeMediaPath(getBlockingImage(selectedSb)), `镜头 #${String(sbs.indexOf(selectedSb) + 1).padStart(2, '0')} 站位图`)"
+              />
+            </aside>
+            <div v-else class="shot-blocking-side card shot-blocking-placeholder">
+              <div class="shot-blocking-placeholder-title">站位图配置</div>
+              <div class="dim">点击左侧镜头，在此配置角色站位并生成站位图</div>
+            </div>
             </div>
 
             <!-- Grid Tool Dialog -->
@@ -1193,14 +1465,17 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
+              <span class="tag">{{ lockedVideoConfigLabel }}</span>
+              <span v-if="isChengmengVideoActive" class="tag tag-warn">800 积分/条（15 秒）</span>
+              <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchVideos">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchVideos">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
                 </button>
               </div>
             </div>
-            <div class="prod-grid">
+            <div class="prod-grid prod-grid-wide">
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
                 <div class="prod-cover">
                   <video
@@ -1226,6 +1501,227 @@
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
                   <div class="prod-meta-line">{{ sb.shot_type || sb.shotType || '未设景别' }} · {{ sb.duration || 10 }}s</div>
+                  <div class="prod-prompt-block">
+                    <label class="prod-prompt-field">
+                      <span class="prod-prompt-label">视频提示词</span>
+                      <textarea
+                        :value="sb.video_prompt || sb.videoPrompt || ''"
+                        class="textarea prod-video-prompt"
+                        rows="4"
+                        placeholder="拆解分镜时生成，可在此微调后重新生成"
+                        @blur="onVideoPromptBlur(sb, $event)"
+                      />
+                    </label>
+                    <label class="prod-duration-field">
+                      <span class="prod-prompt-label">时长（秒）</span>
+                      <input
+                        :value="sb.duration ?? ''"
+                        class="input"
+                        type="number"
+                        min="1"
+                        max="15"
+                        placeholder="5"
+                        @blur="onVideoDurationBlur(sb, $event)"
+                      />
+                    </label>
+                  </div>
+                  <div class="video-bind-panel">
+                    <div class="video-bind-row">
+                      <span class="prod-prompt-label">关联角色</span>
+                      <div class="video-bind-pills">
+                        <button
+                          v-for="char in chars"
+                          :key="char.id"
+                          type="button"
+                          :class="['role-pill', { active: isStoryboardCharacterSelected(sb, char.id) }]"
+                          @click="toggleStoryboardCharacter(sb, char.id)"
+                        >
+                          {{ char.name }}
+                        </button>
+                        <span v-if="!chars.length" class="dim" style="font-size:11px">暂无角色，请先在剧本步骤提取</span>
+                      </div>
+                    </div>
+                    <div v-if="getStoryboardCharacterIds(sb).length" class="video-char-image-panel">
+                      <div class="video-bind-row">
+                        <span class="prod-prompt-label">角色参考图</span>
+                        <span class="dim video-char-image-hint">每个镜头可单独选择用于视频生成的角色图</span>
+                      </div>
+                      <div
+                        v-for="charId in getStoryboardCharacterIds(sb)"
+                        :key="`char-img:${sb.id}:${charId}`"
+                        class="video-char-image-row"
+                      >
+                        <span class="video-char-image-name">{{ getCharacterName(charId) }}</span>
+                        <div class="video-char-image-options">
+                          <button
+                            v-for="img in getCharacterImagesById(charId)"
+                            :key="`${charId}:${img.url}`"
+                            type="button"
+                            class="video-char-image-option"
+                            :class="{ active: isStoryboardCharacterImageSelected(sb, charId, img.url) }"
+                            :title="variantLabel(img)"
+                            @click="setStoryboardCharacterImage(sb, charId, img.url)"
+                          >
+                            <img :src="'/' + normalizeMediaPath(img.url)" :alt="variantLabel(img)" />
+                            <span>{{ variantLabel(img) }}</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="video-bind-row">
+                      <span class="prod-prompt-label">关联场景</span>
+                      <select
+                        class="input video-scene-select"
+                        :value="sb.scene_id || sb.sceneId || ''"
+                        @change="updateField(sb, 'scene_id', $event.target.value ? Number($event.target.value) : null)"
+                      >
+                        <option value="">未绑定场景</option>
+                        <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
+                          {{ scene.location }} · {{ scene.time || '未设时间' }}
+                        </option>
+                      </select>
+                    </div>
+                    <div class="video-blocking-panel">
+                      <div class="video-bind-row">
+                        <span class="prod-prompt-label">站位图</span>
+                        <span class="dim video-blocking-hint">3D 布局参考，需在 video_prompt 首行用「图片N是…」说明颜色与角色对应</span>
+                      </div>
+                      <div class="video-blocking-slot-row">
+                        <button
+                          type="button"
+                          class="video-blocking-slot"
+                          :class="{ pending: isPendingBlocking(sb.id), empty: !getBlockingImage(sb) }"
+                          @click="getBlockingImage(sb) && openImageViewer('/' + normalizeMediaPath(getBlockingImage(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 站位图`)"
+                        >
+                          <img
+                            v-if="getBlockingImage(sb)"
+                            :src="'/' + normalizeMediaPath(getBlockingImage(sb))"
+                            alt="站位图"
+                          />
+                          <div v-else-if="isPendingBlocking(sb.id)" class="video-blocking-slot-empty">
+                            <Loader2 :size="16" class="animate-spin" />
+                            <span>生成中</span>
+                          </div>
+                          <div v-else class="video-blocking-slot-empty">
+                            <span>尚未生成站位图</span>
+                          </div>
+                        </button>
+                        <div class="video-blocking-side">
+                          <div class="video-blocking-tags">
+                            <span v-if="getBlockingVideoImageIndex(sb)" class="tag mono">图片{{ getBlockingVideoImageIndex(sb) }}</span>
+                            <span v-if="getBlockingImage(sb)" class="tag">已生成</span>
+                            <span v-else-if="isPendingBlocking(sb.id)" class="tag">生成中</span>
+                            <span v-else class="tag">待生成</span>
+                          </div>
+                          <ul v-if="getBlockingColorLegend(sb).length" class="video-blocking-legend">
+                            <li v-for="(line, li) in getBlockingColorLegend(sb)" :key="`${sb.id}:legend:${li}`">{{ line }}</li>
+                          </ul>
+                          <p v-else class="dim video-blocking-legend-empty">绑定角色后可在此查看颜色站位说明</p>
+                          <pre v-if="getBlockingVideoPromptSnippet(sb)" class="video-blocking-snippet">{{ getBlockingVideoPromptSnippet(sb) }}</pre>
+                          <div class="video-blocking-actions">
+                            <button
+                              type="button"
+                              class="btn btn-sm btn-primary"
+                              :disabled="blockingGenerateDisabled(sb)"
+                              @click="genBlocking(sb)"
+                            >
+                              {{ isPendingBlocking(sb.id) ? '生成中…' : (getBlockingImage(sb) ? '重新生成' : '生成站位图') }}
+                            </button>
+                            <button
+                              v-if="getBlockingImage(sb)"
+                              type="button"
+                              class="btn btn-sm"
+                              :disabled="isPendingShotFrame(sb.id, 'first_frame') || !imageReferenceSupported"
+                              @click="genFirstFrameFromBlocking(sb, 'first_frame')"
+                            >
+                              从站位图生成首帧
+                            </button>
+                            <button
+                              v-if="getBlockingVideoPromptSnippet(sb)"
+                              type="button"
+                              class="btn btn-sm"
+                              @click="copyBlockingVideoSnippet(sb)"
+                            >
+                              复制到 video_prompt
+                            </button>
+                            <button
+                              type="button"
+                              class="btn btn-sm"
+                              @click="selectedSb = sb; prodTab = 'shots'"
+                            >
+                              去镜头页配置
+                            </button>
+                          </div>
+                          <span v-if="blockingDisableReason(sb)" class="dim video-blocking-warn">{{ blockingDisableReason(sb) }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="video-ref-panel">
+                    <div class="video-ref-head">
+                      <span class="prod-prompt-label">
+                        多模态参考
+                        <span v-if="isSeedance2VideoActive" class="video-ref-hint">（将传入 Seedance 2.0）</span>
+                      </span>
+                      <label class="btn btn-sm video-ref-upload">
+                        上传参考图
+                        <input type="file" accept="image/*" hidden @change="uploadVideoReference(sb, $event)" />
+                      </label>
+                    </div>
+                    <div v-if="collectVideoReferencesExceptBlocking(sb).length" class="video-ref-list">
+                      <div
+                        v-for="ref in collectVideoReferencesExceptBlocking(sb)"
+                        :key="ref.key"
+                        class="video-ref-card"
+                        :class="{ missing: ref.missing }"
+                      >
+                        <button
+                          v-if="ref.url && ref.type === 'image'"
+                          type="button"
+                          class="video-ref-thumb"
+                          @click="openImageViewer('/' + normalizeMediaPath(ref.url), ref.label)"
+                        >
+                          <img :src="'/' + normalizeMediaPath(ref.url)" :alt="ref.label" />
+                        </button>
+                        <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
+                          <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
+                        </div>
+                        <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
+                        <div class="video-ref-meta">
+                          <span v-if="ref.imageIndex" class="video-ref-index">图片{{ ref.imageIndex }}</span>
+                          <span class="video-ref-label">{{ ref.label }}</span>
+                          <span class="video-ref-tag">{{ ref.typeLabel }}{{ ref.promptLabel && ref.promptLabel !== ref.label ? ` · ${ref.promptLabel}` : '' }}</span>
+                          <span v-if="ref.technical" class="video-ref-tag">技术参考</span>
+                          <span v-if="ref.extra" class="video-ref-tag">额外上传</span>
+                        </div>
+                        <div class="video-ref-actions">
+                          <template v-if="ref.source === 'first_frame'">
+                            <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'first_frame')">更换</button>
+                            <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'first_frame')">删除</button>
+                          </template>
+                          <template v-else-if="ref.source === 'last_frame'">
+                            <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'last_frame')">更换</button>
+                            <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'last_frame')">删除</button>
+                          </template>
+                          <template v-else-if="ref.source === 'character'">
+                            <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成图</button>
+                            <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, ref.charId)">移除</button>
+                          </template>
+                          <template v-else-if="ref.source === 'scene'">
+                            <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成图</button>
+                            <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
+                          </template>
+                          <template v-else-if="ref.source === 'reference'">
+                            <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref.url)">删除</button>
+                          </template>
+                          <template v-else-if="ref.source === 'tts'">
+                            <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重新生成</button>
+                          </template>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-else class="dim video-ref-empty-hint">绑定角色/场景或生成首帧后，其余参考素材会显示在这里</div>
+                  </div>
                   <div class="prod-dots">
                     <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
                     <span :class="['dot', hasVid(sb) && 'ok', isPendingVideo(sb.id) && 'pending']" /><span style="font-size:10px">{{ isPendingVideo(sb.id) ? '视频生成中' : '视频' }}</span>
@@ -1233,7 +1729,7 @@
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id)" @click="genVid(sb)">
+                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id) || assistantRunning" @click="genVid(sb)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
                   </button>
@@ -1248,7 +1744,7 @@
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ composedCount }}/{{ sbs.length }} 已合成</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" @click="batchCompose">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchCompose">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   批量合成
                 </button>
@@ -1296,7 +1792,7 @@
                   <div v-if="composeFailMessage(sb.id)" class="prod-error">{{ composeFailMessage(sb.id) }}</div>
                 </div>
                 <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="!hasVid(sb) || isPendingCompose(sb.id)" @click="doCompose(sb)">
+                  <button class="btn btn-sm" :disabled="!hasVid(sb) || isPendingCompose(sb.id) || assistantRunning" @click="doCompose(sb)">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                     {{ isPendingCompose(sb.id) ? '合成中' : (hasComposed(sb) ? '重新合成' : '开始合成') }}
                   </button>
@@ -1339,7 +1835,7 @@
                 </div>
                 <div class="empty-title">拼接全集视频</div>
                 <div class="empty-desc">将 {{ composedCount }} 个已合成镜头拼接为完整视频</div>
-                <button class="btn btn-primary" :disabled="composedCount === 0" @click="doMerge" style="margin-top:12px">
+                <button class="btn btn-primary" :disabled="composedCount === 0 || assistantRunning" @click="doMerge" style="margin-top:12px">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   开始拼接
                 </button>
@@ -1431,6 +1927,55 @@
         </div>
       </div>
     </main>
+
+    <AssetPickerModal
+      :open="assetPicker.open"
+      :type="assetPicker.type"
+      :drama-id="dramaId"
+      :title="assetPickerTitle"
+      :confirm-before-select="assetPicker.type === 'costume'"
+      confirm-label="确认生成换装图"
+      confirm-hint="将基于当前角色基准图与所选服装，重新生成一张换装图"
+      @close="closeAssetPicker"
+      @select="applyPickedAsset"
+    />
+
+    <SceneAngleRegenModal
+      :open="sceneAngleRegen.open"
+      :scene-location="sceneAngleRegen.sceneLocation"
+      :angle-id="sceneAngleRegen.angleId"
+      :angle-label="sceneAngleRegen.angleLabel"
+      :image-url="sceneAngleRegen.imageUrl"
+      :initial-prompt="sceneAngleRegen.prompt"
+      :default-prompt="sceneAngleRegen.defaultPrompt"
+      :disabled="isPendingSceneAngle(sceneAngleRegen.sceneId, sceneAngleRegen.angleId)"
+      :is-sheet="sceneAngleRegen.isSheet"
+      @close="closeSceneAngleRegen"
+      @confirm="confirmSceneAngleRegen"
+      @preview="openImageViewer($event, sceneAngleRegen.previewTitle)"
+    />
+
+    <EpisodeAssistantPanel
+      v-if="epId"
+      v-model:input="assistantInput"
+      :messages="assistantMessages"
+      :running="assistantRunning"
+      :loading-history="assistantLoadingHistory"
+      :quick-chips="assistantQuickChips"
+      :agent-type="assistantAgentType"
+      :step-label="assistantStepLabel"
+      :disabled="assistantDisabled"
+      :collapsed="!assistantOpen"
+      :selected-storyboard="assistantSelectedStoryboard"
+      :characters="chars"
+      :scenes="scenes"
+      :storyboards="sbs"
+      @send="(text) => assistantSend(text, refresh)"
+      @stop="assistantStop"
+      @clear="assistantClearHistory"
+      @toggle="toggleAssistant"
+      @navigate="onAssistantNavigate"
+    />
     </div>
   </div>
 </template>
@@ -1440,9 +1985,39 @@ import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
 } from 'lucide-vue-next'
-import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI } from '~/composables/useApi'
-import { useAgent } from '~/composables/useAgent'
+import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, assetAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, uploadAPI } from '~/composables/useApi'
+import { useEpisodeAssistant } from '~/composables/useEpisodeAssistant'
 import BaseSelect from '~/components/BaseSelect.vue'
+import AssetPickerModal from '~/components/AssetPickerModal.vue'
+import SceneAngleRegenModal from '~/components/SceneAngleRegenModal.vue'
+import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
+import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues } from '~/utils/video-ref-order.js'
+import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
+import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
+import {
+  SCENE_ANGLE_PRESETS,
+  SCENE_ANGLE_SHEET_ID,
+  SCENE_ANGLE_SHEET_LABEL,
+  buildSceneAnglePrompt,
+  buildSceneAngleSheetPrompt,
+  listSceneImages,
+  listSceneImagesForStoryboard,
+  listSceneImagesWithStoryboardBlockings,
+  resolveSceneImageUrl,
+  resolveSceneImageForStoryboard,
+  sceneAngleKey,
+  sceneAngleLabel,
+} from '~/utils/scene-image-variants.js'
+import {
+  getBlockingImage,
+  resolveBlockingLayout,
+  updateBlockingLayoutEntry,
+  blockingShotModeHint,
+  getBlockingImageIndexFromPromptItems,
+  buildBlockingColorLegend,
+  buildBlockingVideoPromptSnippet,
+} from '~/utils/blocking-layout.js'
+import { formatImageGenerationError } from '~/utils/image-generation-error.js'
 
 definePageMeta({ layout: 'studio' })
 
@@ -1452,7 +2027,6 @@ const episodeNumber = Number(route.params.episodeNumber)
 
 const drama = ref(null), episode = ref(null), chars = ref([]), scenes = ref([]), sbs = ref([]), mergeData = ref(null)
 const panel = ref('script')
-const { running: rn, runningType: rt, run: runAgent } = useAgent()
 
 const localRaw = ref(''), localScript = ref('')
 const rawContent = computed(() => episode.value?.content || '')
@@ -1489,6 +2063,16 @@ const videoConfigSelectOptions = computed(() => videoConfigs.value.map(c => {
   return { label, value: c.id }
 }))
 const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
+const imageAspectOptions = [
+  { value: '9:16', label: '9:16 竖屏' },
+  { value: '16:9', label: '16:9 横屏' },
+]
+const imageAspectSaving = ref(false)
+const dramaImageAspect = computed(() => drama.value?.image_aspect_ratio || drama.value?.imageAspectRatio || '9:16')
+const dramaImageSizeLabel = computed(() => (dramaImageAspect.value === '16:9' ? '1920×1080' : '1080×1920'))
+const dramaImageAspectLabel = computed(() => `${dramaImageAspect.value} · ${dramaImageSizeLabel.value}`)
+const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
+const showImageSizeControl = computed(() => panel.value === 'production' && canManageDrama.value)
 const gridLayoutOptions = [
   { label: '2x2', value: '2x2' },
   { label: '3x3', value: '3x3' },
@@ -1499,13 +2083,39 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
+const pendingCharTransformKeys = ref([])
+const pendingCharOutfitKeys = ref([])
 const pendingSceneImageIds = ref([])
+const pendingSceneAngleKeys = ref([])
 const pendingShotFrameKeys = ref([])
+const pendingBlockingIds = ref([])
+const blockingAssistantMsgIds = ref({})
 const pendingVideoIds = ref([])
 const pendingComposeIds = ref([])
 const failedVideoMessages = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
+const assetPicker = ref({ open: false, type: 'character', targetId: null })
+const sceneAnglePromptDrafts = ref({})
+const blockingPromptDrafts = ref({})
+const sceneAngleRegen = ref({
+  open: false,
+  sceneId: null,
+  sceneLocation: '',
+  angleId: '',
+  angleLabel: '',
+  imageUrl: '',
+  prompt: '',
+  defaultPrompt: '',
+  previewTitle: '',
+  isSheet: false,
+})
+
+const assetPickerTitle = computed(() => {
+  if (assetPicker.value.type === 'scene') return '选择场景资产'
+  if (assetPicker.value.type === 'costume') return '选择服装资产'
+  return '选择人物资产'
+})
 
 function configLabel(config) {
   if (!config) return '未配置'
@@ -1518,6 +2128,36 @@ function isPendingCharImage(id) {
   return pendingCharImageIds.value.includes(id)
 }
 
+function isPendingCharTransform(charId, transformId, source = 'primary') {
+  return pendingCharTransformKeys.value.includes(charTransformKey(charId, transformId, source))
+}
+
+function isPendingCharOutfit(charId, outfitKey) {
+  return pendingCharOutfitKeys.value.includes(outfitKey)
+}
+
+function charHasImage(char) {
+  return !!(char?.image_url || char?.imageUrl)
+}
+
+function charTransformDisabled(char, source = 'primary') {
+  if (isPendingCharImage(char.id) || !imageReferenceSupported.value) return true
+  if (source === 'primary') return !charHasImage(char)
+  return !getCharacterOutfits(char).some(item => item.outfit_id === source)
+}
+
+function charOutfitDisabled(char) {
+  return isPendingCharImage(char.id) || !charHasImage(char) || !imageReferenceSupported.value
+}
+
+function charTransformTitle(char, preset, source = 'primary') {
+  if (source === 'primary' && !charHasImage(char)) return '请先生成或上传角色原图'
+  if (source !== 'primary' && charTransformDisabled(char, source)) return '请先生成该套换装图'
+  if (!imageReferenceSupported.value) return imageReferenceSupportHint()
+  const scope = source === 'primary' ? '原图' : '该套服装'
+  return `${preset.description}（基于${scope}生成变体，不覆盖原图）`
+}
+
 function openImageViewer(src, title = '') {
   if (!src) return
   imageViewer.value = { open: true, src, title }
@@ -1525,6 +2165,51 @@ function openImageViewer(src, title = '') {
 
 function closeImageViewer() {
   imageViewer.value = { open: false, src: '', title: '' }
+}
+
+function openAssetPicker(type, targetId) {
+  assetPicker.value = { open: true, type, targetId }
+}
+
+function closeAssetPicker() {
+  assetPicker.value = { ...assetPicker.value, open: false }
+}
+
+async function applyPickedAsset(payload) {
+  const asset = payload?.asset || payload
+  const customPrompt = payload?.prompt
+  const { type, targetId } = assetPicker.value
+  if (!asset?.id || !targetId) return
+  try {
+    if (type === 'costume') {
+      await generateCharOutfit(targetId, asset, customPrompt)
+      closeAssetPicker()
+      return
+    }
+    if (type === 'character') {
+      await assetAPI.applyToCharacter(asset.id, targetId)
+      const char = chars.value.find(item => item.id === targetId)
+      const url = asset.url || asset.local_path || asset.localPath
+      if (char && url) {
+        char.image_url = url
+        char.imageUrl = url
+      }
+      toast.success('已应用人物资产')
+    } else {
+      await assetAPI.applyToScene(asset.id, targetId)
+      const scene = scenes.value.find(item => item.id === targetId)
+      const url = asset.url || asset.local_path || asset.localPath
+      if (scene && url) {
+        scene.image_url = url
+        scene.imageUrl = url
+      }
+      toast.success('已应用场景资产')
+    }
+    closeAssetPicker()
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '应用资产失败')
+  }
 }
 
 function handleImageViewerKeydown(event) {
@@ -1549,6 +2234,262 @@ function framePendingKey(id, frameType) {
 
 function isPendingShotFrame(id, frameType) {
   return pendingShotFrameKeys.value.includes(framePendingKey(id, frameType))
+}
+
+function isPendingBlocking(id) {
+  return pendingBlockingIds.value.includes(id)
+}
+
+function getBlockingLayout(sb) {
+  return resolveBlockingLayout(sb?.blocking_layout || sb?.blockingLayout, getStoryboardCharacterIds(sb))
+}
+
+function onBlockingEntryChange(sb, characterId, patch) {
+  const layout = updateBlockingLayoutEntry(getBlockingLayout(sb), characterId, patch)
+  sb.blocking_layout = layout
+  sb.blockingLayout = layout
+  storyboardAPI.update(sb.id, { blocking_layout: layout })
+}
+
+function onBlockingNotesBlur(sb, notes) {
+  const layout = { ...getBlockingLayout(sb), notes: notes.trim() }
+  sb.blocking_layout = layout
+  sb.blockingLayout = layout
+  storyboardAPI.update(sb.id, { blocking_layout: layout })
+}
+
+function blockingDisableReason(sb) {
+  if (!sb || isPendingBlocking(sb.id)) return ''
+  if (!getStoryboardCharacterIds(sb).length) return '请先在分镜中绑定角色（剧本 → 分镜列表）'
+  if (!imageReferenceSupported.value) return imageReferenceSupportHint()
+  const sceneId = sb.scene_id || sb.sceneId
+  if (!sceneId) return '请先在分镜中绑定场景'
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (!resolveSceneImageForStoryboard(scene, sb)) return '请先生成场景图，或在分镜中选择已有场景视角'
+  const missingId = getStoryboardCharacterIds(sb).find(charId => {
+    const char = chars.value.find(item => item.id === charId)
+    return !resolveCharacterImageUrl(char, getStoryboardCharacterImageRefs(sb))
+  })
+  if (missingId) return `角色「${getCharacterName(missingId)}」缺少参考图，请先在角色图片页生成`
+  return ''
+}
+
+function blockingGenerateDisabled(sb) {
+  if (!sb) return true
+  if (isPendingBlocking(sb.id)) return true
+  return !!blockingDisableReason(sb)
+}
+
+function getBlockingShotModeHint(sb) {
+  if (!sb) return ''
+  return blockingShotModeHint(sb, getStoryboardCharacterIds(sb).length)
+}
+
+function getBlockingPromptDraft(sb) {
+  if (!sb) return ''
+  return blockingPromptDrafts.value[sb.id] || ''
+}
+
+async function genBlocking(sb, prompt) {
+  const reason = blockingDisableReason(sb)
+  if (reason) {
+    toast.warning(reason)
+    return
+  }
+  if (prompt?.trim()) blockingPromptDrafts.value[sb.id] = prompt.trim()
+  const layout = getBlockingLayout(sb)
+  if (!pendingBlockingIds.value.includes(sb.id)) pendingBlockingIds.value.push(sb.id)
+  ensureAssistantVisible()
+  const idx = shotIndex(sb)
+  const activity = await assistantRecordActivity(
+    `为镜头 #${idx} 生成站位图`,
+    '站位图生成中，请稍候…',
+    [{
+      kind: 'shot_blocking',
+      id: sb.id,
+      label: `镜头 #${idx} 站位图`,
+      status: 'processing',
+    }],
+  )
+  if (activity?.assistantMessageId) {
+    blockingAssistantMsgIds.value = {
+      ...blockingAssistantMsgIds.value,
+      [sb.id]: activity.assistantMessageId,
+    }
+  }
+  try {
+    const res = await storyboardAPI.generateBlocking(sb.id, {
+      blocking_layout: layout,
+      ...(prompt?.trim() ? { prompt: prompt.trim() } : {}),
+    })
+    toast.success('站位图生成中…')
+    pollBlockingGeneration(res?.image_generation_id, sb.id)
+  } catch (e) {
+    pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== sb.id)
+    const msgId = blockingAssistantMsgIds.value[sb.id]
+    if (msgId) {
+      await assistantPatchActivity(msgId, {
+        content: `站位图生成失败：${e?.message || '未知错误'}`,
+        attachments: [{
+          kind: 'shot_blocking',
+          id: sb.id,
+          label: `镜头 #${idx} 站位图`,
+          status: 'failed',
+        }],
+      })
+      const next = { ...blockingAssistantMsgIds.value }
+      delete next[sb.id]
+      blockingAssistantMsgIds.value = next
+    }
+    toast.error(e?.message || '站位图生成失败')
+  }
+}
+
+async function pollBlockingGeneration(generationId, storyboardId) {
+  if (!generationId) {
+    pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+    return
+  }
+  const sbAtStart = sbs.value.find(item => item.id === storyboardId)
+  const idxAtStart = sbAtStart ? shotIndex(sbAtStart) : storyboardId
+  for (let i = 0; i < 120; i++) {
+    await sleep(3000)
+    try {
+      const res = await imageAPI.get(generationId)
+      await refresh()
+      const sb = sbs.value.find(item => item.id === storyboardId)
+      const idx = sb ? shotIndex(sb) : idxAtStart
+      const msgId = blockingAssistantMsgIds.value[storyboardId]
+      if (res?.status === 'completed') {
+        pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+        if (msgId) {
+          const blockingUrl = sb ? getBlockingImage(sb) : null
+          await assistantPatchActivity(msgId, {
+            content: '站位图已生成。',
+            attachments: [{
+              kind: 'shot_blocking',
+              id: storyboardId,
+              label: `镜头 #${idx} 站位图`,
+              status: 'ready',
+              url: blockingUrl ? `/${normalizeMediaPath(blockingUrl)}` : null,
+            }],
+          })
+          const next = { ...blockingAssistantMsgIds.value }
+          delete next[storyboardId]
+          blockingAssistantMsgIds.value = next
+        }
+        toast.success('站位图已更新')
+        return
+      }
+      if (res?.status === 'failed') {
+        pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+        const errText = formatImageGenerationError(res?.error_msg || res?.errorMsg || '站位图生成失败')
+        if (msgId) {
+          await assistantPatchActivity(msgId, {
+            content: `站位图生成失败：${errText}`,
+            attachments: [{
+              kind: 'shot_blocking',
+              id: storyboardId,
+              label: `镜头 #${idx} 站位图`,
+              status: 'failed',
+            }],
+          })
+          const next = { ...blockingAssistantMsgIds.value }
+          delete next[storyboardId]
+          blockingAssistantMsgIds.value = next
+        }
+        toast.error(errText)
+        return
+      }
+    } catch {}
+  }
+  pendingBlockingIds.value = pendingBlockingIds.value.filter(item => item !== storyboardId)
+  const msgId = blockingAssistantMsgIds.value[storyboardId]
+  if (msgId) {
+    await assistantPatchActivity(msgId, {
+      content: '站位图生成超时，请稍后刷新查看。',
+      attachments: [{
+        kind: 'shot_blocking',
+        id: storyboardId,
+        label: `镜头 #${idxAtStart} 站位图`,
+        status: 'failed',
+      }],
+    })
+    const next = { ...blockingAssistantMsgIds.value }
+    delete next[storyboardId]
+    blockingAssistantMsgIds.value = next
+  }
+  toast.warning('站位图生成超时，请稍后刷新查看')
+}
+
+async function clearBlockingImage(sb) {
+  sb.blocking_image = null
+  sb.blockingImage = null
+  try {
+    await storyboardAPI.update(sb.id, { blocking_image: null })
+    toast.success('已删除站位图')
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
+}
+
+async function genFirstFrameFromBlocking(sb, frameType = 'first_frame') {
+  if (!getBlockingImage(sb)) {
+    toast.warning('请先生成场景站位图')
+    return
+  }
+  if (!imageReferenceSupported.value) {
+    toast.error(imageReferenceSupportHint())
+    return
+  }
+  const key = framePendingKey(sb.id, frameType)
+  const label = frameType === 'first_frame' ? '首帧' : '尾帧'
+  if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
+  try {
+    const res = await storyboardAPI.generateFrameFromBlocking(sb.id, { frame_type: frameType })
+    toast.success(`从站位图生成${label}中…`)
+    pollShotFrameGeneration(res?.image_generation_id, sb.id, frameType, key)
+  } catch (e) {
+    pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
+    toast.error(e?.message || `从站位图生成${label}失败`)
+  }
+}
+
+async function pollShotFrameGeneration(generationId, storyboardId, frameType, pendingKey) {
+  if (!generationId) {
+    pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+    return
+  }
+  const label = frameType === 'first_frame' ? '首帧' : '尾帧'
+  for (let i = 0; i < 120; i++) {
+    await sleep(3000)
+    try {
+      const res = await imageAPI.get(generationId)
+      await refresh()
+      if (res?.status === 'completed') {
+        pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+        toast.success(`${label}已更新`)
+        return
+      }
+      if (res?.status === 'failed') {
+        pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+        toast.error(formatImageGenerationError(res?.error_msg || res?.errorMsg || `${label}生成失败`))
+        return
+      }
+    } catch {}
+  }
+  pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== pendingKey)
+  toast.warning(`${label}生成超时，请稍后刷新查看`)
+}
+
+function onBlockingThumbClick(sb) {
+  selectedSb.value = sb
+  if (getBlockingImage(sb)) {
+    openImageViewer(
+      '/' + normalizeMediaPath(getBlockingImage(sb)),
+      `镜头 #${String(sbs.value.indexOf(sb) + 1).padStart(2, '0')} 站位图`,
+    )
+  }
 }
 
 function isPendingVideo(id) {
@@ -1578,8 +2519,38 @@ const lockedImageConfigId = computed(() => episode.value?.image_config_id || epi
 const lockedVideoConfigId = computed(() => episode.value?.video_config_id || episode.value?.videoConfigId || null)
 const lockedAudioConfigId = computed(() => episode.value?.audio_config_id || episode.value?.audioConfigId || null)
 const lockedAudioProvider = computed(() => audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)?.provider || '')
-const lockedImageConfigLabel = computed(() => configLabel(imageConfigs.value.find(c => c.id === lockedImageConfigId.value)))
+const resolvedImageConfig = computed(() => {
+  const byEpisode = imageConfigs.value.find(c => c.id === lockedImageConfigId.value)
+  if (byEpisode) return byEpisode
+  const active = [...imageConfigs.value]
+    .filter(c => c.is_active !== false)
+    .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0))
+  return active[0] || null
+})
+const lockedImageConfigLabel = computed(() => configLabel(resolvedImageConfig.value))
+const lockedImageConfigProvider = computed(() => resolvedImageConfig.value?.provider || '')
+const imageReferenceSupported = computed(() =>
+  supportsImageReference(lockedImageConfigProvider.value, resolveImageConfigModel(resolvedImageConfig.value)),
+)
 const lockedVideoConfigLabel = computed(() => configLabel(videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)))
+const isChengmengVideoActive = computed(() => {
+  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  return cfg?.provider === 'chengmeng'
+})
+const isSeedance2VideoActive = computed(() => {
+  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  if (!cfg) return false
+  if (cfg.provider === 'chengmeng') return true
+  let model = ''
+  try {
+    const parsed = JSON.parse(cfg.model || '[]')
+    model = Array.isArray(parsed) ? (parsed[0] || '') : (parsed || cfg.model || '')
+  } catch {
+    model = cfg.model || ''
+  }
+  const lower = String(model).toLowerCase()
+  return lower.includes('seedance-2-0') || lower.includes('seedance-2.0') || lower.includes('seedance 2')
+})
 const lockedAudioConfigLabel = computed(() => configLabel(audioConfigs.value.find(c => c.id === lockedAudioConfigId.value)))
 
 // Grid tool state
@@ -2077,6 +3048,7 @@ const sceneImgCount = computed(() => scenes.value.filter(s => s.image_url || s.i
 const ttsEligibleCount = computed(() => sbs.value.filter(s => hasDialogue(s)).length)
 const ttsGeneratedCount = computed(() => sbs.value.filter(s => hasDialogue(s) && hasTTS(s)).length)
 const shotImgCount = computed(() => sbs.value.filter(s => s.first_frame_image || s.firstFrameImage || s.last_frame_image || s.lastFrameImage || s.composed_image || s.composedImage).length)
+const blockingCount = computed(() => sbs.value.filter(s => getBlockingImage(s)).length)
 const shotVidCount = computed(() => sbs.value.filter(s => s.video_url || s.videoUrl).length)
 const visualCharTotal = computed(() => visualChars.value.length)
 
@@ -2334,6 +3306,98 @@ function getVoiceProfile(voiceId) {
 const totalDuration = computed(() => sbs.value.reduce((s, sb) => s + (sb.duration || 10), 0))
 
 const selectedSb = ref(null)
+
+const assistantSelectedStoryboard = computed(() => {
+  const sb = selectedSb.value
+  if (!sb?.id) return null
+  const index = sbs.value.findIndex(item => item.id === sb.id)
+  return {
+    id: sb.id,
+    index: index >= 0 ? index + 1 : 0,
+    title: sb.title || sb.description || '',
+  }
+})
+
+const assistantOpen = ref(true)
+if (import.meta.client) {
+  const saved = localStorage.getItem('huobao-assistant-open')
+  if (saved === '0') assistantOpen.value = false
+}
+function toggleAssistant() {
+  assistantOpen.value = !assistantOpen.value
+  if (import.meta.client) {
+    localStorage.setItem('huobao-assistant-open', assistantOpen.value ? '1' : '0')
+  }
+}
+function ensureAssistantVisible() {
+  if (!assistantOpen.value) {
+    assistantOpen.value = true
+    if (import.meta.client) localStorage.setItem('huobao-assistant-open', '1')
+  }
+}
+function sendAssistant(message, onAfterRefresh) {
+  if (assistantRunning.value) {
+    toast.warning('助手正在执行中')
+    return
+  }
+  ensureAssistantVisible()
+  assistantSend(message, () => {
+    refresh()
+    onAfterRefresh?.()
+  })
+}
+function shotIndex(sb) {
+  const idx = sbs.value.findIndex(s => s.id === sb.id)
+  return idx >= 0 ? idx + 1 : sb.storyboard_number || sb.storyboardNumber || sb.id
+}
+function onAssistantNavigate(att) {
+  ensureAssistantVisible()
+  if (att.kind === 'character' && att.id) {
+    panel.value = 'production'
+    prodTab.value = 'chars'
+    return
+  }
+  if (att.kind === 'scene' && att.id) {
+    panel.value = 'production'
+    prodTab.value = 'scenes'
+    return
+  }
+  if (att.kind === 'merge') {
+    panel.value = 'export'
+    return
+  }
+  const sb = sbs.value.find(item => item.id === att.id)
+  if (!sb) return
+  selectedSb.value = sb
+  panel.value = 'production'
+  if (att.kind === 'shot_video') prodTab.value = 'videos'
+  else if (att.kind === 'shot_compose') prodTab.value = 'compose'
+  else prodTab.value = 'shots'
+}
+
+const assistantContext = computed(() => ({
+  dramaId,
+  stepKey: activeSubStepKey.value,
+  stepLabel: currentSubStageLabel.value,
+  selectedStoryboard: assistantSelectedStoryboard.value,
+}))
+
+const {
+  messages: assistantMessages,
+  running: assistantRunning,
+  loadingHistory: assistantLoadingHistory,
+  input: assistantInput,
+  agentType: assistantAgentType,
+  stepLabel: assistantStepLabel,
+  quickChips: assistantQuickChips,
+  disabled: assistantDisabled,
+  send: assistantSend,
+  recordActivity: assistantRecordActivity,
+  patchActivity: assistantPatchActivity,
+  clearHistory: assistantClearHistory,
+  stop: assistantStop,
+} = useEpisodeAssistant(epId, activeSubStepKey, assistantContext)
+
 const shotTypes = [
   '大远景', '远景', '全景', '中景', '中近景', '近景', '特写', '大特写',
   '双人镜头', '三人镜头', '群像', '背影', '侧面', '正面', '俯视', '仰视',
@@ -2344,11 +3408,86 @@ const shotMovements = ['固定', '推镜', '拉镜', '摇镜', '移镜', '跟拍
 
 function updateField(sb, field, value) {
   const current = sb[field] ?? sb[toCamel(field)]
-  if (current === value) return
+  if (JSON.stringify(current) === JSON.stringify(value)) return
   sb[field] = value
   const camelField = toCamel(field)
   if (camelField !== field) sb[camelField] = value
-  storyboardAPI.update(sb.id, { [field]: value })
+  const payload = { [field]: value }
+  if (field === 'reference_images' && Array.isArray(value)) {
+    payload.reference_images = value
+  }
+  if (field === 'character_image_refs' && value && typeof value === 'object') {
+    payload.character_image_refs = value
+  }
+  storyboardAPI.update(sb.id, payload)
+}
+
+async function setDramaImageAspect(value) {
+  if (value === dramaImageAspect.value) return
+  imageAspectSaving.value = true
+  try {
+    await dramaAPI.update(dramaId, { image_aspect_ratio: value })
+    if (drama.value) {
+      drama.value.image_aspect_ratio = value
+      drama.value.imageAspectRatio = value
+    }
+    toast.success(`画面比例已设为 ${value}（图片与视频）`)
+  } catch (e) {
+    toast.error(e?.message || '保存比例失败')
+  } finally {
+    imageAspectSaving.value = false
+  }
+}
+
+function buildDefaultCharImagePrompt(c) {
+  return `${c.name}, ${c.appearance || c.description || '人物立绘'}, 高质量, 正面, 白色背景`
+}
+
+function getCharImagePrompt(c) {
+  return c.image_prompt || c.imagePrompt || buildDefaultCharImagePrompt(c)
+}
+
+async function onCharImagePromptBlur(c, event) {
+  const value = String(event.target.value || '').trim()
+  const current = String(c.image_prompt || c.imagePrompt || '').trim()
+  if (value === current) return
+  c.image_prompt = value
+  c.imagePrompt = value
+  try {
+    await characterAPI.update(c.id, { image_prompt: value })
+  } catch (e) {
+    toast.error(e?.message || '保存角色提示词失败')
+  }
+}
+
+function buildDefaultScenePrompt(s) {
+  return `${s.location}, ${s.time || ''}, 高质量场景, 电影感`.replace(/,\s*,/g, ',').replace(/,\s*$/, '')
+}
+
+function getSceneImagePrompt(s) {
+  const custom = String(s.prompt || '').trim()
+  return custom || buildDefaultScenePrompt(s)
+}
+
+async function onScenePromptBlur(s, event) {
+  const value = String(event.target.value || '').trim()
+  if (value === String(s.prompt || '').trim()) return
+  s.prompt = value
+  try {
+    await sceneAPI.update(s.id, { prompt: value })
+  } catch (e) {
+    toast.error(e?.message || '保存场景提示词失败')
+  }
+}
+
+function onVideoPromptBlur(sb, event) {
+  updateField(sb, 'video_prompt', event.target.value)
+}
+
+function onVideoDurationBlur(sb, event) {
+  const n = Number(event.target.value)
+  if (!Number.isFinite(n) || n <= 0) return
+  updateField(sb, 'duration', n)
 }
 
 function toCamel(field) {
@@ -2370,10 +3509,11 @@ function isStoryboardCharacterSelected(sb, charId) {
 
 function toggleStoryboardCharacter(sb, charId) {
   const currentIds = getStoryboardCharacterIds(sb)
-  const nextIds = currentIds.includes(charId)
-    ? currentIds.filter(id => id !== charId)
-    : [...currentIds, charId]
-  updateField(sb, 'character_ids', nextIds)
+  if (currentIds.includes(charId)) {
+    removeVideoRefCharacter(sb, charId)
+    return
+  }
+  updateField(sb, 'character_ids', [...currentIds, charId])
 }
 
 function getSceneName(sb) {
@@ -2399,10 +3539,10 @@ const scriptSteps = computed(() => {
   const hasSbs = sbs.value.length > 0
   return [
     { label: '原始内容', state: rawContent.value ? 'done' : 'active', spinning: false },
-    { label: 'AI 改写', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: rt.value === 'script_rewriter' },
-    { label: '提取', state: hasChars ? 'done' : (hasScript ? 'active' : ''), spinning: rt.value === 'extractor' },
-    { label: '音色', state: hasVoice ? 'done' : (hasChars ? 'active' : ''), spinning: rt.value === 'voice_assigner' },
-    { label: '分镜', state: hasSbs ? 'done' : (hasVoice ? 'active' : ''), spinning: rt.value === 'storyboard_breaker' },
+    { label: 'AI 改写', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'script_rewriter' },
+    { label: '提取', state: hasChars ? 'done' : (hasScript ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'extractor' },
+    { label: '音色', state: hasVoice ? 'done' : (hasChars ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'voice_assigner' },
+    { label: '分镜', state: hasSbs ? 'done' : (hasVoice ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'storyboard_breaker' },
   ]
 })
 
@@ -2418,7 +3558,15 @@ async function refresh() {
       try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
       try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
       sbs.value = await episodeAPI.storyboards(ep.id)
-      if (sbs.value.length && !selectedSb.value) selectedSb.value = sbs.value[0]
+      if (sbs.value.length) {
+        if (selectedSb.value?.id) {
+          selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
+        } else {
+          selectedSb.value = sbs.value[0]
+        }
+      } else {
+        selectedSb.value = null
+      }
 
       const epHasContent = !!(episode.value?.content)
       const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
@@ -2439,7 +3587,10 @@ async function refresh() {
 
 function saveRaw() { episodeAPI.update(epId.value, { content: localRaw.value }); episode.value.content = localRaw.value }
 function saveScr() { episodeAPI.update(epId.value, { script_content: localScript.value }); episode.value.script_content = localScript.value }
-function doRewrite() { saveRaw(); runAgent('script_rewriter', '请读取剧本并改写为格式化剧本，然后保存', dramaId, epId.value, refresh) }
+function doRewrite() {
+  saveRaw()
+  sendAssistant('请读取原始内容并改写为格式化剧本，然后保存', refresh)
+}
 function skipRewrite() {
   const raw = (localRaw.value || rawContent.value || '').trim()
   if (!raw) {
@@ -2451,27 +3602,30 @@ function skipRewrite() {
   toast.success('已跳过 AI 改写，当前将直接使用原始内容')
   scriptStep.value = 2
 }
-function doExtract() { saveScr(); runAgent('extractor', '请从剧本中提取所有角色和场景信息，提取时自动与项目已有数据进行去重合并', dramaId, epId.value, refresh) }
-function doVoice() { runAgent('voice_assigner', '请为所有角色分配合适的音色', dramaId, epId.value, refresh) }
+function doExtract() { saveScr(); sendAssistant('请从剧本中提取所有角色和场景信息，提取时自动与项目已有数据进行去重合并', refresh) }
+function doVoice() { sendAssistant('请为所有角色分配合适的音色', refresh) }
 async function batchGenSamples() {
   const pending = chars.value.filter(c => (c.voice_style || c.voiceStyle) && !(c.voice_sample_url || c.voiceSampleUrl))
   if (!pending.length) {
     toast.info(charsVoiced.value ? '所有角色的试听文件已生成' : '请先分配音色')
     return
   }
-  const results = await Promise.allSettled(pending.map(c => characterAPI.voiceSample(c.id, epId.value)))
-  const okCount = results.filter(r => r.status === 'fulfilled').length
-  const failCount = results.length - okCount
-  if (okCount) toast.success(`已生成 ${okCount} 份试听文件`)
-  if (failCount) toast.error(`${failCount} 份试听文件生成失败`)
-  await refresh()
+  const list = pending.map(c => `「${c.name}」(character_id=${c.id})`).join('、')
+  sendAssistant(`请为以下角色逐个生成音色试听，调用 generate_voice_sample：${list}`, refresh)
 }
 function doBreakdown() {
   const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
-  runAgent('storyboard_breaker', `请拆解分镜并生成视频提示词。视频模型：${label}，请根据该模型的特性和时长限制生成合适的视频提示词。`, dramaId, epId.value, refresh)
+  sendAssistant(
+    `请拆解分镜并生成 video_prompt。必须输出工业级 video_prompt（首行「图片1是…，图片2是…」自然语言引用，禁止 @图片 + 多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词），禁止简写为 0-3秒 时间轴。本集视频模型为 ${label}，单条 storyboard 最长 15 秒，duration 等于子块时长之和。`,
+    refresh,
+  )
 }
-async function genSample(id) { try { await characterAPI.voiceSample(id, epId.value); toast.success('试听已生成'); refresh() } catch (e) { toast.error(e.message) } }
+function genSample(id) {
+  const char = chars.value.find(c => c.id === id)
+  if (!char) return
+  sendAssistant(`请为角色「${char.name}」（character_id=${id}）生成音色试听，调用 generate_voice_sample`, refresh)
+}
 async function addShot() { await storyboardAPI.create({ episode_id: epId.value, storyboard_number: sbs.value.length + 1, title: `镜头${sbs.value.length + 1}`, duration: 10 }); refresh() }
 
 function sleep(ms) {
@@ -2488,70 +3642,351 @@ function watchAsyncResult(check, attempts = 24, delay = 2500) {
   })()
 }
 
-async function genCharImg(id) {
-  try {
-    if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
-    await characterAPI.generateImage(id, epId.value)
-    toast.success('角色图片生成中')
-    await refresh()
+function genCharImg(id) {
+  const char = chars.value.find(c => c.id === id)
+  if (!char) return
+  if (!isPendingCharImage(id)) pendingCharImageIds.value.push(id)
+  sendAssistant(`请为角色「${char.name}」（character_id=${id}）生成图片，直接调用 generate_character_image`, () => {
     watchAsyncResult(() => {
-      const char = chars.value.find(c => c.id === id)
-      const done = !!(char?.image_url || char?.imageUrl)
+      const target = chars.value.find(c => c.id === id)
+      const done = !!(target?.image_url || target?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       return done
-    })
+    }, 36)
+  })
+}
+
+async function generateCharOutfit(charId, asset, customPrompt) {
+  const char = chars.value.find(item => item.id === charId)
+  if (!char) return
+  if (!charHasImage(char)) {
+    toast.warning('请先生成或上传角色基准图')
+    return
+  }
+  if (!imageReferenceSupported.value) {
+    toast.error(imageReferenceSupportHint())
+    return
+  }
+  const outfitKey = charOutfitKey(charId, `asset_${asset.id}`)
+  if (!isPendingCharImage(charId)) pendingCharImageIds.value.push(charId)
+  if (!isPendingCharOutfit(charId, outfitKey)) pendingCharOutfitKeys.value.push(outfitKey)
+  try {
+    const payload = {
+      episode_id: epId.value,
+      costume_asset_id: asset.id,
+      label: asset.name,
+    }
+    if (customPrompt?.trim()) payload.prompt = customPrompt.trim()
+    const res = await characterAPI.generateOutfit(charId, payload)
+    toast.success(`「${asset.name}」换装生成中…`)
+    pollCharImageGeneration(res?.image_generation_id, charId, null, outfitKey)
   } catch (e) {
-    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-    toast.error(e.message)
+    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+    pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
+    toast.error(e?.message || '换装生成失败')
+  }
+}
+
+async function pollCharImageGeneration(generationId, charId, transformKey, outfitKey) {
+  if (!generationId) return
+  for (let i = 0; i < 120; i++) {
+    await sleep(3000)
+    try {
+      const res = await imageAPI.get(generationId)
+      await refresh()
+      if (res?.status === 'completed') {
+        pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+        if (transformKey) {
+          pendingCharTransformKeys.value = pendingCharTransformKeys.value.filter(item => item !== transformKey)
+        }
+        if (outfitKey) {
+          pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
+        }
+        toast.success(outfitKey ? '换装图已添加' : transformKey ? '角色变体图已添加' : '角色图已更新')
+        return
+      }
+      if (res?.status === 'failed') {
+        pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+        if (transformKey) {
+          pendingCharTransformKeys.value = pendingCharTransformKeys.value.filter(item => item !== transformKey)
+        }
+        if (outfitKey) {
+          pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
+        }
+        toast.error(res?.error_msg || res?.errorMsg || '图片生成失败')
+        return
+      }
+    } catch {}
+  }
+  pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+  if (transformKey) {
+    pendingCharTransformKeys.value = pendingCharTransformKeys.value.filter(item => item !== transformKey)
+  }
+  if (outfitKey) {
+    pendingCharOutfitKeys.value = pendingCharOutfitKeys.value.filter(item => item !== outfitKey)
+  }
+  toast.warning('图片生成超时，请稍后刷新查看')
+}
+
+async function transformCharImg(charId, transformType, label, source = 'primary') {
+  const char = chars.value.find(c => c.id === charId)
+  if (!char) return
+  if (charTransformDisabled(char, source)) {
+    toast.warning(source === 'primary' ? '请先生成或上传角色原图' : '请先生成该套换装图')
+    return
+  }
+  if (!imageReferenceSupported.value) {
+    toast.error(imageReferenceSupportHint())
+    return
+  }
+  const key = charTransformKey(charId, transformType, source)
+  if (!isPendingCharImage(charId)) pendingCharImageIds.value.push(charId)
+  if (!isPendingCharTransform(charId, transformType, source)) pendingCharTransformKeys.value.push(key)
+  try {
+    const res = await characterAPI.transformImage(charId, epId.value, transformType, source === 'primary' ? undefined : source)
+    toast.success(`${label} 转换中…`)
+    pollCharImageGeneration(res?.image_generation_id, charId, key)
+  } catch (e) {
+    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== charId)
+    pendingCharTransformKeys.value = pendingCharTransformKeys.value.filter(item => item !== key)
+    toast.error(e?.message || '转换失败')
   }
 }
 function batchCharImages() {
   const ids = visualChars.value.filter(c => !(c.image_url || c.imageUrl)).map(c => c.id)
   if (!ids.length) { toast.info('所有角色图片已生成'); return }
   pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
-  characterAPI.batchImages(ids, epId.value).then(async () => {
-    toast.success('角色图片批量生成中')
-    await refresh()
+  sendAssistant('请为所有尚未生成图片的角色批量生成图片，调用 batch_generate_character_images', () => {
     watchAsyncResult(() => ids.every(id => {
       const char = chars.value.find(c => c.id === id)
       const done = !!(char?.image_url || char?.imageUrl)
       if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
       return done
     }), 36)
-  }).catch(e => {
-    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !ids.includes(item))
-    toast.error(e.message)
   })
 }
-async function genSceneImg(id) {
-  try {
-    if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
-    await sceneAPI.generateImage(id, epId.value)
-    toast.success('场景图片生成中')
-    await refresh()
+function genSceneImg(id) {
+  const scene = scenes.value.find(s => s.id === id)
+  if (!scene) return
+  if (!isPendingSceneImage(id)) pendingSceneImageIds.value.push(id)
+  sendAssistant(`请为场景「${scene.location}」（scene_id=${id}）生成图片，直接调用 generate_scene_image`, () => {
     watchAsyncResult(() => {
-      const scene = scenes.value.find(s => s.id === id)
-      const done = !!(scene?.image_url || scene?.imageUrl)
+      const target = scenes.value.find(s => s.id === id)
+      const done = !!(target?.image_url || target?.imageUrl)
       if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
       return done
-    })
-  } catch (e) {
-    pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-    toast.error(e.message)
+    }, 36)
+  })
+}
+
+function isPendingSceneAngle(sceneId, angleId) {
+  return pendingSceneAngleKeys.value.includes(sceneAngleKey(sceneId, angleId))
+}
+
+function isPendingSceneAllAngles(sceneId) {
+  return SCENE_ANGLE_PRESETS.some(preset => isPendingSceneAngle(sceneId, preset.id))
+}
+
+function sceneAngleDisabled(scene) {
+  if (!imageReferenceSupported.value) return true
+  if (!(scene?.image_url || scene?.imageUrl)) return true
+  return isPendingSceneImage(scene.id)
+}
+
+function getSceneImagesForStoryboard(sb) {
+  const sceneId = sb?.scene_id || sb?.sceneId
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (!scene) return []
+  return listSceneImagesForStoryboard(scene, sb, getBlockingImage)
+}
+
+function onStoryboardSceneImageClick(sb, img) {
+  if (!img?.url) return
+  if (img.readonly || img.angle_id === 'blocking' || String(img.angle_id).startsWith('blocking:')) {
+    openImageViewer('/' + normalizeMediaPath(img.url), `${img.label || '站位图'}`)
+    return
   }
+  setStoryboardSceneAngle(sb, img.angle_id)
+}
+
+function isStoryboardSceneAngleSelected(sb, angleId) {
+  const current = sb?.scene_angle_id || sb?.sceneAngleId || 'hero'
+  return current === angleId
+}
+
+function setStoryboardSceneAngle(sb, angleId) {
+  const img = getSceneImagesForStoryboard(sb).find(item => item.angle_id === angleId)
+  if (!img?.url) {
+    toast.warning(`请先生成「${sceneAngleLabel(angleId)}」场景图`)
+    return
+  }
+  sb.scene_angle_id = angleId
+  sb.sceneAngleId = angleId
+  storyboardAPI.update(sb.id, { scene_angle_id: angleId })
+}
+
+function onStoryboardSceneChange(sb, sceneId) {
+  updateField(sb, 'scene_id', sceneId)
+  const nextAngle = 'hero'
+  sb.scene_angle_id = sceneId ? nextAngle : null
+  sb.sceneAngleId = sceneId ? nextAngle : null
+  storyboardAPI.update(sb.id, { scene_id: sceneId, scene_angle_id: sceneId ? nextAngle : null })
+}
+
+async function genSceneAngle(sceneId, angleId, label, prompt) {
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (!scene) return
+  if (sceneAngleDisabled(scene)) {
+    if (!imageReferenceSupported.value) toast.error(imageReferenceSupportHint())
+    else toast.warning('请先生成场景主视角图')
+    return
+  }
+  const key = sceneAngleKey(sceneId, angleId)
+  if (!isPendingSceneAngle(sceneId, angleId)) pendingSceneAngleKeys.value.push(key)
+  try {
+    const payload = {
+      episode_id: epId.value,
+      angle_id: angleId,
+    }
+    if (prompt?.trim()) payload.prompt = prompt.trim()
+    const res = await sceneAPI.generateAngle(sceneId, payload)
+    toast.success(`「${label}」场景图生成中…`)
+    pollSceneAngleGeneration(res?.image_generation_id, sceneId, key)
+  } catch (e) {
+    pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== key)
+    toast.error(e?.message || '场景多角度生成失败')
+  }
+}
+
+async function genSceneAllAngles(sceneId) {
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (!scene) return
+  if (sceneAngleDisabled(scene)) {
+    if (!imageReferenceSupported.value) toast.error(imageReferenceSupportHint())
+    else toast.warning('请先生成场景主视角图')
+    return
+  }
+  if (isPendingSceneAllAngles(sceneId)) return
+  try {
+    const res = await sceneAPI.generateAllAngles(sceneId, {
+      episode_id: epId.value,
+      skip_existing: true,
+    })
+    const items = res?.items || []
+    if (!items.length) {
+      toast.info(res?.message || '全部角度已存在，无需重复生成')
+      return
+    }
+    for (const item of items) {
+      const key = sceneAngleKey(sceneId, item.angle_id)
+      if (!isPendingSceneAngle(sceneId, item.angle_id)) pendingSceneAngleKeys.value.push(key)
+      pollSceneAngleGeneration(item.image_generation_id, sceneId, key)
+    }
+    const failed = res?.failed || []
+    if (failed.length) {
+      toast.warning(`已提交 ${items.length} 张，${failed.length} 张失败（已退积分）`)
+    } else {
+      toast.success(`开始生成 ${items.length} 张场景角度图…`)
+    }
+  } catch (e) {
+    toast.error(e?.message || '场景全部角度生成失败')
+  }
+}
+
+async function genSceneAngleSheet(sceneId, prompt) {
+  const scene = scenes.value.find(item => item.id === sceneId)
+  if (!scene) return
+  if (sceneAngleDisabled(scene)) {
+    if (!imageReferenceSupported.value) toast.error(imageReferenceSupportHint())
+    else toast.warning('请先生成场景主视角图')
+    return
+  }
+  const key = sceneAngleKey(sceneId, SCENE_ANGLE_SHEET_ID)
+  if (!isPendingSceneAngle(sceneId, SCENE_ANGLE_SHEET_ID)) pendingSceneAngleKeys.value.push(key)
+  try {
+    const payload = { episode_id: epId.value }
+    if (prompt?.trim()) payload.prompt = prompt.trim()
+    const res = await sceneAPI.generateAngleSheet(sceneId, payload)
+    toast.success(`${SCENE_ANGLE_SHEET_LABEL}生成中…`)
+    pollSceneAngleGeneration(res?.image_generation_id, sceneId, key)
+  } catch (e) {
+    pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== key)
+    toast.error(e?.message || '场景多视角拼板生成失败')
+  }
+}
+
+function openSceneAngleRegen(scene, img) {
+  if (!scene || !img?.angle_id || img.angle_id === 'hero') return
+  const key = sceneAngleKey(scene.id, img.angle_id)
+  const isSheet = img.angle_id === SCENE_ANGLE_SHEET_ID
+  const defaultPrompt = isSheet
+    ? buildSceneAngleSheetPrompt(scene)
+    : buildSceneAnglePrompt(scene, img.angle_id)
+  sceneAngleRegen.value = {
+    open: true,
+    sceneId: scene.id,
+    sceneLocation: scene.location,
+    angleId: img.angle_id,
+    angleLabel: img.label || sceneAngleLabel(img.angle_id),
+    imageUrl: img.url || '',
+    prompt: sceneAnglePromptDrafts.value[key] || defaultPrompt,
+    defaultPrompt,
+    previewTitle: `${scene.location} · ${img.label || sceneAngleLabel(img.angle_id)}`,
+    isSheet,
+  }
+}
+
+function closeSceneAngleRegen() {
+  sceneAngleRegen.value.open = false
+}
+
+async function confirmSceneAngleRegen(prompt) {
+  const { sceneId, angleId, angleLabel, isSheet } = sceneAngleRegen.value
+  if (!sceneId || !angleId) return
+  const key = sceneAngleKey(sceneId, angleId)
+  sceneAnglePromptDrafts.value[key] = prompt
+  sceneAngleRegen.value.open = false
+  if (isSheet) await genSceneAngleSheet(sceneId, prompt)
+  else await genSceneAngle(sceneId, angleId, angleLabel, prompt)
+}
+
+async function pollSceneAngleGeneration(generationId, sceneId, pendingKey) {
+  if (!generationId) {
+    pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+    return
+  }
+  for (let i = 0; i < 120; i++) {
+    await sleep(3000)
+    try {
+      const res = await imageAPI.get(generationId)
+      await refresh()
+      if (res?.status === 'completed') {
+        pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+        toast.success('场景多角度图已更新')
+        return
+      }
+      if (res?.status === 'failed') {
+        pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+        toast.error(res?.error_msg || res?.errorMsg || '场景多角度生成失败')
+        return
+      }
+    } catch {}
+  }
+  pendingSceneAngleKeys.value = pendingSceneAngleKeys.value.filter(item => item !== pendingKey)
+  toast.warning('场景多角度生成超时，请稍后刷新查看')
 }
 function batchSceneImages() {
   const ids = scenes.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
   if (!ids.length) { toast.info('所有场景图片已生成'); return }
   pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
-  ids.forEach(id => { sceneAPI.generateImage(id, epId.value).then(() => refresh()).catch(e => toast.error(e.message)) })
-  toast.success('场景图片批量生成中')
-  watchAsyncResult(() => ids.every(id => {
-    const scene = scenes.value.find(s => s.id === id)
-    const done = !!(scene?.image_url || scene?.imageUrl)
-    if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-    return done
-  }), 36)
+  sendAssistant('请为所有尚未生成图片的场景批量生成图片，调用 batch_generate_scene_images', () => {
+    watchAsyncResult(() => ids.every(id => {
+      const scene = scenes.value.find(s => s.id === id)
+      const done = !!(scene?.image_url || scene?.imageUrl)
+      if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
+      return done
+    }), 36)
+  })
 }
 
 const IGNORE_TTS_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$/i
@@ -2586,25 +4021,16 @@ function getDialogueSpeaker(sb) {
   if (!speaker) return '旁白'
   return speaker
 }
-async function genShotTTS(sb) {
-  try {
-    await storyboardAPI.generateTTS(sb.id)
-    toast.success(`镜头 #${sb.storyboard_number || sb.storyboardNumber || sb.id} 配音已生成`)
-    await refresh()
-  } catch (e) { toast.error(e.message) }
+function genShotTTS(sb) {
+  sendAssistant(`请为镜头 #${shotIndex(sb)}（storyboard_id=${sb.id}）生成配音，调用 generate_shot_tts`, refresh)
 }
-async function batchShotTTS() {
+function batchShotTTS() {
   const pending = sbs.value.filter(sb => hasDialogue(sb) && !hasTTS(sb))
   if (!pending.length) {
     toast.info(ttsEligibleCount.value ? '所有镜头配音已生成' : '当前没有可生成的对白或旁白')
     return
   }
-  const results = await Promise.allSettled(pending.map(sb => storyboardAPI.generateTTS(sb.id)))
-  const okCount = results.filter(r => r.status === 'fulfilled').length
-  const failCount = results.length - okCount
-  if (okCount) toast.success(`已生成 ${okCount} 条镜头配音`)
-  if (failCount) toast.error(`${failCount} 条镜头配音生成失败`)
-  await refresh()
+  sendAssistant('请为所有有对白但尚未生成配音的镜头批量生成 TTS，调用 batch_generate_shot_tts', refresh)
 }
 
 function getFirstFrame(s) { return s?.first_frame_image || s?.firstFrameImage || null }
@@ -2616,6 +4042,46 @@ function hasImg(s) { return !!getStoryboardCover(s) }
 function hasVid(s) { return !!getVideoUrl(s) }
 function hasComposed(s) { return !!getComposedVideoUrl(s) }
 
+function getCharacterImages(char) {
+  return listCharacterImages(char)
+}
+
+function getCharacterOutfits(char) {
+  return listCharacterOutfits(char)
+}
+
+function getCharacterImagesById(charId) {
+  const char = chars.value.find(item => item.id === charId)
+  return char ? getCharacterImages(char) : []
+}
+
+function getCharacterName(charId) {
+  return chars.value.find(item => item.id === charId)?.name || `角色#${charId}`
+}
+
+function getStoryboardCharacterImageRefs(sb) {
+  return parseStoryboardCharacterImageRefs(sb)
+}
+
+function isStoryboardCharacterImageSelected(sb, charId, url) {
+  const refs = getStoryboardCharacterImageRefs(sb)
+  const char = chars.value.find(item => item.id === charId)
+  const normalized = normalizeMediaPath(url)
+  const selected = refs[charId]
+  if (selected) return normalizeMediaPath(selected) === normalized
+  return normalizeMediaPath(resolveCharacterImageUrl(char, {})) === normalized
+}
+
+function setStoryboardCharacterImage(sb, charId, url) {
+  const refs = { ...getStoryboardCharacterImageRefs(sb) }
+  const char = chars.value.find(item => item.id === charId)
+  const normalized = normalizeMediaPath(url)
+  const primary = normalizeMediaPath(resolveCharacterImageUrl(char, {}))
+  if (primary === normalized) delete refs[charId]
+  else refs[charId] = normalized
+  updateField(sb, 'character_image_refs', refs)
+}
+
 function getShotReferenceImages(sb) {
   const refs = []
   const pushRef = (value) => {
@@ -2625,9 +4091,10 @@ function getShotReferenceImages(sb) {
   const sceneId = sb?.scene_id || sb?.sceneId
   const scene = scenes.value.find(item => item.id === sceneId)
   pushRef(scene?.image_url || scene?.imageUrl)
+  const characterImageRefs = getStoryboardCharacterImageRefs(sb)
   for (const charId of getStoryboardCharacterIds(sb)) {
     const char = chars.value.find(item => item.id === charId)
-    pushRef(char?.image_url || char?.imageUrl)
+    pushRef(char ? resolveCharacterImageUrl(char, characterImageRefs) : null)
   }
   for (const ref of getRefs(sb)) {
     pushRef(ref)
@@ -2669,47 +4136,170 @@ function buildShotImagePrompt(sb, frameType) {
   ].filter(Boolean).join('；')
 }
 
-async function genShotFrame(sb, frameType) {
-  const prompt = buildShotImagePrompt(sb, frameType)
-  const referenceImages = getShotReferenceImages(sb)
+function genShotFrame(sb, frameType) {
   const key = framePendingKey(sb.id, frameType)
-  try {
-    if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
-    const body = {
-      storyboard_id: sb.id,
-      drama_id: dramaId,
-      prompt,
-      frame_type: frameType,
-      reference_images: referenceImages.length ? referenceImages : undefined,
-    }
-    await imageAPI.generate(body)
-    toast.success(frameType === 'first_frame' ? '首帧生成中' : '尾帧生成中')
-    await refresh()
+  const label = frameType === 'first_frame' ? '首帧' : '尾帧'
+  if (!pendingShotFrameKeys.value.includes(key)) pendingShotFrameKeys.value.push(key)
+  sendAssistant(`请为镜头 #${shotIndex(sb)}（storyboard_id=${sb.id}）生成${label}，调用 generate_shot_frame，frame_type=${frameType}`, () => {
     watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === sb.id)
       const done = frameType === 'first_frame' ? !!getFirstFrame(target) : !!getLastFrame(target)
       if (done) pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
       return done
-    })
+    }, 36)
+  })
+}
+
+function getRefs(sb) {
+  const raw = sb.reference_images || sb.referenceImages
+  if (!raw) return []
+  try { return JSON.parse(raw) } catch { return [] }
+}
+
+function normalizeMediaPath(raw) {
+  return String(raw || '').replace(/^\/+/, '')
+}
+
+function videoRefHelpers() {
+  return {
+    getRefs,
+    getFirstFrame,
+    getLastFrame,
+    getBlockingImage,
+    getStoryboardCharacterIds,
+    getCharacterImageRefs: getStoryboardCharacterImageRefs,
+    resolveSceneImage: (scene, sb) => resolveSceneImageForStoryboard(scene, sb),
+    getTTSUrl,
+    frameMode: frameMode.value,
+  }
+}
+
+function collectVideoReferences(sb) {
+  const prompt = sb.video_prompt || sb.videoPrompt || ''
+  return buildPromptOrderedDisplayItems(sb, prompt, chars.value, scenes.value, videoRefHelpers())
+}
+
+function collectVideoReferencesExceptBlocking(sb) {
+  return collectVideoReferences(sb).filter(ref => ref.source !== 'blocking')
+}
+
+function getBlockingColorLegend(sb) {
+  if (!sb) return []
+  return buildBlockingColorLegend(getBlockingLayout(sb), getCharacterName)
+}
+
+function getBlockingVideoPromptSnippet(sb) {
+  if (!sb) return ''
+  return buildBlockingVideoPromptSnippet(
+    getBlockingLayout(sb),
+    getCharacterName,
+    getBlockingVideoImageIndex(sb),
+  )
+}
+
+async function copyBlockingVideoSnippet(sb) {
+  const text = getBlockingVideoPromptSnippet(sb)
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    toast.success('已复制站位说明，可粘贴到 video_prompt 首行')
+  } catch {
+    toast.error('复制失败')
+  }
+}
+
+function getBlockingVideoImageIndex(sb) {
+  return getBlockingImageIndexFromPromptItems(collectVideoReferences(sb))
+}
+
+function buildVideoContentRefs(sb) {
+  const prompt = sb.video_prompt || sb.videoPrompt || ''
+  return buildOrderedVideoContentRefs(sb, prompt, chars.value, scenes.value, videoRefHelpers())
+}
+
+function removeVideoRefCharacter(sb, charId) {
+  const nextIds = getStoryboardCharacterIds(sb).filter(id => id !== charId)
+  const refs = { ...getStoryboardCharacterImageRefs(sb) }
+  delete refs[charId]
+  sb.character_ids = nextIds
+  sb.characterIds = nextIds
+  sb.character_image_refs = refs
+  sb.characterImageRefs = refs
+  storyboardAPI.update(sb.id, { character_ids: nextIds, character_image_refs: refs })
+}
+
+function removeVideoRefScene(sb) {
+  updateField(sb, 'scene_id', null)
+}
+
+function removeExtraReference(sb, url) {
+  const normalized = normalizeMediaPath(url)
+  const next = getRefs(sb).filter(item => normalizeMediaPath(item) !== normalized)
+  updateField(sb, 'reference_images', next)
+}
+
+async function clearVideoFrame(sb, frameType) {
+  const field = frameType === 'first_frame' ? 'first_frame_image' : 'last_frame_image'
+  const camel = toCamel(field)
+  sb[field] = null
+  sb[camel] = null
+  try {
+    await storyboardAPI.update(sb.id, { [field]: null })
+    toast.success(frameType === 'first_frame' ? '已删除首帧' : '已删除尾帧')
   } catch (e) {
-    pendingShotFrameKeys.value = pendingShotFrameKeys.value.filter(item => item !== key)
-    toast.error(e.message)
+    toast.error(e?.message || '删除失败')
+  }
+}
+
+async function uploadVideoReference(sb, event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  try {
+    const res = await uploadAPI.image(file)
+    const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
+    if (!path) throw new Error('上传失败')
+    const next = [...getRefs(sb), path]
+    updateField(sb, 'reference_images', next)
+    toast.success('参考图已添加')
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    if (event?.target) event.target.value = ''
   }
 }
 
 async function genVid(sb) {
+  const prompt = (sb.video_prompt || sb.videoPrompt || '').trim()
+  if (!prompt) {
+    toast.warning('请先填写视频提示词')
+    return
+  }
+  const refIssues = validatePromptImageRefs(prompt, sb, chars.value, scenes.value, videoRefHelpers())
+  if (refIssues.length) {
+    toast.error(formatPromptImageRefIssues(refIssues))
+    return
+  }
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
-    prompt: sb.video_prompt || sb.videoPrompt || '',
-    duration: Number(sb.duration || 5),
+    prompt,
+    duration: Number(sb.duration || 10),
+    aspect_ratio: dramaImageAspect.value,
   }
+  const contentRefs = buildVideoContentRefs(sb)
+  if (contentRefs.length) params.content_refs = contentRefs
+
   const first = getFirstFrame(sb)
   const last = getLastFrame(sb)
   const refs = getRefs(sb)
-  if (first && last) { Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last }) }
-  else if (refs.length) { Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) }) }
-  else if (first) { Object.assign(params, { reference_mode: 'single', image_url: first }) }
+  if (first && last) {
+    Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
+  } else if (refs.length || first) {
+    Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) })
+  } else if (first) {
+    Object.assign(params, { reference_mode: 'single', image_url: first })
+  }
+
   try {
     delete failedVideoMessages.value[sb.id]
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
@@ -2722,11 +4312,12 @@ async function genVid(sb) {
     toast.error(e.message)
   }
 }
+
 async function pollVideoGeneration(generationId, storyboardId) {
   if (!generationId) {
     watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === storyboardId)
-      const done = !!(target?.video_url || target?.videoUrl)
+      const done = !!hasVid(target)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
       return done
     }, 60, 4000)
@@ -2755,60 +4346,47 @@ async function pollVideoGeneration(generationId, storyboardId) {
     } catch {}
   }
   pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
-  failedVideoMessages.value = {
-    ...failedVideoMessages.value,
-    [storyboardId]: '视频生成超时',
-  }
-  toast.error('视频生成超时')
+  toast.warning('视频生成超时，请稍后刷新查看')
 }
-async function doCompose(sb) {
-  try {
-    delete failedComposeMessages.value[sb.id]
-    if (!isPendingCompose(sb.id)) pendingComposeIds.value.push(sb.id)
-    await composeAPI.shot(sb.id)
-    toast.success('合成完成')
+function doCompose(sb) {
+  delete failedComposeMessages.value[sb.id]
+  if (!isPendingCompose(sb.id)) pendingComposeIds.value.push(sb.id)
+  sendAssistant(`请合成镜头 #${shotIndex(sb)}（storyboard_id=${sb.id}），调用 compose_shot`, () => {
     pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
-    refresh()
-  } catch (e) {
-    pendingComposeIds.value = pendingComposeIds.value.filter(item => item !== sb.id)
-    failedComposeMessages.value = {
-      ...failedComposeMessages.value,
-      [sb.id]: e.message,
-    }
-    toast.error(e.message)
-  }
+  })
 }
 function batchVideos() {
   const pendingIds = sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-  pendingIds.forEach(id => {
-    const sb = sbs.value.find(item => item.id === id)
-    if (sb) genVid(sb)
-  })
-  if (pendingIds.length) {
-    pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
+  if (!pendingIds.length) {
+    toast.info('所有镜头视频已生成')
+    return
+  }
+  pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
+  sendAssistant('请为所有尚无视频的镜头批量生成视频，调用 batch_generate_shot_videos', () => {
     watchAsyncResult(() => pendingIds.every(id => {
       const target = sbs.value.find(s => s.id === id)
-      const done = !!(target?.video_url || target?.videoUrl)
+      const done = !!hasVid(target)
       if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
       return done
     }), 80, 4000)
-  }
+  })
 }
-async function batchCompose() {
-  await composeAPI.all(epId.value)
-  pendingComposeIds.value = [...new Set(sbs.value.filter(sb => !!sb.video_url || !!sb.videoUrl).map(sb => sb.id))]
-  toast.success('批量合成已开始')
-  pollComposeStatus()
+function batchCompose() {
+  sendAssistant('请合成当前集所有已有视频的镜头，调用 compose_all_shots', () => {
+    pendingComposeIds.value = [...new Set(sbs.value.filter(sb => hasVid(sb)).map(sb => sb.id))]
+    pollComposeStatus()
+  })
 }
-async function doMerge() {
-  await mergeAPI.merge(epId.value); toast.success('拼接中...')
-  const poll = setInterval(async () => {
-    try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
-    if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {
-      clearInterval(poll)
-      mergeData.value.status === 'completed' ? toast.success('拼接完成') : toast.error('拼接失败')
-    }
-  }, 3000)
+function doMerge() {
+  sendAssistant('请拼接本集所有已合成镜头为成片，调用 merge_episode', () => {
+    const poll = setInterval(async () => {
+      try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
+      if (mergeData.value?.status === 'completed' || mergeData.value?.status === 'failed') {
+        clearInterval(poll)
+        mergeData.value.status === 'completed' ? toast.success('拼接完成') : toast.error('拼接失败')
+      }
+    }, 3000)
+  })
 }
 
 async function pollComposeStatus() {
@@ -2838,12 +4416,6 @@ async function pollComposeStatus() {
     } catch {}
   }
 }
-function getRefs(sb) {
-  const raw = sb.reference_images || sb.referenceImages
-  if (!raw) return []
-  try { return JSON.parse(raw) } catch { return [] }
-}
-
 async function loadConfigs() {
   try {
     const [imgCfgs, vidCfgs, audCfgs] = await Promise.all([
@@ -3031,8 +4603,54 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .studio-topbar-side {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
+}
+
+.studio-aspect-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(18, 25, 42, 0.04);
+  border: 1px solid rgba(18, 25, 42, 0.08);
+}
+
+.studio-aspect-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.studio-aspect-options {
+  display: flex;
+  gap: 4px;
+}
+
+.studio-aspect-btn {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.studio-aspect-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.studio-aspect-size {
+  font-size: 10px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .studio-actions {
@@ -3048,10 +4666,13 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 
 .studio-body {
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-columns: 244px minmax(0, 1fr) minmax(0, 320px);
   gap: 10px;
   min-height: 0;
   flex: 1;
+}
+.studio-body.assistant-collapsed {
+  grid-template-columns: 244px minmax(0, 1fr);
 }
 
 /* ===== Sidebar ===== */
@@ -3656,9 +5277,232 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 .asset-body { padding: 8px 10px; }
 .asset-name { font-size: 13px; font-weight: 600; }
 .asset-meta { font-size: 11px; }
+.asset-prompt-field { display: block; margin-top: 8px; }
+.asset-prompt-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.asset-image-prompt {
+  font-size: 11px;
+  line-height: 1.45;
+  min-height: 56px;
+  resize: vertical;
+}
 .asset-foot { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--border); }
+.asset-foot-col { flex-direction: column; align-items: stretch; gap: 6px; }
+.asset-foot-row { display: flex; align-items: center; gap: 4px; width: 100%; }
+.char-transform-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.char-transform-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.char-transform-size-hint { font-size: 9px; flex-shrink: 0; }
+.char-transform-note { font-size: 10px; line-height: 1.4; }
+.char-transform-btns { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+.char-transform-btn { font-size: 10px; padding: 2px 8px; }
+.char-image-variants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.char-image-variant { display: flex; flex-direction: column; gap: 2px; width: 56px; }
+.char-image-variant-thumb {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.char-image-variant-thumb img { width: 56px; height: 56px; object-fit: cover; display: block; }
+.char-image-variant-label { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.char-outfit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.char-outfit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+.char-outfit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.char-outfit-thumb {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+}
+.char-outfit-thumb img { width: 48px; height: 48px; object-fit: cover; display: block; }
+.char-outfit-name { font-size: 11px; font-weight: 600; }
+.char-outfit-transform { margin-top: 0; padding-top: 0; border-top: none; }
+
+.blocking-empty { font-size: 12px; padding: 8px 0; }
+.blocking-layout-grid { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.blocking-layout-row {
+  display: grid;
+  grid-template-columns: 88px 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.blocking-char-name { font-size: 12px; font-weight: 600; }
+.blocking-select { font-size: 12px; padding: 6px 8px; min-height: 32px; }
+.blocking-preview-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+.blocking-preview {
+  width: 160px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-2);
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.blocking-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.blocking-preview-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 8px;
+  text-align: center;
+}
+.blocking-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.blocking-hint { font-size: 11px; line-height: 1.4; max-width: 280px; }
+
+.scene-angle-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.scene-angle-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 72px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  cursor: pointer;
+}
+.scene-angle-option.active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(76, 125, 255, 0.25); }
+.scene-angle-option.scene-angle-blocking { border-style: dashed; }
+.scene-angle-option.missing { opacity: 0.55; }
+.scene-angle-option img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; }
+.scene-angle-empty { font-size: 10px; color: var(--text-dim); min-height: 40px; display: flex; align-items: center; justify-content: center; text-align: center; }
+.scene-angle-label { font-size: 10px; font-weight: 600; text-align: center; }
+.scene-angle-preview-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.scene-angle-preview-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 64px;
+}
+.scene-angle-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.scene-angle-preview img { width: 64px; height: 36px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+.scene-angle-preview span { font-size: 10px; color: var(--text-dim); text-align: center; }
+.scene-angle-regen-btn {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.video-char-image-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px;
+  border-top: 1px dashed var(--border);
+}
+.video-char-image-hint { font-size: 10px; }
+.video-char-image-row { display: flex; flex-direction: column; gap: 6px; }
+.video-char-image-name { font-size: 11px; font-weight: 600; }
+.video-char-image-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.video-char-image-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 56px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.video-char-image-option.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.video-char-image-option img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
+.video-char-image-option span { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.tag-warn { color: #b45309; border-color: rgba(180, 83, 9, 0.35); background: rgba(251, 191, 36, 0.08); }
 
 /* Frame grid */
+.shots-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 12px;
+  align-items: start;
+}
+.shot-blocking-side {
+  padding: 14px;
+  position: sticky;
+  top: 12px;
+}
+.shot-blocking-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 180px;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.shot-blocking-placeholder-title {
+  font-size: 13px;
+  font-weight: 700;
+}
 .frame-grid { display: flex; flex-direction: column; gap: 8px; }
 .frame-row {
   display: flex; align-items: center; gap: 14px;
@@ -3691,7 +5535,8 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.frame-meta { display: flex; align-items: center; gap: 6px; }
+.frame-thumb.blocking-thumb { border-color: rgba(76, 125, 255, 0.18); }
+.frame-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .frame-thumbs { display: flex; gap: 8px; flex-shrink: 0; }
 .frame-thumb-wrap { display: flex; flex-direction: column; gap: 3px; align-items: center; }
 .frame-thumb-label { font-size: 10px; font-weight: 600; color: var(--text-3); }
@@ -3720,6 +5565,7 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 
 /* Prod grid */
 .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.prod-grid-wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .prod-card {
   display: flex; flex-direction: column; overflow: hidden;
   transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
@@ -3748,6 +5594,268 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   font-size: 11px;
   line-height: 1.45;
   color: var(--error);
+}
+.prod-prompt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.prod-prompt-field,
+.prod-duration-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prod-prompt-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.prod-video-prompt {
+  font-size: 11px;
+  line-height: 1.45;
+  min-height: 72px;
+  resize: vertical;
+}
+.prod-duration-field .input {
+  width: 88px;
+}
+.video-bind-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.video-bind-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.video-bind-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.video-scene-select {
+  width: 100%;
+  font-size: 12px;
+}
+.video-blocking-panel {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px dashed rgba(27, 41, 64, 0.1);
+}
+.video-blocking-hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
+.video-blocking-slot-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.video-blocking-slot {
+  width: 132px;
+  aspect-ratio: 16 / 9;
+  flex-shrink: 0;
+  padding: 0;
+  border: 1px dashed rgba(76, 125, 255, 0.35);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-2);
+  cursor: pointer;
+}
+.video-blocking-slot.empty {
+  cursor: default;
+}
+.video-blocking-slot.pending {
+  border-style: solid;
+  border-color: rgba(76, 125, 255, 0.25);
+}
+.video-blocking-slot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.video-blocking-slot-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-dim);
+  padding: 6px;
+  text-align: center;
+}
+.video-blocking-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.video-blocking-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.video-blocking-legend {
+  margin: 0;
+  padding-left: 14px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.video-blocking-legend-empty {
+  margin: 0;
+  font-size: 11px;
+}
+.video-blocking-snippet {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+}
+.video-blocking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.video-blocking-warn {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--warning);
+}
+.video-ref-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(27, 41, 64, 0.12);
+}
+.video-ref-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.video-ref-hint {
+  font-weight: 400;
+  color: var(--text-3);
+  margin-left: 4px;
+}
+.video-ref-upload {
+  position: relative;
+  cursor: pointer;
+}
+.video-ref-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
+}
+.video-ref-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid rgba(27, 41, 64, 0.1);
+  background: rgba(255, 255, 255, 0.55);
+}
+.video-ref-card.missing {
+  border-style: dashed;
+}
+.video-ref-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  padding: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-2);
+  cursor: pointer;
+}
+.video-ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.video-ref-thumb-empty,
+.video-ref-audio {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: var(--bg-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-3);
+  overflow: hidden;
+}
+.video-ref-audio audio {
+  width: calc(100% - 8px);
+}
+.video-ref-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(76, 125, 255, 0.12);
+  color: var(--accent-dark);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+.video-ref-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.video-ref-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: 1.3;
+}
+.video-ref-tag {
+  font-size: 10px;
+  color: var(--text-3);
+}
+.video-ref-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.video-ref-action {
+  border: 0;
+  background: rgba(27, 41, 64, 0.06);
+  color: var(--text-2);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.video-ref-action.danger {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.08);
+}
+.video-ref-empty-hint {
+  font-size: 11px;
+  line-height: 1.5;
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }
@@ -4155,6 +6263,11 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
     grid-template-columns: 1fr;
   }
 
+  .assistant-panel {
+    max-height: 420px;
+    order: 3;
+  }
+
   .studio-topbar {
     flex-direction: column;
     align-items: stretch;
@@ -4272,6 +6385,14 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   .frame-row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .shots-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .shot-blocking-side {
+    position: static;
   }
 
   .detail-hero {

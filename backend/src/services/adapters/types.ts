@@ -73,6 +73,8 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  models?: string[]
+  settings?: Record<string, unknown>
 }
 
 export interface ImageGenerationRecord {
@@ -94,6 +96,7 @@ export interface VideoGenerationRecord {
   firstFrameUrl?: string | null
   lastFrameUrl?: string | null
   referenceImageUrls?: string | null
+  referencePayload?: string | null
   duration?: number | null
   aspectRatio?: string | null
   // ... 其他字段

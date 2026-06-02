@@ -10,7 +10,7 @@ export function useAgent() {
     running.value = true
     runningType.value = type
     try {
-      const data = await api.post<any>(`/agent/${type}/chat`, {
+      await api.post(`/agent/${type}/chat`, {
         message: msg,
         drama_id: dramaId,
         episode_id: episodeId,
@@ -18,7 +18,11 @@ export function useAgent() {
       toast.success('完成')
       onDone?.()
     } catch (err: any) {
-      toast.error(err.message)
+      const message = err?.message || 'Agent 执行失败'
+      toast.error(message)
+      if (type === 'storyboard_breaker' && /超时|空响应|连接中断/i.test(message)) {
+        onDone?.()
+      }
     } finally {
       running.value = false
       runningType.value = null

@@ -5,23 +5,54 @@ import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
+import { resolveCharacterImagePrompt } from '../utils/character-image-prompt.js'
+import { saveUploadedFile } from '../utils/storage.js'
+import { syncCharacterAsset } from '../services/asset-library.js'
+import { getConfigById, getActiveConfig } from '../services/ai.js'
+import {
+  buildCharacterTransformPrompt,
+  getCharacterTransformPreset,
+  listCharacterTransformPresets,
+} from '../utils/character-image-transforms.js'
+import {
+  findCharacterOutfitByAssetId,
+  resolveCharacterImageSource,
+} from '../utils/character-image-variants.js'
+import { buildOutfitChangePrompt, slugifyOutfitId } from '../utils/character-outfit-prompts.js'
+import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
+import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 
 const app = new Hono()
+
+// GET /characters/transform-presets — Seedance 适配风格预设（须在 /:id 之前注册）
+app.get('/transform-presets', (c) => {
+  return success(c, {
+    presets: listCharacterTransformPresets(),
+    reference_image_supported_providers: ['gemini', 'minimax', 'volcengine'],
+    hint: imageReferenceSupportHint(),
+  })
+})
 
 // PUT /characters/:id
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
-  for (const key of ['name', 'role', 'description', 'appearance', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath']) {
+  for (const key of ['name', 'role', 'description', 'appearance', 'imagePrompt', 'personality', 'voiceStyle', 'voiceProvider', 'imageUrl', 'localPath', 'referenceImages', 'portraitType', 'seedanceAssetId', 'seedanceAssetGroupId', 'seedanceAssetStatus']) {
     const snakeKey = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase())
     if (snakeKey in body) updates[key] = body[snakeKey]
     else if (key in body) updates[key] = body[key]
+  }
+  if ('reference_images' in body && Array.isArray(body.reference_images)) {
+    updates.referenceImages = JSON.stringify(body.reference_images)
   }
   if ('voice_style' in body || 'voiceStyle' in body) {
     updates.voiceSampleUrl = null
   }
   db.update(schema.characters).set(updates).where(eq(schema.characters.id, id)).run()
+  syncCharacterAsset(id)
   return success(c)
 })
 
@@ -44,6 +75,15 @@ app.post('/:id/generate-voice-sample', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_VOICE_SAMPLE, {
+    summary: `生成音色试听：${char.name}`,
+    dramaId: char.dramaId,
+    episodeId: ep.id,
+    resourceType: 'character',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
   try {
     logTaskStart('VoiceSample', 'generate', { characterId: id, characterName: char.name, episodeId: ep.id, voice: char.voiceStyle })
     const audioPath = await generateVoiceSample(char.name, char.voiceStyle, ep.audioConfigId ?? undefined)
@@ -58,6 +98,233 @@ app.post('/:id/generate-voice-sample', async (c) => {
   }
 })
 
+// POST /characters/:id/upload-image — 手动上传角色形象
+app.post('/:id/upload-image', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+
+  const body = await c.req.parseBody()
+  const file = body['file']
+  if (!file || !(file instanceof File)) return badRequest(c, 'file is required')
+  if (!file.type.startsWith('image/')) return badRequest(c, '仅支持图片文件')
+
+  try {
+    const buffer = await file.arrayBuffer()
+    const path = await saveUploadedFile(buffer, 'characters', file.name)
+    const ts = now()
+    db.update(schema.characters)
+      .set({ imageUrl: path, localPath: path, updatedAt: ts })
+      .where(eq(schema.characters.id, id))
+      .run()
+    syncCharacterAsset(id)
+    logActivity(getAuthUser(c), {
+      action: 'character.image.upload',
+      summary: `上传角色图：${char.name}`,
+      resourceType: 'character',
+      resourceId: id,
+      dramaId: char.dramaId,
+    })
+    return success(c, { path, url: `/${path}` })
+  } catch (err: any) {
+    return badRequest(c, err.message || '上传失败')
+  }
+})
+
+// POST /characters/:id/transform-image — 参考原图或指定服装生成 Seedance 适配风格
+app.post('/:id/transform-image', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json()
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+  if (!body.episode_id) return badRequest(c, 'episode_id is required')
+
+  const preset = getCharacterTransformPreset(String(body.transform_type || ''))
+  if (!preset) return badRequest(c, '无效的 transform_type')
+
+  const sourceKey = String(body.source || body.outfit_id || 'primary').trim() || 'primary'
+  const sourceImage = resolveCharacterImageSource(char, sourceKey)
+  if (!sourceImage) {
+    return badRequest(c, sourceKey === 'primary' ? '请先生成或上传角色原图，再进行风格转换' : '未找到指定服装图，请先生成换装图')
+  }
+
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  const config = (ep.imageConfigId != null ? getConfigById(ep.imageConfigId) : null)
+    || getActiveConfig('image')
+  if (!config) return badRequest(c, 'No active image AI config')
+  if (!supportsImageReference(config.provider, config.model)) {
+    return badRequest(c, `当前图片模型（${config.provider} · ${config.model || 'unknown'}）不支持参考图生图。${imageReferenceSupportHint()}`)
+  }
+
+  const prompt = buildCharacterTransformPrompt(preset, char.name)
+  const isOutfitSource = sourceKey !== 'primary'
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_TRANSFORM, {
+    summary: `角色风格转换：${char.name} · ${preset.label}`,
+    dramaId: char.dramaId,
+    episodeId: ep.id,
+    resourceType: 'character',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
+  try {
+    logTaskStart('CharacterImage', 'transform', {
+      characterId: id,
+      episodeId: ep.id,
+      transformType: preset.id,
+      source: sourceKey,
+      provider: config.provider,
+    })
+    const genId = await generateImage({
+      characterId: id,
+      dramaId: char.dramaId,
+      prompt,
+      referenceImages: [sourceImage],
+      imageType: isOutfitSource ? 'character_outfit_variant' : 'character_variant',
+      variantId: preset.id,
+      frameType: isOutfitSource ? sourceKey : undefined,
+      configId: ep.imageConfigId ?? undefined,
+      creditTransactionId: billed.charge.transactionId,
+    })
+    logTaskSuccess('CharacterImage', 'transform', { characterId: id, generationId: genId, transformType: preset.id, source: sourceKey })
+    logActivity(getAuthUser(c), {
+      action: 'character.image.transform',
+      summary: `角色图风格转换：${char.name} · ${preset.label}${isOutfitSource ? ` · ${sourceKey}` : ''}`,
+      resourceType: 'character',
+      resourceId: id,
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      creditCost: billed.charge.cost,
+      metadata: { generation_id: genId, transform_type: preset.id, source: sourceKey, credit_tx_id: billed.charge.transactionId },
+    })
+    return success(c, {
+      image_generation_id: genId,
+      transform_type: preset.id,
+      source: sourceKey,
+      label: preset.label,
+      reference_image_supported: true,
+      provider: config.provider,
+      credits_balance: billed.charge.balance,
+    })
+  } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '角色风格转换失败退款',
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      resourceType: 'character',
+      resourceId: id,
+      metadata: { reason: err.message },
+    })
+    logTaskError('CharacterImage', 'transform', { characterId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
+// POST /characters/:id/generate-outfit — 角色 + 服装资产双参考图换装
+app.post('/:id/generate-outfit', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json()
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+  if (!body.episode_id) return badRequest(c, 'episode_id is required')
+
+  const costumeAssetId = Number(body.costume_asset_id)
+  if (!Number.isFinite(costumeAssetId) || costumeAssetId <= 0) {
+    return badRequest(c, 'costume_asset_id is required')
+  }
+
+  const [asset] = db.select().from(schema.assets).where(eq(schema.assets.id, costumeAssetId)).all()
+  if (!asset || asset.deletedAt) return badRequest(c, '服装资产不存在')
+  if (asset.type !== 'costume') {
+    return badRequest(c, '所选资产不是服装类型，请在资产库中使用「服装资产」分类')
+  }
+
+  const charImage = String(char.imageUrl || char.localPath || '').trim()
+  if (!charImage) return badRequest(c, '请先生成或上传角色基准图，再进行换装')
+
+  const costumeImage = String(asset.url || asset.localPath || '').trim()
+  if (!costumeImage) return badRequest(c, '所选服装资产没有可用图片')
+
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  const config = (ep.imageConfigId != null ? getConfigById(ep.imageConfigId) : null)
+    || getActiveConfig('image')
+  if (!config) return badRequest(c, 'No active image AI config')
+  if (!supportsImageReference(config.provider, config.model)) {
+    return badRequest(c, `当前图片模型（${config.provider} · ${config.model || 'unknown'}）不支持参考图生图。${imageReferenceSupportHint()}`)
+  }
+
+  const label = String(body.label || asset.name || '服装').trim()
+  const existingOutfit = findCharacterOutfitByAssetId(char.referenceImages, costumeAssetId)
+  const outfitId = String(body.outfit_id || existingOutfit?.outfit_id || slugifyOutfitId(label, costumeAssetId))
+  const prompt = buildOutfitChangePrompt(char.name, label, body.prompt)
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_OUTFIT, {
+    summary: `角色换装：${char.name} · ${label}`,
+    dramaId: char.dramaId,
+    episodeId: ep.id,
+    resourceType: 'character',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
+  try {
+    logTaskStart('CharacterImage', 'generate-outfit', {
+      characterId: id,
+      episodeId: ep.id,
+      costumeAssetId,
+      outfitId,
+      provider: config.provider,
+    })
+    const genId = await generateImage({
+      characterId: id,
+      dramaId: char.dramaId,
+      prompt,
+      referenceImages: [charImage, costumeImage],
+      imageType: 'character_outfit',
+      frameType: outfitId,
+      propId: costumeAssetId,
+      configId: ep.imageConfigId ?? undefined,
+      creditTransactionId: billed.charge.transactionId,
+    })
+    logTaskSuccess('CharacterImage', 'generate-outfit', { characterId: id, generationId: genId, outfitId })
+    logActivity(getAuthUser(c), {
+      action: 'character.image.outfit',
+      summary: `角色换装：${char.name} · ${label}`,
+      resourceType: 'character',
+      resourceId: id,
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      creditCost: billed.charge.cost,
+      metadata: { generation_id: genId, outfit_id: outfitId, costume_asset_id: costumeAssetId, credit_tx_id: billed.charge.transactionId },
+    })
+    return success(c, {
+      image_generation_id: genId,
+      outfit_id: outfitId,
+      label,
+      costume_asset_id: costumeAssetId,
+      reference_image_supported: true,
+      provider: config.provider,
+      credits_balance: billed.charge.balance,
+    })
+  } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '角色换装失败退款',
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      resourceType: 'character',
+      resourceId: id,
+      metadata: { reason: err.message },
+    })
+    logTaskError('CharacterImage', 'generate-outfit', { characterId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
 // POST /characters/:id/generate-image
 app.post('/:id/generate-image', async (c) => {
   const id = Number(c.req.param('id'))
@@ -69,13 +336,50 @@ app.post('/:id/generate-image', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const prompt = `${char.name}, ${char.appearance || char.description || '人物立绘'}, 高质量, 正面, 白色背景`
+  const prompt = resolveCharacterImagePrompt(char, body.prompt)
+  if (body.prompt?.trim()) {
+    db.update(schema.characters).set({ imagePrompt: prompt, updatedAt: now() }).where(eq(schema.characters.id, id)).run()
+  }
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_IMAGE, {
+    summary: `生成角色图：${char.name}`,
+    dramaId: char.dramaId,
+    episodeId: ep.id,
+    resourceType: 'character',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
   try {
-    logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId })
-    const genId = await generateImage({ characterId: id, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
+    logTaskStart('CharacterImage', 'generate', { characterId: id, episodeId: ep.id, dramaId: char.dramaId, prompt })
+    const genId = await generateImage({
+      characterId: id,
+      dramaId: char.dramaId,
+      prompt,
+      configId: ep.imageConfigId ?? undefined,
+      creditTransactionId: billed.charge.transactionId,
+    })
     logTaskSuccess('CharacterImage', 'generate', { characterId: id, generationId: genId })
-    return success(c, { image_generation_id: genId })
+    logActivity(getAuthUser(c), {
+      action: 'character.image',
+      summary: `生成角色图：${char.name}`,
+      resourceType: 'character',
+      resourceId: id,
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      creditCost: billed.charge.cost,
+      metadata: { generation_id: genId, credit_tx_id: billed.charge.transactionId },
+    })
+    return success(c, { image_generation_id: genId, credits_balance: billed.charge.balance })
   } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '角色图生成失败退款',
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      resourceType: 'character',
+      resourceId: id,
+      metadata: { reason: err.message },
+    })
     logTaskError('CharacterImage', 'generate', { characterId: id, error: err.message })
     return badRequest(c, err.message)
   }
@@ -86,20 +390,89 @@ app.post('/batch-generate-images', async (c) => {
   const body = await c.req.json()
   const ids: number[] = body.character_ids || []
   if (!body.episode_id) return badRequest(c, 'episode_id is required')
+  if (!ids.length) return badRequest(c, 'character_ids is required')
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
-  const results: number[] = []
+
+  const preflight = tryPreflightBatchCharge(c, CREDIT_ACTIONS.CHARACTER_IMAGE, ids.length)
+  if (preflight.error) return preflight.error
+
+  const results: Array<{ character_id: number; image_generation_id: number }> = []
+  const failed: Array<{ character_id: number; error: string }> = []
+  const creditTxIds: number[] = []
+  let totalCharged = 0
+  let lastBalance = preflight.balance
+
   for (const cid of ids) {
     const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, cid)).all()
-    if (!char) continue
-    const prompt = `${char.name}, ${char.appearance || char.description || '人物立绘'}, 高质量, 正面, 白色背景`
+    if (!char) {
+      failed.push({ character_id: cid, error: '角色不存在' })
+      continue
+    }
+    const prompt = resolveCharacterImagePrompt(char)
+    const charge = chargeBatchItem(preflight.user.id, CREDIT_ACTIONS.CHARACTER_IMAGE, {
+      summary: `批量生成角色图：${char.name}`,
+      dramaId: char.dramaId,
+      episodeId: ep.id,
+      resourceType: 'character',
+      resourceId: cid,
+      metadata: { batch: 'character_images' },
+    })
+    if (!charge.ok) {
+      failed.push({ character_id: cid, error: charge.message || '积分不足' })
+      break
+    }
+    totalCharged += charge.cost
+    lastBalance = charge.balance
+    if (charge.transactionId) creditTxIds.push(charge.transactionId)
+
     try {
-      const genId = await generateImage({ characterId: cid, dramaId: char.dramaId, prompt, configId: ep.imageConfigId ?? undefined })
-      results.push(genId)
-    } catch {}
+      const genId = await generateImage({
+        characterId: cid,
+        dramaId: char.dramaId,
+        prompt,
+        configId: ep.imageConfigId ?? undefined,
+        creditTransactionId: charge.transactionId,
+      })
+      results.push({ character_id: cid, image_generation_id: genId })
+    } catch (err: any) {
+      tryRefundCharge(charge.transactionId, {
+        summary: `批量角色图失败退款：${char.name}`,
+        dramaId: char.dramaId,
+        episodeId: ep.id,
+        resourceType: 'character',
+        resourceId: cid,
+        metadata: { reason: err.message, batch: 'character_images' },
+      })
+      failed.push({ character_id: cid, error: err.message })
+    }
   }
-  logTaskSuccess('CharacterImage', 'batch-generate', { episodeId: ep.id, requested: ids.length, started: results.length })
-  return success(c, { count: results.length, ids: results })
+
+  logTaskSuccess('CharacterImage', 'batch-generate', {
+    episodeId: ep.id,
+    requested: ids.length,
+    started: results.length,
+    failed: failed.length,
+  })
+  logActivity(getAuthUser(c), {
+    action: 'character.image.batch',
+    summary: `批量生成角色图（${results.length}/${ids.length} 张）`,
+    episodeId: ep.id,
+    dramaId: ep.dramaId,
+    creditCost: totalCharged,
+    metadata: {
+      character_ids: ids,
+      generation_ids: results.map(item => item.image_generation_id),
+      credit_tx_ids: creditTxIds,
+      failed,
+    },
+  })
+  return success(c, {
+    count: results.length,
+    items: results,
+    failed,
+    credits_balance: lastBalance,
+  })
 })
 
 export default app

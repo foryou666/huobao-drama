@@ -41,14 +41,32 @@
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
               {{ d.episodes?.length || 0 }} 集
             </div>
-            <button class="btn btn-ghost btn-icon card-delete" @click.stop="delDrama(d)" title="删除">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-              </svg>
-            </button>
+            <span v-if="d.is_shared_project" class="tag tag-accent share-badge">共享</span>
+            <div v-if="d.can_manage_drama" class="card-actions" @click.stop>
+              <button
+                class="btn btn-ghost btn-icon card-action"
+                @click="archiveDrama(d)"
+                title="归档"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+                </svg>
+              </button>
+              <button
+                v-if="d.can_delete"
+                class="btn btn-ghost btn-icon card-action card-delete"
+                @click="delDrama(d)"
+                title="删除空项目"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+                </svg>
+              </button>
+            </div>
           </div>
 
           <h3 class="project-title">{{ d.title }}</h3>
+          <p v-if="d.is_shared_project && d.owner_team_name" class="project-owner dim">来自 {{ d.owner_team_name }}</p>
 
           <div class="project-meta">
             <span v-if="d.style" class="style-tag">{{ d.style }}</span>
@@ -115,6 +133,15 @@
               <BaseSelect v-model="form.style" :options="styleSelectOptions" placeholder="选择风格" searchable />
             </label>
           </div>
+          <label class="field">
+            <span class="field-label">导演风格</span>
+            <BaseSelect
+              v-model="form.director_style"
+              :options="directorStyleOptions"
+              placeholder="选择导演风格"
+            />
+            <span v-if="selectedDirectorDesc" class="field-hint">{{ selectedDirectorDesc }}</span>
+          </label>
           <div class="modal-actions">
             <button type="button" class="btn" @click="showCreate = false">取消</button>
             <button type="submit" class="btn btn-primary">
@@ -132,15 +159,22 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { dramaAPI } from '~/composables/useApi'
+import { dramaAPI, promptsAPI } from '~/composables/useApi'
 import BaseSelect from '~/components/BaseSelect.vue'
 
 const dramas = ref([])
 const loading = ref(false)
 const showCreate = ref(false)
-const form = ref({ title: '', total_episodes: 1, style: '' })
+const form = ref({ title: '', total_episodes: 1, style: '', director_style: 'hongguo_director' })
 const styles = ['realistic', 'anime', 'ghibli', 'cinematic', 'comic', 'watercolor']
 const styleSelectOptions = computed(() => styles.map(s => ({ label: s, value: s })))
+const directorStyles = ref([])
+const directorStyleOptions = computed(() =>
+  directorStyles.value.map(s => ({ label: s.label, value: s.id })),
+)
+const selectedDirectorDesc = computed(() =>
+  directorStyles.value.find(s => s.id === form.value.director_style)?.description || '',
+)
 
 async function load() {
   loading.value = true
@@ -166,10 +200,26 @@ async function create() {
 }
 
 async function delDrama(d) {
-  if (!confirm(`确定删除「${d.title}」？此操作不可恢复。`)) return
+  const summary = d.content_summary || '无制作内容'
+  if (!confirm(`确定删除空项目「${d.title}」？\n\n当前内容：${summary}\n\n删除后将从列表移除（仅允许无制作内容的项目）。`)) return
   try {
     await dramaAPI.del(d.id)
     toast.success('已删除')
+    load()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function archiveDrama(d) {
+  const summary = d.content_summary || '含制作内容'
+  const msg = d.can_delete
+    ? `归档后将从列表隐藏，可随时恢复。\n\n当前内容：${summary}`
+    : `该项目含制作内容，无法直接删除。\n\n${d.delete_block_reason || summary}\n\n是否改为归档？归档后从列表隐藏，内容仍保留。`
+  if (!confirm(`归档「${d.title}」？\n\n${msg}`)) return
+  try {
+    await dramaAPI.archive(d.id)
+    toast.success('已归档')
     load()
   } catch (e) {
     toast.error(e.message)
@@ -195,7 +245,24 @@ function getProgress(d) {
   return Math.round((scripted / d.episodes.length) * 100)
 }
 
-onMounted(load)
+async function loadDirectorStyles() {
+  try {
+    const res = await promptsAPI.directorStyles()
+    directorStyles.value = res.items || []
+    if (res.default) form.value.director_style = res.default
+  } catch {
+    directorStyles.value = [
+      { id: 'hongguo_director', label: '红果导演', description: '竖屏短剧节奏，默认推荐' },
+      { id: 'super_director', label: '超级导演', description: '电影感叙事与戏剧张力' },
+      { id: 'north_america_director', label: '北美导演', description: '好莱坞剧本与覆盖式分镜' },
+    ]
+  }
+}
+
+onMounted(() => {
+  load()
+  loadDirectorStyles()
+})
 </script>
 
 <style scoped>
@@ -276,6 +343,18 @@ onMounted(load)
 .episode-badge svg { color: var(--accent); }
 
 .card-delete { opacity: 0; transition: opacity 0.15s; }
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.card-action { color: var(--text-3); }
+.card-action:hover { color: var(--text-1); }
+.card-delete:hover { color: var(--error); }
+.project-card:hover .card-actions { opacity: 1; }
 .project-card:hover .card-delete { opacity: 1; }
 
 .project-title {
@@ -284,6 +363,14 @@ onMounted(load)
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-0);
+}
+.project-owner {
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+.share-badge {
+  font-size: 10px;
+  padding: 2px 7px;
 }
 
 .project-meta {
@@ -383,5 +470,6 @@ onMounted(load)
 .field-label { font-size: 12px; font-weight: 600; color: var(--text-1); }
 .required { color: var(--error); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.field-hint { font-size: 11px; color: var(--text-3); line-height: 1.5; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 6px; }
 </style>

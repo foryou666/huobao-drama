@@ -3,8 +3,12 @@ import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
+import { requireAdmin, getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
 
 const app = new Hono()
+
+app.use('*', requireAdmin)
 
 // GET /agent-configs
 app.get('/', async (c) => {
@@ -64,6 +68,11 @@ app.post('/', async (c) => {
   }).run()
   const [result] = db.select().from(schema.agentConfigs)
     .where(eq(schema.agentConfigs.id, Number(res.lastInsertRowid))).all()
+  logActivity(getAuthUser(c), {
+    action: 'settings.agent_config.save',
+    summary: `保存 Agent 配置：${body.agent_type}`,
+    metadata: { agent_type: body.agent_type },
+  })
   return success(c, toSnakeCase(result))
 })
 

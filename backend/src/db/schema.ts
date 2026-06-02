@@ -16,6 +16,9 @@ export const dramas = sqliteTable('dramas', {
   thumbnail: text('thumbnail'),
   tags: text('tags'),
   metadata: text('metadata'),
+  imageAspectRatio: text('image_aspect_ratio').default('9:16'),
+  directorStyle: text('director_style').default('hongguo_director'),
+  teamId: integer('team_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
@@ -48,6 +51,7 @@ export const characters = sqliteTable('characters', {
   role: text('role'),
   description: text('description'),
   appearance: text('appearance'),
+  imagePrompt: text('image_prompt'),
   personality: text('personality'),
   voiceStyle: text('voice_style'),
   imageUrl: text('image_url'),
@@ -57,6 +61,10 @@ export const characters = sqliteTable('characters', {
   localPath: text('local_path'),
   voiceSampleUrl: text('voice_sample_url'),
   voiceProvider: text('voice_provider'),
+  portraitType: text('portrait_type').default('ai'),
+  seedanceAssetId: text('seedance_asset_id'),
+  seedanceAssetGroupId: text('seedance_asset_group_id'),
+  seedanceAssetStatus: text('seedance_asset_status'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
@@ -87,6 +95,7 @@ export const scenes = sqliteTable('scenes', {
   prompt: text('prompt').notNull(),
   storyboardCount: integer('storyboard_count').default(1),
   imageUrl: text('image_url'),
+  referenceImages: text('reference_images'),
   status: text('status').default('pending'),
   localPath: text('local_path'),
   createdAt: text('created_at').notNull(),
@@ -118,7 +127,11 @@ export const storyboards = sqliteTable('storyboards', {
   composedImage: text('composed_image'),
   firstFrameImage: text('first_frame_image'),
   lastFrameImage: text('last_frame_image'),
+  blockingImage: text('blocking_image'),
+  blockingLayout: text('blocking_layout'),
+  sceneAngleId: text('scene_angle_id'),
   referenceImages: text('reference_images'),
+  characterImageRefs: text('character_image_refs'),
   videoUrl: text('video_url'),
   ttsAudioUrl: text('tts_audio_url'),
   subtitleUrl: text('subtitle_url'),
@@ -223,6 +236,7 @@ export const imageGenerations = sqliteTable('image_generations', {
   width: integer('width'),
   height: integer('height'),
   referenceImages: text('reference_images'),
+  creditTransactionId: integer('credit_transaction_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   completedAt: text('completed_at'),
@@ -241,6 +255,7 @@ export const videoGenerations = sqliteTable('video_generations', {
   firstFrameUrl: text('first_frame_url'),
   lastFrameUrl: text('last_frame_url'),
   referenceImageUrls: text('reference_image_urls'),
+  referencePayload: text('reference_payload'),
   duration: integer('duration'),
   fps: integer('fps'),
   resolution: text('resolution'),
@@ -255,6 +270,7 @@ export const videoGenerations = sqliteTable('video_generations', {
   status: text('status').default('pending'),
   taskId: text('task_id'),
   errorMsg: text('error_msg'),
+  creditTransactionId: integer('credit_transaction_id'),
   width: integer('width'),
   height: integer('height'),
   createdAt: text('created_at').notNull(),
@@ -296,6 +312,83 @@ export const props = sqliteTable('props', {
   deletedAt: text('deleted_at'),
 })
 
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  username: text('username').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  displayName: text('display_name'),
+  role: text('role').notNull().default('user'),
+  isActive: integer('is_active', { mode: 'boolean' }).default(true),
+  creditsBalance: integer('credits_balance').default(10000),
+  lastLoginAt: text('last_login_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const teams = sqliteTable('teams', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const teamMembers = sqliteTable('team_members', {
+  teamId: integer('team_id').notNull(),
+  userId: integer('user_id').notNull(),
+  role: text('role').notNull().default('member'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.teamId, table.userId] }),
+}))
+
+export const dramaTeamShares = sqliteTable('drama_team_shares', {
+  dramaId: integer('drama_id').notNull(),
+  teamId: integer('team_id').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.dramaId, table.teamId] }),
+}))
+
+export const creditPricing = sqliteTable('credit_pricing', {
+  action: text('action').primaryKey(),
+  label: text('label').notNull(),
+  description: text('description'),
+  cost: integer('cost').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const creditTransactions = sqliteTable('credit_transactions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  amount: integer('amount').notNull(),
+  balanceAfter: integer('balance_after').notNull(),
+  type: text('type').notNull(),
+  action: text('action').notNull(),
+  summary: text('summary'),
+  dramaId: integer('drama_id'),
+  episodeId: integer('episode_id'),
+  resourceType: text('resource_type'),
+  resourceId: integer('resource_id'),
+  metadata: text('metadata'),
+  createdAt: text('created_at').notNull(),
+})
+
+export type CreditTransactionType = 'charge' | 'grant' | 'refund'
+
+export const activityLogs = sqliteTable('activity_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  action: text('action').notNull(),
+  summary: text('summary'),
+  resourceType: text('resource_type'),
+  resourceId: integer('resource_id'),
+  dramaId: integer('drama_id'),
+  episodeId: integer('episode_id'),
+  metadata: text('metadata'),
+  creditCost: integer('credit_cost'),
+  createdAt: text('created_at').notNull(),
+})
+
 export const assets = sqliteTable('assets', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   dramaId: integer('drama_id'),
@@ -306,6 +399,8 @@ export const assets = sqliteTable('assets', {
   description: text('description'),
   type: text('type'),
   category: text('category'),
+  sourceType: text('source_type'),
+  sourceId: integer('source_id'),
   url: text('url'),
   thumbnailUrl: text('thumbnail_url'),
   localPath: text('local_path'),
@@ -322,4 +417,25 @@ export const assets = sqliteTable('assets', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
+})
+
+export const assistantThreads = sqliteTable('assistant_threads', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  episodeId: integer('episode_id').notNull(),
+  stepKey: text('step_key').notNull(),
+  agentType: text('agent_type').notNull(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+export const assistantMessages = sqliteTable('assistant_messages', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  threadId: integer('thread_id').notNull(),
+  role: text('role').notNull(),
+  content: text('content').notNull(),
+  toolSummary: text('tool_summary'),
+  attachments: text('attachments'),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: text('created_at').notNull(),
 })

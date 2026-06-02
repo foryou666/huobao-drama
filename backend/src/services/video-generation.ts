@@ -2,10 +2,20 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { getActiveConfig, getConfigById } from './ai.js'
 import { now } from '../utils/response.js'
-import { downloadFile, readImageAsCompressedDataUrl } from '../utils/storage.js'
+import { downloadFile, readFileAsDataUrl, readImageAsCompressedDataUrl } from '../utils/storage.js'
+import { getDramaImageAspectRatio } from '../utils/image-size.js'
 import { getVideoAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import type { VideoContentRef } from '../utils/seedance-content.js'
+import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/video-content-refs.js'
+import { isChengmengProvider } from '../constants/chengmeng.js'
+import {
+  normalizeChengmengContentRefs,
+  normalizeChengmengReferenceUrls,
+  resolveChengmengMediaUrl,
+} from '../utils/chengmeng-content.js'
+import { failVideoGeneration } from '../utils/generation-failure.js'
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -17,9 +27,11 @@ interface GenerateVideoParams {
   firstFrameUrl?: string
   lastFrameUrl?: string
   referenceImageUrls?: string[]
+  contentRefs?: VideoContentRef[]
   duration?: number
   aspectRatio?: string
   configId?: number
+  creditTransactionId?: number
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
@@ -28,6 +40,23 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     ? getConfigById(params.configId)
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
+
+  if (params.storyboardId) {
+    const [sb] = db.select().from(schema.storyboards)
+      .where(eq(schema.storyboards.id, params.storyboardId)).all()
+    if (sb) {
+      let dramaId = params.dramaId
+      if (!dramaId) {
+        const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
+        dramaId = ep?.dramaId
+      }
+      if (dramaId) {
+        const prompt = String(params.prompt || sb.videoPrompt || '').trim()
+        const issues = validatePromptImageRefs(prompt, sb, dramaId)
+        if (issues.length) throw new Error(formatPromptImageRefIssues(issues))
+      }
+    }
+  }
 
   const res = db.insert(schema.videoGenerations).values({
     storyboardId: params.storyboardId,
@@ -40,8 +69,10 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     firstFrameUrl: params.firstFrameUrl,
     lastFrameUrl: params.lastFrameUrl,
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
-    duration: params.duration || 5,
-    aspectRatio: params.aspectRatio || '16:9',
+    referencePayload: params.contentRefs?.length ? JSON.stringify(params.contentRefs) : null,
+    duration: params.duration || 15,
+    aspectRatio: params.aspectRatio || (params.dramaId ? getDramaImageAspectRatio(params.dramaId) : '16:9'),
+    creditTransactionId: params.creditTransactionId ?? null,
     status: 'processing',
     createdAt: ts,
     updatedAt: ts,
@@ -54,7 +85,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     referenceMode: params.referenceMode || 'none',
-    duration: params.duration || 5,
+    duration: params.duration || 15,
   })
   logTaskPayload('VideoTask', 'enqueue params', {
     id: lastId,
@@ -86,10 +117,22 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       referenceMode: record.referenceMode,
     })
 
-    const resolvedImageUrl = await normalizeVideoReferenceUrl(record.imageUrl)
-    const resolvedFirstFrameUrl = await normalizeVideoReferenceUrl(record.firstFrameUrl)
-    const resolvedLastFrameUrl = await normalizeVideoReferenceUrl(record.lastFrameUrl)
-    const resolvedReferenceImageUrls = await normalizeVideoReferenceUrls(record.referenceImageUrls)
+    const useChengmeng = isChengmengProvider(config.provider)
+    const resolvedImageUrl = useChengmeng
+      ? await resolveChengmengMediaUrl(record.imageUrl)
+      : await normalizeVideoReferenceUrl(record.imageUrl)
+    const resolvedFirstFrameUrl = useChengmeng
+      ? await resolveChengmengMediaUrl(record.firstFrameUrl)
+      : await normalizeVideoReferenceUrl(record.firstFrameUrl)
+    const resolvedLastFrameUrl = useChengmeng
+      ? await resolveChengmengMediaUrl(record.lastFrameUrl)
+      : await normalizeVideoReferenceUrl(record.lastFrameUrl)
+    const resolvedReferenceImageUrls = useChengmeng
+      ? await normalizeChengmengReferenceUrls(record.referenceImageUrls)
+      : await normalizeVideoReferenceUrls(record.referenceImageUrls)
+    const resolvedContentRefs = useChengmeng
+      ? await normalizeChengmengContentRefs(record.referencePayload)
+      : await normalizeVideoContentRefs(record.referencePayload)
 
     // 使用 Adapter 构建请求
     const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
@@ -101,6 +144,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       firstFrameUrl: resolvedFirstFrameUrl,
       lastFrameUrl: resolvedLastFrameUrl,
       referenceImageUrls: resolvedReferenceImageUrls ? JSON.stringify(resolvedReferenceImageUrls) : null,
+      referencePayload: resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload,
       duration: record.duration,
       aspectRatio: record.aspectRatio,
     })
@@ -154,17 +198,16 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     pollVideoTask(id, config, taskId!, record.storyboardId)
   } catch (err: any) {
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
-    db.update(schema.videoGenerations)
-      .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
-      .where(eq(schema.videoGenerations.id, id))
-      .run()
+    failVideoGeneration(id, err.message)
   }
 }
 
 async function normalizeVideoReferenceUrl(value: string | null | undefined): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
+  if (raw.startsWith('asset://')) return raw
   if (raw.startsWith('data:image/')) return raw
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
   if (raw.startsWith('static/') || raw.startsWith('/static/')) {
     const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
     try {
@@ -177,6 +220,65 @@ async function normalizeVideoReferenceUrl(value: string | null | undefined): Pro
       logTaskWarn('VideoTask', 'reference-read-failed', { path: localPath, error: (err as Error).message })
       return null
     }
+  }
+  return raw
+}
+
+async function normalizeVideoContentRefs(raw: string | null | undefined): Promise<VideoContentRef[]> {
+  if (!raw?.trim()) return []
+  let refs: VideoContentRef[] = []
+  try {
+    refs = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(refs)) return []
+  const normalized = await Promise.all(
+    refs.map(async (ref) => {
+      const url = String(ref?.url || '').trim()
+      if (!url) return null
+      const type = ref?.type
+      if (type === 'image') {
+        const next = await normalizeVideoReferenceUrl(url)
+        return next ? { ...ref, url: next } : null
+      }
+      if (type === 'audio') {
+        const next = await normalizeAudioReferenceUrl(url)
+        return next ? { ...ref, url: next } : null
+      }
+      if (type === 'video') {
+        const next = await normalizeVideoMediaReferenceUrl(url)
+        return next ? { ...ref, url: next } : null
+      }
+      return null
+    }),
+  )
+  return normalized.filter((item): item is VideoContentRef => !!item)
+}
+
+async function normalizeAudioReferenceUrl(value: string | null | undefined): Promise<string | null> {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  if (raw.startsWith('data:audio/')) return raw
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  if (raw.startsWith('static/') || raw.startsWith('/static/')) {
+    const localPath = raw.startsWith('/static/') ? raw.slice(1) : raw
+    const dataUrl = readFileAsDataUrl(localPath, 8 * 1024 * 1024)
+    if (dataUrl) return dataUrl
+    logTaskWarn('VideoTask', 'audio-reference-too-large', { path: localPath })
+    return null
+  }
+  return raw
+}
+
+async function normalizeVideoMediaReferenceUrl(value: string | null | undefined): Promise<string | null> {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  if (raw.startsWith('data:video/')) return raw
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  if (raw.startsWith('static/') || raw.startsWith('/static/')) {
+    logTaskWarn('VideoTask', 'video-reference-local-skipped', { path: raw })
+    return null
   }
   return raw
 }
@@ -222,16 +324,15 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
         return
       }
       if (pollResp.status === 'failed') {
-        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Video generation failed' })
-        throw new Error(pollResp.error || 'Video generation failed')
+        const errMsg = pollResp.error || 'Video generation failed'
+        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errMsg })
+        failVideoGeneration(id, errMsg)
+        return
       }
     } catch (err: any) {
       if (i === 299) {
         logTaskError('VideoTask', 'poll-timeout', { id, taskId, error: err.message })
-        db.update(schema.videoGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
-          .where(eq(schema.videoGenerations.id, id))
-          .run()
+        failVideoGeneration(id, `Timeout: ${err.message}`)
         return
       }
       logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })

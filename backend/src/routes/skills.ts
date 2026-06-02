@@ -3,8 +3,12 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { success, badRequest } from '../utils/response.js'
+import { requireAdmin, getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
 
 const app = new Hono()
+
+app.use('*', requireAdmin)
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SKILLS_DIR = path.resolve(__dirname, '../../../skills')
 

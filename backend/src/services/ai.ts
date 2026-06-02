@@ -13,12 +13,14 @@ export interface AIConfig {
   baseUrl: string
   apiKey: string
   model: string
+  models?: string[]
+  settings?: Record<string, unknown>
 }
 
 export function getTextProviderBaseUrl(config: AIConfig) {
   const provider = config.provider.toLowerCase()
 
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire') {
+  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire' || provider === 'geeknow') {
     return joinProviderUrl(config.baseUrl, '/v1', '')
   }
 
@@ -26,7 +28,16 @@ export function getTextProviderBaseUrl(config: AIConfig) {
     return joinProviderUrl(config.baseUrl, '/api/v3', '')
   }
 
-  if (provider === 'ali') {
+  if (provider === 'ali' || provider.startsWith('ali-')) {
+    const base = (config.baseUrl || '').replace(/\/+$/, '')
+    // 百炼 OpenAI 兼容模式：Base URL 已含 compatible-mode/v1，直接使用
+    if (base.includes('/compatible-mode')) {
+      return base.endsWith('/v1') ? base : joinProviderUrl(base, '/v1', '')
+    }
+    // 仅填写 dashscope 域名时，默认走兼容模式（文本 Agent 使用 createOpenAI）
+    if (/dashscope[^/]*\.aliyuncs\.com$/i.test(base)) {
+      return joinProviderUrl(base, '/compatible-mode/v1', '')
+    }
     return joinProviderUrl(config.baseUrl, '/api/v1', '')
   }
 
@@ -54,11 +65,21 @@ export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
     model: models[0] || '',
     priority: active.priority,
   })
+  let settings: Record<string, unknown> | undefined
+  if (active.settings) {
+    try {
+      settings = JSON.parse(active.settings)
+    } catch {
+      settings = undefined
+    }
+  }
   return {
     provider: active.provider || '',
     baseUrl: active.baseUrl,
     apiKey: active.apiKey,
     model: models[0] || '',
+    models,
+    settings,
   }
 }
 
@@ -96,10 +117,20 @@ export function getConfigById(id: number): AIConfig | null {
     model: models[0] || '',
     serviceType: row.serviceType,
   })
+  let settings: Record<string, unknown> | undefined
+  if (row.settings) {
+    try {
+      settings = JSON.parse(row.settings)
+    } catch {
+      settings = undefined
+    }
+  }
   return {
     provider: row.provider || '',
     baseUrl: row.baseUrl,
     apiKey: row.apiKey,
     model: models[0] || '',
+    models,
+    settings,
   }
 }

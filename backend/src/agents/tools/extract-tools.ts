@@ -13,6 +13,7 @@ import { db, schema } from '../../db/index.js'
 import { eq, and } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { syncCharacterAsset, syncSceneAsset } from '../../services/asset-library.js'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 function linkCharToEpisode(episodeId: number, characterId: number) {
@@ -149,6 +150,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
             updatedAt: ts,
           }).where(eq(schema.characters.id, existing.id)).run()
           linkCharToEpisode(episodeId, existing.id)
+          syncCharacterAsset(existing.id)
           results.merged++
         } else {
           // 新增角色
@@ -164,6 +166,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           }).run()
           const charId = Number(res.lastInsertRowid)
           linkCharToEpisode(episodeId, charId)
+          syncCharacterAsset(charId)
           results.created++
         }
       }
@@ -207,6 +210,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
         if (existing) {
           // 已存在完全匹配的场景：直接关联
           linkSceneToEpisode(episodeId, existing.id)
+          syncSceneAsset(existing.id)
           results.reused++
         } else {
           // 检查是否有同地点不同时段（保留现有，新增独立场景）
@@ -225,6 +229,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           }).run()
           const sceneId = Number(res.lastInsertRowid)
           linkSceneToEpisode(episodeId, sceneId)
+          syncSceneAsset(sceneId)
           results.created++
         }
       }

@@ -32,12 +32,12 @@
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-              <span v-else class="settings-brand-fallback">火</span>
+              <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <span v-else class="settings-brand-fallback">红</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Huobao Shorts</div>
-              <div class="settings-brand-name">火宝短剧</div>
+              <div class="settings-brand-kicker">Hongguo Shorts</div>
+              <div class="settings-brand-name">红果短剧</div>
             </div>
           </div>
           <h2 class="settings-title">AI 服务配置</h2>
@@ -47,15 +47,15 @@
           <div class="setup-panel-head">
             <div>
               <div class="setup-kicker">Quick Setup</div>
-              <div class="setup-title">火宝推荐配置</div>
+              <div class="setup-title">红果推荐配置</div>
               <div class="setup-desc">一键写入文本、图片、视频、音频四类推荐配置，适合作为开箱默认方案。</div>
             </div>
             <button class="btn btn-primary" @click="presetDialog = true">
-              <Sparkles :size="14" /> 火宝一键配置
+              <Sparkles :size="14" /> 红果一键配置
             </button>
           </div>
           <div class="preset-grid">
-            <article v-for="preset in huobaoPresetCards" :key="preset.serviceType" class="preset-card">
+            <article v-for="preset in huobaoPresetCards" :key="`${preset.serviceType}-${preset.model}`" class="preset-card">
               <div class="preset-card-top">
                 <span class="preset-service">{{ preset.label }}</span>
                 <span class="tag tag-accent">{{ preset.provider }}</span>
@@ -122,12 +122,12 @@
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-              <span v-else class="settings-brand-fallback">火</span>
+              <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <span v-else class="settings-brand-fallback">红</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Huobao Shorts</div>
-              <div class="settings-brand-name">火宝短剧</div>
+              <div class="settings-brand-kicker">Hongguo Shorts</div>
+              <div class="settings-brand-name">红果短剧</div>
             </div>
           </div>
           <h2 class="settings-title">Agent 配置</h2>
@@ -201,12 +201,12 @@
           <div class="settings-head">
             <div class="settings-brand">
               <div class="settings-brand-mark">
-                <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="settings-brand-logo" @error="showBrandImage = false" />
-                <span v-else class="settings-brand-fallback">火</span>
+                <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+                <span v-else class="settings-brand-fallback">红</span>
               </div>
               <div class="settings-brand-copy">
-                <div class="settings-brand-kicker">Huobao Shorts</div>
-                <div class="settings-brand-name">火宝短剧</div>
+                <div class="settings-brand-kicker">Hongguo Shorts</div>
+                <div class="settings-brand-name">红果短剧</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
@@ -268,6 +268,167 @@
           </div>
         </div>
       </div>
+
+      <!-- ===== 积分管理 ===== -->
+      <div v-if="tab === 'credits'" class="settings-scroll">
+        <div class="settings-head">
+          <h2 class="settings-title">积分管理</h2>
+          <p class="settings-desc">配置各操作的积分单价，并为团队成员充值。后续可按 1 元 = 100 积分 对接充值。</p>
+        </div>
+        <section class="setup-panel card">
+          <div class="setup-title">操作定价</div>
+          <table class="user-table">
+            <thead>
+              <tr><th>操作</th><th>说明</th><th>单价（积分）</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in creditPricing" :key="item.action">
+                <td>{{ item.label }}</td>
+                <td class="dim">{{ item.description }}</td>
+                <td><input v-model.number="item.cost" class="input input-sm" type="number" min="0" step="1" /></td>
+                <td><button type="button" class="btn btn-sm" @click="savePricing(item)">保存</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="setup-panel card">
+          <div class="setup-title">为用户充值</div>
+          <form class="user-create-form" @submit.prevent="grantCredits">
+            <select v-model.number="grantForm.user_id" class="input" required>
+              <option :value="null" disabled>选择用户</option>
+              <option v-for="u in teamUsers" :key="u.id" :value="u.id">{{ u.display_name || u.username }}（{{ u.credits_balance ?? 0 }} 积分）</option>
+            </select>
+            <input v-model.number="grantForm.amount" class="input" type="number" min="1" step="1" placeholder="充值积分" required />
+            <input v-model="grantForm.summary" class="input" placeholder="备注（可选）" />
+            <button type="submit" class="btn btn-primary">充值</button>
+          </form>
+        </section>
+      </div>
+
+      <!-- ===== 团队管理 ===== -->
+      <div v-if="tab === 'team'" class="settings-scroll">
+        <div class="settings-head">
+          <h2 class="settings-title">团队管理</h2>
+          <p class="settings-desc">
+            创建或切换团队后，新建项目与新建用户会归属当前团队。
+            <span v-if="activeTeam">当前：{{ activeTeam.name }}（{{ teamRoleLabel(activeTeam.role) }}）</span>
+          </p>
+        </div>
+
+        <section class="setup-panel card">
+          <div class="setup-title">新建团队</div>
+          <p class="setup-desc">创建后你将成为团队所有者，可在顶栏切换团队。</p>
+          <form class="user-create-form team-name-form" @submit.prevent="createTeam">
+            <input v-model="newTeamName" class="input" placeholder="团队名称" required />
+            <button type="submit" class="btn btn-primary" :disabled="creatingTeam">
+              {{ creatingTeam ? '创建中…' : '创建团队' }}
+            </button>
+          </form>
+        </section>
+
+        <section v-if="activeTeam && canRenameTeam" class="setup-panel card">
+          <div class="setup-title">重命名当前团队</div>
+          <form class="user-create-form team-name-form" @submit.prevent="renameTeam">
+            <input v-model="renameTeamName" class="input" placeholder="团队名称" required />
+            <button type="submit" class="btn" :disabled="renamingTeam || !renameTeamName.trim() || renameTeamName.trim() === activeTeam.name">
+              {{ renamingTeam ? '保存中…' : '保存名称' }}
+            </button>
+          </form>
+        </section>
+
+        <section v-if="canManageMembers" class="setup-panel card">
+          <div class="setup-title">添加成员</div>
+          <p class="setup-desc">将已有账号加入当前团队「{{ activeTeam?.name || '—' }}」。</p>
+          <form class="user-create-form team-member-form" @submit.prevent="addTeamMember">
+            <input v-model="memberForm.username" class="input" placeholder="用户名" required />
+            <select v-model="memberForm.role" class="input">
+              <option value="member">成员</option>
+              <option value="admin">团队管理员</option>
+            </select>
+            <button type="submit" class="btn btn-primary">添加</button>
+          </form>
+        </section>
+
+        <section v-if="canManageMembers" class="setup-panel card">
+          <div class="setup-title">团队成员</div>
+          <table class="user-table">
+            <thead>
+              <tr><th>用户名</th><th>显示名</th><th>团队角色</th><th>平台角色</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in teamMembers" :key="m.user_id">
+                <td>{{ m.username }}</td>
+                <td>{{ m.display_name }}</td>
+                <td>
+                  <select
+                    v-if="canEditMember(m)"
+                    :value="m.role"
+                    class="input input-sm"
+                    @change="updateMemberRole(m, $event)"
+                  >
+                    <option value="owner">所有者</option>
+                    <option value="admin">管理员</option>
+                    <option value="member">成员</option>
+                  </select>
+                  <span v-else class="tag">{{ teamRoleLabel(m.role) }}</span>
+                </td>
+                <td><span class="tag">{{ m.platform_role === 'admin' ? '平台管理员' : '用户' }}</span></td>
+                <td>
+                  <button
+                    v-if="canRemoveMember(m)"
+                    type="button"
+                    class="btn btn-ghost btn-sm"
+                    @click="removeMember(m)"
+                  >移除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section v-else-if="activeTeam" class="setup-panel card">
+          <div class="setup-title">团队成员</div>
+          <p class="setup-desc dim">仅团队管理员可添加或移除成员。请联系团队所有者或管理员。</p>
+        </section>
+      </div>
+
+      <!-- ===== 用户管理 ===== -->
+      <div v-if="tab === 'users'" class="settings-scroll">
+        <div class="settings-head">
+          <h2 class="settings-title">用户管理</h2>
+          <p class="settings-desc">创建团队成员账号。普通用户可制作项目；管理员可修改全局设置。</p>
+        </div>
+        <section class="setup-panel card">
+          <div class="setup-title">新建用户</div>
+          <form class="user-create-form" @submit.prevent="createTeamUser">
+            <input v-model="userForm.username" class="input" placeholder="用户名" required />
+            <input v-model="userForm.display_name" class="input" placeholder="显示名称" />
+            <input v-model="userForm.password" class="input" type="password" placeholder="密码（至少 6 位）" required />
+            <select v-model="userForm.role" class="input">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+            <button type="submit" class="btn btn-primary">创建</button>
+          </form>
+        </section>
+        <section class="setup-panel card">
+          <div class="setup-title">已有用户</div>
+          <table class="user-table">
+            <thead>
+              <tr><th>用户名</th><th>显示名</th><th>角色</th><th>积分</th><th>最近登录</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="u in teamUsers" :key="u.id">
+                <td>{{ u.username }}</td>
+                <td>{{ u.display_name }}</td>
+                <td><span class="tag">{{ u.role === 'admin' ? '管理员' : '用户' }}</span></td>
+                <td class="mono">{{ u.credits_balance ?? 0 }}</td>
+                <td class="dim mono">{{ u.last_login_at ? fmtUserTime(u.last_login_at) : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
     </div>
 
     <!-- AI Config Dialog -->
@@ -294,7 +455,7 @@
         </div>
         <label class="field">
           <span class="field-label">配置名称</span>
-          <input v-model="cfgForm.name" class="input" placeholder="如 火宝默认图像服务" />
+          <input v-model="cfgForm.name" class="input" placeholder="如 红果默认图像服务" />
         </label>
         <label class="field"><span class="field-label">服务商</span>
           <BaseSelect v-model="cfgForm.provider" :options="providerSelectOptions" placeholder="选择服务商" searchable />
@@ -304,13 +465,30 @@
           <input v-model.number="cfgForm.priority" class="input" type="number" min="0" max="999" />
           <span class="field-hint">数值越高越优先。工作台默认会优先使用同类型里优先级最高的启用配置。</span>
         </label>
-        <label class="field"><span class="field-label">API Key</span><input v-model="cfgForm.api_key" class="input" type="password" placeholder="sk-..." /></label>
+        <label class="field">
+          <span class="field-label">API Key</span>
+          <input v-model="cfgForm.api_key" class="input" type="password" :placeholder="cfgForm.provider?.startsWith('ali') ? 'sk-...（百炼控制台 API Key）' : 'sk-...'" />
+          <span v-if="aliProviderHint" class="field-hint">{{ aliProviderHint }} · <a href="https://help.aliyun.com/zh/model-studio/get-api-key" target="_blank" rel="noopener">获取 API Key</a> · <a href="https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope" target="_blank" rel="noopener">OpenAI 兼容说明</a></span>
+          <span v-if="chengmengProviderHint" class="field-hint">{{ chengmengProviderHint }} · <a href="https://chengmeng.site/docu" target="_blank" rel="noopener">API 文档</a></span>
+        </label>
         <label class="field"><span class="field-label">Base URL</span><input v-model="cfgForm.base_url" class="input" placeholder="https://..." /></label>
         <div class="endpoint-hint">
           <span class="dim">实际端点前缀：</span>
           <span class="mono">{{ endpointHint }}</span>
         </div>
-        <label class="field"><span class="field-label">模型（逗号分隔）</span><input v-model="cfgForm.modelStr" class="input" placeholder="model-name" /></label>
+        <label class="field">
+          <span class="field-label">模型（逗号分隔）</span>
+          <input v-model="cfgForm.modelStr" class="input" :placeholder="modelInputPlaceholder" />
+          <span v-if="modelFieldHint" class="field-hint">
+            {{ modelFieldHint.summary }}
+            <template v-if="modelFieldHint.docUrl">
+              · <a :href="modelFieldHint.docUrl" target="_blank" rel="noopener">{{ modelFieldHint.docLabel }}</a>
+            </template>
+            <template v-if="modelFieldHint.extraUrl">
+              · <a :href="modelFieldHint.extraUrl" target="_blank" rel="noopener">{{ modelFieldHint.extraLabel }}</a>
+            </template>
+          </span>
+        </label>
         <div v-if="cfgTestResult" class="test-result" :class="{ ok: cfgTestResult.reachable, bad: !cfgTestResult.reachable }">
           <div class="test-result-head">
             <span class="tag" :class="cfgTestResult.reachable ? 'tag-success' : 'tag-error'">{{ cfgTestResult.status || 'ERROR' }}</span>
@@ -330,26 +508,26 @@
       </form>
     </div>
 
-    <!-- Huobao Preset Dialog -->
+    <!-- Hongguo Preset Dialog -->
     <div v-if="presetDialog" class="overlay" @click.self="presetDialog = false">
       <form class="modal card config-modal" @submit.prevent="applyHuobaoPreset">
         <div class="config-modal-head">
           <div>
-            <div class="setup-kicker">Huobao Preset</div>
-            <h2 class="modal-title">火宝一键配置</h2>
-            <div class="modal-note">按火宝推荐链路自动创建或更新 4 条服务配置，并同时初始化 5 个 Agent 的默认模型。</div>
+            <div class="setup-kicker">Hongguo Preset</div>
+            <h2 class="modal-title">红果一键配置</h2>
+            <div class="modal-note">按红果推荐链路自动创建或更新 4 条服务配置，并同时初始化 5 个 Agent 的默认模型。</div>
           </div>
           <span class="tag tag-success">推荐</span>
         </div>
         <div class="huobao-grid">
           <label class="field">
-            <span class="field-label">Huobao API Key <span class="dim">(统一用于文本 / 图片 / 视频 / 音频)</span></span>
+            <span class="field-label">API Key <span class="dim">(统一用于文本 / 图片 / 视频 / 音频)</span></span>
             <input v-model="huobaoForm.apiKey" class="input" type="password" placeholder="用于 api.chatfire.site 全链路服务" />
             <span class="field-hint">还没有账号？<a href="https://api.chatfire.site/" target="_blank" rel="noopener">立即注册 →</a></span>
           </label>
         </div>
         <div class="preset-grid compact">
-          <article v-for="preset in huobaoPresetCards" :key="`${preset.serviceType}-${preset.provider}`" class="preset-card">
+          <article v-for="preset in huobaoPresetCards" :key="`${preset.serviceType}-${preset.model}`" class="preset-card">
             <div class="preset-card-top">
               <span class="preset-service">{{ preset.label }}</span>
               <span class="tag tag-accent">{{ preset.provider }}</span>
@@ -391,24 +569,39 @@
 </template>
 
 <script setup>
-import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, Users, Coins, Building2 } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, agentConfigAPI, skillsAPI } from '~/composables/useApi'
+import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
 
+const { isAdmin, user } = useAuth()
+const { activeTeam, activeTeamId, canManageTeam, refreshTeams, selectTeam } = useTeam()
 const showBrandImage = ref(true)
 const tab = ref('ai')
 const showAdvanced = ref(false)
-const baseTabs = [
-  { id: 'ai', label: 'AI 服务', icon: Cpu },
-]
+watch([isAdmin, canManageTeam], () => {
+  if (!isAdmin.value && canManageTeam.value) tab.value = 'team'
+}, { immediate: true })
+const baseTabs = computed(() => {
+  const tabs = [
+    { id: 'ai', label: 'AI 服务', icon: Cpu },
+    { id: 'team', label: '团队', icon: Building2 },
+  ]
+  if (isAdmin.value) {
+    tabs.push({ id: 'credits', label: '积分', icon: Coins })
+    tabs.push({ id: 'users', label: '用户', icon: Users })
+  }
+  return tabs
+})
+const canManageMembers = computed(() => canManageTeam.value || isAdmin.value)
+const canRenameTeam = computed(() => canManageMembers.value)
 const advancedTabs = [
   { id: 'agents', label: 'Agent 配置', icon: Bot },
   { id: 'skills', label: 'Skills', icon: FileText },
 ]
 watch(showAdvanced, (v) => {
-  if (!v && tab.value !== 'ai') tab.value = 'ai'
+  if (!v && tab.value !== 'ai' && tab.value !== 'team') tab.value = 'ai'
 })
 
 // ===== AI Service Configs =====
@@ -421,8 +614,23 @@ const cfgTestResult = ref(null)
 const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0 })
 const huobaoForm = reactive({ apiKey: '' })
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
-const providers = ['ali', 'chatfire', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine']
-const providerSelectOptions = computed(() => providers.map(p => ({ label: p, value: p })))
+const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'geeknow', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
+const providerLabels = {
+  ali: '阿里百炼（北京）',
+  'ali-intl': '阿里百炼（新加坡）',
+  'ali-us': '阿里百炼（美国）',
+  chatfire: 'ChatFire',
+  chengmeng: '橙盟 Seedance 2.0 9图过人脸',
+  geeknow: 'GeekNow (NewAPI)',
+  gemini: 'Gemini',
+  minimax: 'MiniMax',
+  openai: 'OpenAI',
+  openrouter: 'OpenRouter',
+  vidu: 'Vidu',
+  volcengine: '火山方舟',
+  volcengine_proxy: '火山代理',
+}
+const providerSelectOptions = computed(() => providers.map(p => ({ label: providerLabels[p] || p, value: p })))
 const serviceMeta = {
   text: { label: '文本', desc: '剧本改写、角色场景提取、分镜拆解等 Agent 文本能力' },
   image: { label: '图片', desc: '角色图、场景图、镜头图与首尾帧等静态图像生成' },
@@ -431,47 +639,213 @@ const serviceMeta = {
 }
 const providerPresets = {
   text: {
+    ali: {
+      label: '阿里百炼·北京',
+      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
+      hint: 'API Key 在百炼控制台创建，需与北京地域一致',
+    },
+    'ali-intl': {
+      label: '阿里百炼·新加坡',
+      baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
+      hint: '国际站 API Key，与新加坡地域 Base URL 配套使用',
+    },
+    'ali-us': {
+      label: '阿里百炼·美国',
+      baseUrl: 'https://dashscope-us.aliyuncs.com/compatible-mode/v1',
+      models: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
+      hint: '美国（弗吉尼亚）地域 API Key 与 Base URL 需一致',
+    },
     chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['gemini-3-pro-preview'] },
     openrouter: { label: 'OpenRouter 推荐', baseUrl: 'https://openrouter.ai/api', models: ['google/gemini-3-flash-preview'] },
     openai: { label: 'OpenAI 推荐', baseUrl: 'https://api.openai.com', models: ['gpt-4.1-mini'] },
   },
   image: {
+    geeknow: {
+      label: 'GeekNow',
+      baseUrl: 'https://geek.closeai.icu',
+      models: ['gpt-image-2'],
+      hint: 'NewAPI 网关，OpenAI 兼容；Base URL 填站点根地址（勿重复 /v1），默认模型 gpt-image-2',
+    },
     chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['doubao-seedream-4-5-251128'] },
+    openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com', models: ['dall-e-3', 'gpt-image-1'] },
     gemini: { label: 'Gemini 推荐', baseUrl: 'https://api.chatfire.site', models: ['gemini-3-pro-image-preview'] },
     volcengine: { label: '火山推荐', baseUrl: 'https://ark.cn-beijing.volces.com', models: ['doubao-seedream-4-0-250828'] },
   },
   video: {
-    volcengine: { label: '火宝视频', baseUrl: 'https://api.chatfire.site/volcengine', models: ['doubao-seedance-1-5-pro-251215'] },
+    volcengine: {
+      label: '火山方舟 Seedance',
+      baseUrl: 'https://ark.cn-beijing.volces.com',
+      models: [
+        'doubao-seedance-2-0-260128',
+        'doubao-seedance-2-0-fast-260128',
+        'doubao-seedance-1-5-pro-251215',
+      ],
+      hint: '官方 Ark；2.0 / 2.0 Fast 时长 4–15 秒。文档：火山方舟「创建视频生成任务 API」',
+    },
+    volcengine_proxy: {
+      label: 'ChatFire 火山代理',
+      baseUrl: 'https://api.chatfire.site/volcengine',
+      models: ['doubao-seedance-1-5-pro-251215', 'doubao-seedance-2-0-260128', 'doubao-seedance-2-0-fast-260128'],
+      hint: '第三方代理，是否支持 2.0 以网关为准',
+    },
+    chengmeng: {
+      label: '橙盟 Seedance 2.0 9图过人脸',
+      baseUrl: 'https://api.chengmeng.site',
+      models: ['31', '15'],
+      hint: 'Base URL 填 https://api.chengmeng.site；model_id=31, group_id=15；勿用 cpolar 临时隧道',
+      defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
+    },
     vidu: { label: 'Vidu 推荐', baseUrl: 'https://api.vidu.com', models: ['viduq3-turbo'] },
     ali: { label: '阿里推荐', baseUrl: 'https://dashscope.aliyuncs.com', models: ['wan2.6-i2v-flash'] },
   },
   audio: {
-    minimax: { label: '火宝音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
+    minimax: { label: '红果音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
   },
 }
 const huobaoPresetCards = [
   { serviceType: 'text', label: '文本', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 100 },
   { serviceType: 'image', label: '图片', provider: 'gemini', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
-  { serviceType: 'video', label: '视频', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
+  { serviceType: 'video', label: '视频 · Seedance 2.0', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-2-0-260128', priority: 100 },
+  { serviceType: 'video', label: '视频 · Seedance 2.0 Fast', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-2-0-fast-260128', priority: 99 },
+  { serviceType: 'video', label: '视频 · Seedance 1.5 Pro', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
   { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
 ]
 const endpointPrefixes = {
   chatfire: '/v1',
+  geeknow: '/v1',
   openai: '/v1',
   openrouter: '/v1',
   minimax: '/v1',
   gemini: '/v1beta',
   volcengine: '/api/v3',
-  ali: '/api/v1',
+  volcengine_proxy: '/api/v3',
+  ali: '/compatible-mode/v1',
+  'ali-intl': '/compatible-mode/v1',
+  'ali-us': '/compatible-mode/v1',
   vidu: '/ent/v2',
+  chengmeng: '/api',
 }
 
 const endpointHint = computed(() => {
   const provider = cfgForm.provider
-  const base = cfgForm.base_url || 'https://...'
-  const prefix = endpointPrefixes[provider] || ''
+  const base = (cfgForm.base_url || 'https://...').replace(/\/+$/, '')
   if (!provider) return '选择服务商后显示推荐端点前缀'
+  if (provider.startsWith('ali') && base.includes('/compatible-mode')) {
+    return `${base}/chat/completions`
+  }
+  const prefix = endpointPrefixes[provider] || ''
   return `${base}${prefix}`
+})
+
+const aliProviderHint = computed(() => {
+  if (!cfgForm.provider?.startsWith('ali') || cfgForm.service_type !== 'text') return ''
+  return providerPresets.text[cfgForm.provider]?.hint || ''
+})
+
+const chengmengProviderHint = computed(() => {
+  if (cfgForm.provider !== 'chengmeng' || cfgForm.service_type !== 'video') return ''
+  return providerPresets.video.chengmeng?.hint || ''
+})
+
+const aliTextModelHint = {
+  summary: '常用：qwen-plus（均衡推荐）、qwen-max（更强）、qwen-flash / qwen-turbo（更快更省）。Agent 工具调用建议 qwen-plus 或 qwen-max；列表第一个为默认模型。',
+  docLabel: 'OpenAI 兼容模型列表',
+  docUrl: 'https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope',
+  extraLabel: '模型总览',
+  extraUrl: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
+}
+
+const modelFieldHints = {
+  text: {
+    ali: aliTextModelHint,
+    'ali-intl': aliTextModelHint,
+    'ali-us': aliTextModelHint,
+    chatfire: {
+      summary: '填写 ChatFire 提供的模型 ID，逗号分隔；第一个为默认。模板示例：gemini-3-pro-preview。',
+      docLabel: 'ChatFire 文档',
+      docUrl: 'https://api.chatfire.site/',
+    },
+    openrouter: {
+      summary: '格式为 OpenRouter 模型名，如 google/gemini-3-flash-preview。完整列表见 OpenRouter Models 页。',
+      docLabel: 'OpenRouter 模型列表',
+      docUrl: 'https://openrouter.ai/models',
+    },
+    openai: {
+      summary: '填写 OpenAI 模型 ID，如 gpt-4.1-mini、gpt-4o。以 OpenAI 官方文档为准。',
+      docLabel: 'OpenAI 模型文档',
+      docUrl: 'https://platform.openai.com/docs/models',
+    },
+    default: {
+      summary: '多个模型用英文逗号分隔；同配置中第一个为默认，Agent 可在高级配置里覆盖。',
+    },
+  },
+  image: {
+    geeknow: {
+      summary: '默认模型 gpt-image-2；多个模型用逗号分隔，第一个为默认。图片尺寸请在各剧集工作台顶部设置。',
+      docLabel: 'GeekNow 控制台',
+      docUrl: 'https://geek.closeai.icu/',
+    },
+    openai: {
+      summary: 'OpenAI 图像模型，如 dall-e-3、gpt-image-1；逗号分隔，第一个为默认。',
+      docLabel: 'OpenAI 图像 API',
+      docUrl: 'https://platform.openai.com/docs/api-reference/images',
+    },
+    ali: {
+      summary: '视频/图像类 DashScope 模型，如 wan2.6-i2v-flash；与文本兼容接口模型不同，以百炼模型广场为准。',
+      docLabel: '模型总览',
+      docUrl: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
+    },
+    default: {
+      summary: '填写该图像服务商支持的模型 ID，逗号分隔；第一个为默认。',
+    },
+  },
+  video: {
+    volcengine: {
+      summary: 'Seedance 2.0：doubao-seedance-2-0-260128；2.0 Fast：doubao-seedance-2-0-fast-260128；1.5 Pro：doubao-seedance-1-5-pro-251215。逗号分隔，第一个为默认。',
+      docLabel: '火山方舟 · 创建视频生成任务 API',
+      docUrl: 'https://www.volcengine.com/docs/82379/1520757?lang=zh',
+    },
+    volcengine_proxy: {
+      summary: 'ChatFire 等代理网关；模型 ID 与官方一致，Base URL 填代理地址。',
+      docLabel: '火山方舟 · 创建视频生成任务 API',
+      docUrl: 'https://www.volcengine.com/docs/82379/1520757?lang=zh',
+    },
+    chengmeng: {
+      summary: '填写 model_id 与 group_id（默认 31, 15）。15 秒/条，8 元/条 = 800 积分/条；prompt 自动补 @图片1；参考图需公网 URL',
+      docLabel: '橙盟 Seedance API 文档',
+      docUrl: 'https://chengmeng.site/docu',
+    },
+    ali: {
+      summary: '常用：wan2.6-i2v-flash 等图生视频模型；需在百炼开通对应模型。',
+      docLabel: '模型总览',
+      docUrl: 'https://help.aliyun.com/zh/model-studio/getting-started/models',
+    },
+    default: {
+      summary: '填写视频生成模型 ID，逗号分隔；第一个为默认。',
+    },
+  },
+  audio: {
+    default: {
+      summary: '填写语音合成模型 ID，如 speech-2.8-hd；逗号分隔，第一个为默认。',
+    },
+  },
+}
+
+const modelFieldHint = computed(() => {
+  const group = modelFieldHints[cfgForm.service_type]
+  if (!group) return null
+  const provider = cfgForm.provider
+  if (provider?.startsWith('ali') && cfgForm.service_type === 'text') return group.ali
+  return group[provider] || group.default || null
+})
+
+const modelInputPlaceholder = computed(() => {
+  const preset = providerPresets[cfgForm.service_type]?.[cfgForm.provider]
+  if (cfgForm.provider === 'chengmeng') return '31, 15（model_id, group_id）'
+  if (preset?.models?.length) return preset.models.join(', ')
+  return 'model-name'
 })
 
 function byType(t) { return cfgs.value.filter(c => c.service_type === t) }
@@ -488,6 +862,7 @@ function applyProviderPreset(type, provider) {
   cfgForm.base_url = preset.baseUrl
   cfgForm.modelStr = preset.models.join(', ')
   cfgForm.name = `${preset.label}-${serviceMeta[type].label}`
+  if (preset.defaultApiKey) cfgForm.api_key = preset.defaultApiKey
 }
 
 async function loadCfgs() { try { cfgs.value = await aiConfigAPI.list() } catch (e) { toast.error(e.message) } }
@@ -557,7 +932,7 @@ async function saveCfg() {
 }
 async function applyHuobaoPreset() {
   if (!huobaoForm.apiKey) {
-    toast.warning('请填写 Huobao API Key')
+    toast.warning('请填写 API Key')
     return
   }
   try {
@@ -565,7 +940,7 @@ async function applyHuobaoPreset() {
     await loadCfgs()
     await loadAgents()
     presetDialog.value = false
-    toast.success('火宝推荐配置与默认 Agent LLM 已写入')
+    toast.success('红果推荐配置与默认 Agent LLM 已写入')
   } catch (e) {
     toast.error(e.message)
   }
@@ -835,10 +1210,255 @@ async function saveSkill(id) {
   }
 }
 
-onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills() })
+// ===== Credits =====
+const creditPricing = ref([])
+const grantForm = reactive({ user_id: null, amount: 1000, summary: '' })
+
+async function loadCreditPricing() {
+  try {
+    const res = await creditsAPI.pricing()
+    creditPricing.value = res.items || []
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function savePricing(item) {
+  try {
+    await creditsAPI.updatePricing(item.action, {
+      cost: Number(item.cost) || 0,
+      label: item.label,
+      description: item.description,
+    })
+    toast.success(`已更新：${item.label}`)
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function grantCredits() {
+  if (!grantForm.user_id || !grantForm.amount) return
+  try {
+    await creditsAPI.grant({
+      user_id: grantForm.user_id,
+      amount: grantForm.amount,
+      summary: grantForm.summary.trim() || undefined,
+    })
+    toast.success('充值成功')
+    grantForm.amount = 1000
+    grantForm.summary = ''
+    await loadTeamUsers()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+watch(tab, (value) => {
+  if (value === 'credits' && isAdmin.value) {
+    loadCreditPricing()
+    loadTeamUsers()
+  }
+  if (value === 'team') {
+    syncRenameForm()
+    if (canManageMembers.value) loadTeamMembers()
+  }
+})
+
+// ===== Team =====
+const newTeamName = ref('')
+const renameTeamName = ref('')
+const creatingTeam = ref(false)
+const renamingTeam = ref(false)
+
+function syncRenameForm() {
+  renameTeamName.value = activeTeam.value?.name || ''
+}
+
+watch(activeTeam, () => syncRenameForm())
+
+async function createTeam() {
+  const name = newTeamName.value.trim()
+  if (!name) return
+  try {
+    creatingTeam.value = true
+    const team = await teamsAPI.create(name)
+    await refreshTeams()
+    selectTeam(team.id)
+    newTeamName.value = ''
+    syncRenameForm()
+    if (canManageMembers.value) await loadTeamMembers()
+    toast.success(`团队「${team.name}」已创建`)
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    creatingTeam.value = false
+  }
+}
+
+async function renameTeam() {
+  if (!activeTeamId.value) return
+  const name = renameTeamName.value.trim()
+  if (!name || name === activeTeam.value?.name) return
+  try {
+    renamingTeam.value = true
+    await teamsAPI.update(activeTeamId.value, { name })
+    await refreshTeams()
+    toast.success('团队名称已更新')
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    renamingTeam.value = false
+  }
+}
+
+// ===== Team members =====
+const teamMembers = ref([])
+const memberForm = reactive({ username: '', role: 'member' })
+
+function teamRoleLabel(role) {
+  if (role === 'owner') return '所有者'
+  if (role === 'admin') return '管理员'
+  return '成员'
+}
+
+function canEditMember(m) {
+  if (isAdmin.value) return m.role !== 'owner' || m.user_id === user.value?.id
+  return canManageTeam.value && m.role !== 'owner'
+}
+
+function canRemoveMember(m) {
+  if (m.user_id === user.value?.id) return false
+  if (m.role === 'owner') return false
+  return canManageTeam.value || isAdmin.value
+}
+
+async function loadTeamMembers() {
+  if (!activeTeamId.value) return
+  try {
+    const res = await teamsAPI.members(activeTeamId.value)
+    teamMembers.value = res.items || []
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function addTeamMember() {
+  if (!activeTeamId.value) return
+  try {
+    await teamsAPI.addMember(activeTeamId.value, {
+      username: memberForm.username.trim(),
+      role: memberForm.role,
+    })
+    toast.success('成员已添加')
+    memberForm.username = ''
+    memberForm.role = 'member'
+    loadTeamMembers()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function updateMemberRole(m, e) {
+  if (!activeTeamId.value) return
+  const role = e.target.value
+  try {
+    await teamsAPI.updateMember(activeTeamId.value, m.user_id, role)
+    m.role = role
+    toast.success('角色已更新')
+  } catch (err) {
+    toast.error(err.message)
+    loadTeamMembers()
+  }
+}
+
+async function removeMember(m) {
+  if (!activeTeamId.value) return
+  if (!confirm(`确定将 ${m.username} 移出团队？`)) return
+  try {
+    await teamsAPI.removeMember(activeTeamId.value, m.user_id)
+    toast.success('已移除成员')
+    loadTeamMembers()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+// ===== Users =====
+const teamUsers = ref([])
+const userForm = reactive({ username: '', password: '', display_name: '', role: 'user' })
+
+function fmtUserTime(s) {
+  return new Date(s).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+async function loadTeamUsers() {
+  try {
+    const res = await usersAPI.list()
+    teamUsers.value = res.items || []
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function createTeamUser() {
+  try {
+    await usersAPI.create({
+      username: userForm.username.trim(),
+      password: userForm.password,
+      display_name: userForm.display_name.trim() || userForm.username.trim(),
+      role: userForm.role,
+    })
+    toast.success('用户已创建')
+    userForm.username = ''
+    userForm.password = ''
+    userForm.display_name = ''
+    userForm.role = 'user'
+    loadTeamUsers()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+onMounted(() => {
+  loadCfgs()
+  loadAgents()
+  loadAllSkills()
+  if (isAdmin.value) loadTeamUsers()
+})
 </script>
 
 <style scoped>
+.user-create-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto auto;
+  gap: 10px;
+  margin-top: 12px;
+}
+.team-member-form {
+  grid-template-columns: 1fr 160px auto;
+}
+.team-name-form {
+  grid-template-columns: 1fr auto;
+  max-width: 480px;
+}
+@media (max-width: 900px) {
+  .user-create-form { grid-template-columns: 1fr 1fr; }
+  .team-member-form { grid-template-columns: 1fr; }
+  .team-name-form { grid-template-columns: 1fr; max-width: none; }
+}
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+.user-table th, .user-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.user-table th { color: var(--text-3); font-size: 12px; font-weight: 500; }
+
 .settings-layout { display: flex; height: 100%; background: var(--bg-base); }
 
 .settings-nav {
@@ -1167,6 +1787,14 @@ onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills() })
   font-weight: 500;
 }
 .huobao-grid .field-hint a:hover {
+  text-decoration: underline;
+}
+.field-hint a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.field-hint a:hover {
   text-decoration: underline;
 }
 

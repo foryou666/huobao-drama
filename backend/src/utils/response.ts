@@ -16,6 +16,18 @@ export function notFound(c: Context, message = 'not found') {
   return c.json({ code: 404, message }, 404)
 }
 
+export function unauthorized(c: Context, message = 'unauthorized') {
+  return c.json({ code: 401, message }, 401)
+}
+
+export function forbidden(c: Context, message = 'forbidden') {
+  return c.json({ code: 403, message }, 403)
+}
+
+export function paymentRequired(c: Context, message = 'insufficient credits', data: Record<string, unknown> = {}) {
+  return c.json({ code: 402, message, data }, 402)
+}
+
 export function serverError(c: Context, message = 'internal error') {
   return c.json({ code: 500, message }, 500)
 }

@@ -6,38 +6,109 @@ import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
+import { resolveGenerationImageSize } from '../utils/image-size.js'
+import { appendCharacterImageVariant, appendCharacterOutfitVariant, upsertCharacterOutfit } from '../utils/character-image-variants.js'
+import { syncCharacterAsset, syncSceneAsset } from './asset-library.js'
+import { upsertSceneAngleImage } from '../utils/scene-image-variants.js'
+import { formatProviderError } from '../utils/format-provider-error.js'
+import { failImageGeneration } from '../utils/generation-failure.js'
+
+function resolveOutfitLabel(record: typeof schema.imageGenerations.$inferSelect): string {
+  if (record.propId) {
+    const [asset] = db.select().from(schema.assets).where(eq(schema.assets.id, record.propId)).all()
+    if (asset?.name) return asset.name
+  }
+  const fromPrompt = record.prompt?.match(/换装为「(.+?)」/)?.[1]
+    || record.prompt?.match(/「(.+?)」换装/)?.[1]
+  return fromPrompt || record.frameType || '服装'
+}
+
+function shouldUpdateSceneHeroImage(record: typeof schema.imageGenerations.$inferSelect): boolean {
+  if (!record.sceneId) return false
+  if (record.storyboardId) return false
+  if (record.imageType === 'scene_angle' || record.imageType === 'scene_angle_sheet') return false
+  return true
+}
+
+function applySceneImageCompletion(record: typeof schema.imageGenerations.$inferSelect, localPath: string) {
+  if (!record.sceneId) return
+  if ((record.imageType === 'scene_angle' || record.imageType === 'scene_angle_sheet') && record.frameType) {
+    upsertSceneAngleImage(record.sceneId, record.frameType, localPath)
+    syncSceneAsset(record.sceneId)
+    return
+  }
+  if (!shouldUpdateSceneHeroImage(record)) return
+  db.update(schema.scenes)
+    .set({ imageUrl: localPath, status: 'completed', updatedAt: now() })
+    .where(eq(schema.scenes.id, record.sceneId))
+    .run()
+  syncSceneAsset(record.sceneId)
+}
+
+function applyCharacterImageCompletion(record: typeof schema.imageGenerations.$inferSelect, localPath: string) {
+  if (!record.characterId) return
+  if (record.imageType === 'character_outfit_variant' && record.frameType && record.style) {
+    appendCharacterOutfitVariant(record.characterId, record.frameType, localPath, record.style)
+  } else if (record.imageType === 'character_outfit' && record.frameType) {
+    upsertCharacterOutfit(record.characterId, {
+      outfitId: record.frameType,
+      label: resolveOutfitLabel(record),
+      url: localPath,
+      costumeAssetId: record.propId ?? null,
+    })
+  } else if (record.imageType === 'character_variant') {
+    appendCharacterImageVariant(record.characterId, localPath, record.style || null)
+  } else {
+    db.update(schema.characters).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.characters.id, record.characterId)).run()
+  }
+  syncCharacterAsset(record.characterId)
+}
 
 interface GenerateImageParams {
   storyboardId?: number
   dramaId?: number
   sceneId?: number
   characterId?: number
+  propId?: number
   prompt: string
   model?: string
   size?: string
   referenceImages?: string[]
   frameType?: string
+  imageType?: string
+  variantId?: string
   configId?: number
+  creditTransactionId?: number
 }
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId)
-    : getActiveConfig('image')
+  const config = (params.configId ? getConfigById(params.configId) : null)
+    || getActiveConfig('image')
   if (!config) throw new Error('No active image AI config')
+
+  const size = await resolveGenerationImageSize({
+    explicitSize: params.size,
+    dramaId: params.dramaId,
+    referenceImages: params.referenceImages,
+    imageType: params.imageType,
+  })
 
   const res = db.insert(schema.imageGenerations).values({
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     sceneId: params.sceneId,
     characterId: params.characterId,
+    propId: params.propId,
     prompt: params.prompt,
     model: params.model || config.model,
     provider: config.provider,
-    size: params.size || '1920x1080',
+    size,
     frameType: params.frameType,
+    imageType: params.imageType,
+    style: params.variantId,
     referenceImages: params.referenceImages ? JSON.stringify(params.referenceImages) : null,
+    creditTransactionId: params.creditTransactionId ?? null,
     status: 'processing',
     createdAt: ts,
     updatedAt: ts,
@@ -101,19 +172,23 @@ async function processImageGeneration(id: number, config: AIConfig) {
       method,
       url: redactUrl(url),
       model: record.model,
+      referenceCount: resolvedReferenceImages.length,
     })
     logTaskPayload('ImageTask', 'request payload', {
       id,
       method,
       url,
       headers,
-      body,
+      body: body instanceof FormData ? '[FormData]' : body,
     })
 
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
     const resp = await fetch(url, {
       method,
-      headers,
-      body: JSON.stringify(body),
+      headers: isFormData
+        ? { Authorization: headers.Authorization || headers.authorization || '' }
+        : headers,
+      body: isFormData ? body : JSON.stringify(body),
       signal: AbortSignal.timeout(600_000),
     })
 
@@ -154,10 +229,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
     pollImageTask(id, config, taskId!)
   } catch (err: any) {
     logTaskError('ImageTask', 'process', { id, provider: config.provider, error: err.message })
-    db.update(schema.imageGenerations)
-      .set({ status: 'failed', errorMsg: err.message, updatedAt: now() })
-      .where(eq(schema.imageGenerations.id, id))
-      .run()
+    failImageGeneration(id, formatProviderError(err.message))
   }
 }
 
@@ -207,19 +279,13 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
   for (let i = 0; i < 120; i++) {
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
+      failImageGeneration(id, 'Timeout: Polling exceeded 10 minutes')
       return
     }
     await new Promise(r => setTimeout(r, 5000))
     if (Date.now() - startedAt >= maxDurationMs) {
       logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      db.update(schema.imageGenerations)
-        .set({ status: 'failed', errorMsg: 'Timeout: Polling exceeded 10 minutes', updatedAt: now() })
-        .where(eq(schema.imageGenerations.id, id))
-        .run()
+      failImageGeneration(id, 'Timeout: Polling exceeded 10 minutes')
       return
     }
     try {
@@ -258,16 +324,15 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
         }
       }
       if (pollResp.status === 'failed') {
-        logTaskError('ImageTask', 'poll-failed', { id, taskId, error: pollResp.error || 'Generation failed' })
-        throw new Error(pollResp.error || 'Generation failed')
+        const errMsg = pollResp.error || 'Generation failed'
+        logTaskError('ImageTask', 'poll-failed', { id, taskId, error: errMsg })
+        failImageGeneration(id, errMsg)
+        return
       }
     } catch (err: any) {
       if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
         logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: err.message })
-        db.update(schema.imageGenerations)
-          .set({ status: 'failed', errorMsg: `Timeout: ${err.message}`, updatedAt: now() })
-          .where(eq(schema.imageGenerations.id, id))
-          .run()
+        failImageGeneration(id, `Timeout: ${err.message}`)
         return
       }
       logTaskWarn('ImageTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
@@ -291,15 +356,12 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
     const sbUpdate: Record<string, any> = { updatedAt: now() }
     if (record.frameType === 'first_frame') sbUpdate.firstFrameImage = localPath
     else if (record.frameType === 'last_frame') sbUpdate.lastFrameImage = localPath
+    else if (record.frameType === 'blocking') sbUpdate.blockingImage = localPath
     else sbUpdate.composedImage = localPath
     db.update(schema.storyboards).set(sbUpdate).where(eq(schema.storyboards.id, record.storyboardId)).run()
   }
-  if (record?.characterId) {
-    db.update(schema.characters).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.characters.id, record.characterId)).run()
-  }
-  if (record?.sceneId) {
-    db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
-  }
+  if (record?.characterId) applyCharacterImageCompletion(record, localPath)
+  applySceneImageCompletion(record, localPath)
 }
 
 async function handleImageCompleteBase64(id: number, provider: string, base64Data: string, mimeType: string) {
@@ -318,13 +380,10 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
     const sbUpdate: Record<string, any> = { updatedAt: now() }
     if (record.frameType === 'first_frame') sbUpdate.firstFrameImage = localPath
     else if (record.frameType === 'last_frame') sbUpdate.lastFrameImage = localPath
+    else if (record.frameType === 'blocking') sbUpdate.blockingImage = localPath
     else sbUpdate.composedImage = localPath
     db.update(schema.storyboards).set(sbUpdate).where(eq(schema.storyboards.id, record.storyboardId)).run()
   }
-  if (record?.characterId) {
-    db.update(schema.characters).set({ imageUrl: localPath, updatedAt: now() }).where(eq(schema.characters.id, record.characterId)).run()
-  }
-  if (record?.sceneId) {
-    db.update(schema.scenes).set({ imageUrl: localPath, status: 'completed', updatedAt: now() }).where(eq(schema.scenes.id, record.sceneId)).run()
-  }
+  if (record?.characterId) applyCharacterImageCompletion(record, localPath)
+  applySceneImageCompletion(record, localPath)
 }

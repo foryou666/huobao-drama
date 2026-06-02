@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest } from '../utils/response.js'
 import { downloadFile } from '../utils/storage.js'
-import { ViduVideoAdapter } from '../services/adapters/vidu-video'
+import { failVideoGeneration } from '../utils/generation-failure.js'
 import { logTaskError, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 
 const app = new Hono()
@@ -72,23 +72,15 @@ app.post('/vidu', async (c) => {
       return success(c, { message: 'Video updated successfully' })
     } catch (err: any) {
       logTaskError('Webhook', 'vidu-download-failed', { taskId: task_id, generationId: record.id, error: err.message })
-      db.update(schema.videoGenerations)
-        .set({ status: 'failed', errorMsg: `Webhook download failed: ${err.message}` })
-        .where(eq(schema.videoGenerations.id, record.id))
-        .run()
+      failVideoGeneration(record.id, `Webhook download failed: ${err.message}`)
       return badRequest(c, err.message)
     }
   }
 
   if (state === 'failed') {
-    logTaskError('Webhook', 'vidu-generation-failed', { taskId: task_id, generationId: record.id, error: error || 'Vidu generation failed' })
-    db.update(schema.videoGenerations)
-      .set({
-        status: 'failed',
-        errorMsg: error || 'Vidu generation failed',
-      })
-      .where(eq(schema.videoGenerations.id, record.id))
-      .run()
+    const errMsg = error || 'Vidu generation failed'
+    logTaskError('Webhook', 'vidu-generation-failed', { taskId: task_id, generationId: record.id, error: errMsg })
+    failVideoGeneration(record.id, errMsg)
     return success(c, { message: 'Error recorded' })
   }
 

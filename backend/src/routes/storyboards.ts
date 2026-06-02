@@ -5,6 +5,26 @@ import { success, created, now, badRequest } from '../utils/response.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { generateTTS } from '../services/tts-generation.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
+import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { generateImage } from '../services/image-generation.js'
+import { getActiveConfig, getConfigById } from '../services/ai.js'
+import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
+import {
+  buildBlockingImagePrompt,
+  buildFirstFrameFromBlockingPrompt,
+  collectBlockingReferenceImages,
+  collectFrameFromBlockingReferences,
+  resolveBlockingLayout,
+  resolveBlockingShotMode,
+  selectBlockingCharacterImages,
+} from '../utils/blocking-image-prompts.js'
+import { resolveSceneImageForStoryboard } from '../utils/scene-image-variants.js'
+import {
+  parseStoryboardCharacterImageRefs,
+  resolveCharacterImageForStoryboard,
+} from '../utils/character-image-variants.js'
 
 const app = new Hono()
 
@@ -123,11 +143,28 @@ app.put('/:id', async (c) => {
     image_prompt: 'imagePrompt', scene_id: 'sceneId', location: 'location',
     time: 'time', atmosphere: 'atmosphere', result: 'result',
     bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect',
+    reference_images: 'referenceImages',
+    character_image_refs: 'characterImageRefs',
+    blocking_image: 'blockingImage',
+    blocking_layout: 'blockingLayout',
+    scene_angle_id: 'sceneAngleId',
+    first_frame_image: 'firstFrameImage',
+    last_frame_image: 'lastFrameImage',
   }
 
   const updates: Record<string, any> = { updatedAt: now() }
   for (const [snakeKey, camelKey] of Object.entries(fieldMap)) {
-    if (snakeKey in body) updates[camelKey] = body[snakeKey]
+    if (snakeKey in body) {
+      if (snakeKey === 'reference_images' && Array.isArray(body.reference_images)) {
+        updates.referenceImages = JSON.stringify(body.reference_images)
+      } else if (snakeKey === 'character_image_refs' && body.character_image_refs && typeof body.character_image_refs === 'object') {
+        updates.characterImageRefs = JSON.stringify(body.character_image_refs)
+      } else if (snakeKey === 'blocking_layout' && body.blocking_layout && typeof body.blocking_layout === 'object') {
+        updates.blockingLayout = JSON.stringify(body.blocking_layout)
+      } else {
+        updates[camelKey] = body[snakeKey]
+      }
+    }
   }
 
   if ('dialogue' in body) {
@@ -149,6 +186,297 @@ app.put('/:id', async (c) => {
     characterIds: body.character_ids,
   })
   return success(c)
+})
+
+// POST /storyboards/:id/generate-blocking — 3D 预可视化场景站位图
+app.post('/:id/generate-blocking', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  const charIds = getStoryboardCharacterIds(id)
+  if (!charIds.length) return badRequest(c, '请先为镜头绑定至少一名角色')
+
+  const config = (ep.imageConfigId != null ? getConfigById(ep.imageConfigId) : null)
+    || getActiveConfig('image')
+  if (!config) return badRequest(c, 'No active image AI config')
+  if (!supportsImageReference(config.provider, config.model)) {
+    return badRequest(c, `当前图片模型（${config.provider} · ${config.model || 'unknown'}）不支持参考图生图。${imageReferenceSupportHint()}`)
+  }
+
+  const layout = resolveBlockingLayout(
+    body.blocking_layout ? JSON.stringify(body.blocking_layout) : sb.blockingLayout,
+    charIds,
+  )
+
+  const characterImageRefs = parseStoryboardCharacterImageRefs(sb.characterImageRefs)
+  const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
+  const characterImages: string[] = []
+  const characterMeta: Array<{ id: number; name: string; entry: typeof layout.characters[number] }> = []
+
+  for (const entry of layout.characters) {
+    const char = chars.find(row => row.id === entry.character_id)
+    if (!char) continue
+    const image = resolveCharacterImageForStoryboard(char, characterImageRefs)
+    if (!image) {
+      return badRequest(c, `角色「${char.name}」还没有可用参考图，请先生成或上传角色图`)
+    }
+    characterImages.push(image)
+    characterMeta.push({ id: char.id, name: char.name, entry })
+  }
+
+  let sceneImage: string | null = null
+  let sceneLocation = sb.location || ''
+  let sceneTime = sb.time || ''
+  if (sb.sceneId) {
+    const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sb.sceneId)).all()
+    sceneImage = scene ? resolveSceneImageForStoryboard(scene, sb) : null
+    sceneLocation = scene?.location || sceneLocation
+    sceneTime = scene?.time || sceneTime
+    if (!sceneImage) {
+      return badRequest(c, '请先为绑定场景生成场景图，或更换已有场景图的场景')
+    }
+  }
+
+  const shotMode = resolveBlockingShotMode({
+    shotType: sb.shotType,
+    description: sb.description,
+    imagePrompt: sb.imagePrompt,
+    characterCount: characterMeta.length,
+  })
+  const selectedCharacterImages = selectBlockingCharacterImages(
+    characterImages,
+    characterMeta,
+    shotMode,
+    sb.description,
+    sb.imagePrompt,
+  )
+
+  const referenceImages = collectBlockingReferenceImages({
+    sceneImage,
+    characterImages: selectedCharacterImages,
+  })
+  if (!referenceImages.length) {
+    return badRequest(c, '缺少场景或角色参考图，无法生成站位图')
+  }
+
+  const prompt = buildBlockingImagePrompt({
+    title: sb.title,
+    description: sb.description,
+    imagePrompt: sb.imagePrompt,
+    action: sb.action,
+    atmosphere: sb.atmosphere,
+    shotType: sb.shotType,
+    angle: sb.angle,
+    movement: sb.movement,
+    location: sb.location,
+    time: sb.time,
+    sceneLocation,
+    sceneTime,
+    characters: characterMeta,
+    layout,
+    customPrompt: body.prompt,
+    shotMode,
+  })
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.STORYBOARD_BLOCKING, {
+    summary: `场景站位图 #${sb.storyboardNumber}`,
+    episodeId: sb.episodeId,
+    dramaId: ep.dramaId,
+    resourceType: 'storyboard',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
+  try {
+    logTaskStart('StoryboardAPI', 'generate-blocking', {
+      storyboardId: id,
+      episodeId: sb.episodeId,
+      characterCount: charIds.length,
+      provider: config.provider,
+    })
+    const genId = await generateImage({
+      storyboardId: id,
+      dramaId: ep.dramaId,
+      sceneId: sb.sceneId ?? undefined,
+      prompt,
+      referenceImages,
+      frameType: 'blocking',
+      imageType: 'storyboard_blocking',
+      configId: ep.imageConfigId ?? undefined,
+      creditTransactionId: billed.charge.transactionId,
+    })
+
+    if (body.blocking_layout) {
+      db.update(schema.storyboards)
+        .set({ blockingLayout: JSON.stringify(body.blocking_layout), updatedAt: now() })
+        .where(eq(schema.storyboards.id, id))
+        .run()
+    }
+
+    logTaskSuccess('StoryboardAPI', 'generate-blocking', { storyboardId: id, generationId: genId })
+    logActivity(getAuthUser(c), {
+      action: 'storyboard.blocking',
+      summary: `场景站位图 #${sb.storyboardNumber}`,
+      resourceType: 'storyboard',
+      resourceId: id,
+      episodeId: sb.episodeId,
+      dramaId: ep.dramaId,
+      creditCost: billed.charge.cost,
+      metadata: {
+        generation_id: genId,
+        character_count: charIds.length,
+        credit_tx_id: billed.charge.transactionId,
+      },
+    })
+    return success(c, {
+      image_generation_id: genId,
+      blocking_layout: layout,
+      credits_balance: billed.charge.balance,
+    })
+  } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '站位图生成失败退款',
+      episodeId: sb.episodeId,
+      dramaId: ep.dramaId,
+      resourceType: 'storyboard',
+      resourceId: id,
+      metadata: { reason: err.message },
+    })
+    logTaskError('StoryboardAPI', 'generate-blocking', { storyboardId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
+})
+
+// POST /storyboards/:id/generate-frame-from-blocking — 基于站位图生成首帧/尾帧
+app.post('/:id/generate-frame-from-blocking', async (c) => {
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const frameType = body.frame_type === 'last_frame' ? 'last_frame' : 'first_frame'
+  const frameLabel = frameType === 'first_frame' ? '首帧' : '尾帧'
+
+  const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, id)).all()
+  if (!sb) return badRequest(c, '镜头不存在')
+  if (!sb.blockingImage) return badRequest(c, '请先生成场景站位图')
+
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
+  if (!ep) return badRequest(c, 'Episode not found')
+
+  const config = (ep.imageConfigId != null ? getConfigById(ep.imageConfigId) : null)
+    || getActiveConfig('image')
+  if (!config) return badRequest(c, 'No active image AI config')
+  if (!supportsImageReference(config.provider, config.model)) {
+    return badRequest(c, `当前图片模型（${config.provider} · ${config.model || 'unknown'}）不支持参考图生图。${imageReferenceSupportHint()}`)
+  }
+
+  const charIds = getStoryboardCharacterIds(id)
+  const layout = resolveBlockingLayout(sb.blockingLayout, charIds)
+  const characterImageRefs = parseStoryboardCharacterImageRefs(sb.characterImageRefs)
+  const chars = db.select().from(schema.characters).where(eq(schema.characters.dramaId, ep.dramaId)).all()
+  const characterImages: string[] = []
+  const characterMeta: Array<{ name: string; entry: typeof layout.characters[number] }> = []
+
+  for (const entry of layout.characters) {
+    const char = chars.find(row => row.id === entry.character_id)
+    if (!char) continue
+    const image = resolveCharacterImageForStoryboard(char, characterImageRefs)
+    if (image) characterImages.push(image)
+    characterMeta.push({ name: char?.name || '角色', entry })
+  }
+
+  let sceneImage: string | null = null
+  if (sb.sceneId) {
+    const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sb.sceneId)).all()
+    sceneImage = scene ? resolveSceneImageForStoryboard(scene, sb) : null
+  }
+
+  const referenceImages = collectFrameFromBlockingReferences({
+    blockingImage: sb.blockingImage,
+    sceneImage,
+    characterImages,
+  })
+
+  const prompt = buildFirstFrameFromBlockingPrompt({
+    title: sb.title,
+    description: sb.description,
+    imagePrompt: sb.imagePrompt,
+    action: sb.action,
+    atmosphere: sb.atmosphere,
+    shotType: sb.shotType,
+    angle: sb.angle,
+    movement: sb.movement,
+    location: sb.location,
+    time: sb.time,
+    characters: characterMeta,
+    frameType,
+    customPrompt: body.prompt,
+  })
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, {
+    summary: `从站位图生成${frameLabel} #${sb.storyboardNumber}`,
+    episodeId: sb.episodeId,
+    dramaId: ep.dramaId,
+    resourceType: 'storyboard',
+    resourceId: id,
+    metadata: { source: 'blocking', frame_type: frameType },
+  })
+  if (billed.error) return billed.error
+
+  try {
+    logTaskStart('StoryboardAPI', 'generate-frame-from-blocking', {
+      storyboardId: id,
+      frameType,
+      provider: config.provider,
+    })
+    const genId = await generateImage({
+      storyboardId: id,
+      dramaId: ep.dramaId,
+      sceneId: sb.sceneId ?? undefined,
+      prompt,
+      referenceImages,
+      frameType,
+      imageType: 'storyboard_frame_from_blocking',
+      configId: ep.imageConfigId ?? undefined,
+      creditTransactionId: billed.charge.transactionId,
+    })
+
+    logTaskSuccess('StoryboardAPI', 'generate-frame-from-blocking', { storyboardId: id, generationId: genId, frameType })
+    logActivity(getAuthUser(c), {
+      action: 'image.generate',
+      summary: `从站位图生成${frameLabel} #${sb.storyboardNumber}`,
+      resourceType: 'storyboard',
+      resourceId: id,
+      episodeId: sb.episodeId,
+      dramaId: ep.dramaId,
+      creditCost: billed.charge.cost,
+      metadata: {
+        generation_id: genId,
+        frame_type: frameType,
+        source: 'blocking',
+        credit_tx_id: billed.charge.transactionId,
+      },
+    })
+    return success(c, {
+      image_generation_id: genId,
+      frame_type: frameType,
+      credits_balance: billed.charge.balance,
+    })
+  } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: `从站位图生成${frameLabel}失败退款`,
+      episodeId: sb.episodeId,
+      dramaId: ep.dramaId,
+      resourceType: 'storyboard',
+      resourceId: id,
+      metadata: { reason: err.message, frame_type: frameType },
+    })
+    logTaskError('StoryboardAPI', 'generate-frame-from-blocking', { storyboardId: id, error: err.message })
+    return badRequest(c, err.message)
+  }
 })
 
 // POST /storyboards/:id/generate-tts
@@ -187,6 +515,16 @@ app.post('/:id/generate-tts', async (c) => {
   if (!pureDialogue) return badRequest(c, '未提取到可合成的文本')
 
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.STORYBOARD_TTS, {
+    summary: `镜头配音 #${sb.storyboardNumber}`,
+    episodeId: sb.episodeId,
+    dramaId: ep?.dramaId,
+    resourceType: 'storyboard',
+    resourceId: id,
+  })
+  if (billed.error) return billed.error
+
   try {
     const audioPath = await generateTTS({ text: pureDialogue, voice: voiceId, configId: ep?.audioConfigId || null })
   db.update(schema.storyboards)
@@ -200,7 +538,17 @@ app.post('/:id/generate-tts', async (c) => {
       path: audioPath,
       textLength: pureDialogue.length,
     })
-    return success(c, { tts_audio_url: audioPath, voice_id: voiceId, text: pureDialogue })
+    logActivity(getAuthUser(c), {
+      action: 'storyboard.tts',
+      summary: `镜头配音 #${sb.storyboardNumber}`,
+      resourceType: 'storyboard',
+      resourceId: id,
+      episodeId: sb.episodeId,
+      dramaId: ep?.dramaId,
+      creditCost: billed.charge.cost,
+      metadata: { credit_tx_id: billed.charge.transactionId },
+    })
+    return success(c, { tts_audio_url: audioPath, voice_id: voiceId, text: pureDialogue, credits_balance: billed.charge.balance })
   } catch (err: any) {
     logTaskError('StoryboardAPI', 'generate-tts', { storyboardId: id, voiceId, error: err.message })
     return badRequest(c, err.message)

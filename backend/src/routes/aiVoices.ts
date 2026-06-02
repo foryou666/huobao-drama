@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
+import { denyUnlessAdmin } from '../middleware/auth.js'
 
 const app = new Hono()
 
@@ -31,6 +32,8 @@ app.get('/', async (c) => {
 
 // POST /ai-voices/sync
 app.post('/sync', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   // 从数据库获取 minimax 的音频配置
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, 'audio'))

@@ -5,12 +5,12 @@
       <div class="header-left">
         <button class="brand" @click="navigateTo('/')">
           <div class="brand-mark">
-            <img v-if="showBrandImage" :src="brandLogo" alt="火宝短剧" class="brand-logo" @error="showBrandImage = false" />
-            <span v-else class="brand-fallback">火</span>
+            <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="brand-logo" @error="showBrandImage = false" />
+            <span v-else class="brand-fallback">红</span>
           </div>
           <div class="brand-text">
-            <span class="brand-name">火宝短剧</span>
-            <span class="brand-sub">Huobao Shorts</span>
+            <span class="brand-name">红果短剧</span>
+            <span class="brand-sub">Hongguo Shorts</span>
           </div>
         </button>
       </div>
@@ -23,7 +23,20 @@
           </svg>
           <span>项目</span>
         </NuxtLink>
-        <NuxtLink to="/settings" class="nav-link" :class="{ active: route.path === '/settings' }">
+        <NuxtLink to="/assets" class="nav-link" :class="{ active: route.path.startsWith('/assets') }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+            <path d="M3 14h7v7H3z"/><path d="M14 14h7v7h-7z"/>
+          </svg>
+          <span>资产库</span>
+        </NuxtLink>
+        <NuxtLink to="/activity" class="nav-link" :class="{ active: route.path === '/activity' }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+          </svg>
+          <span>工作记录</span>
+        </NuxtLink>
+        <NuxtLink v-if="isAdmin || canManageTeam" to="/settings" class="nav-link" :class="{ active: route.path === '/settings' }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -33,6 +46,34 @@
       </nav>
 
       <div class="header-right">
+        <div v-if="teams.length" class="team-switcher">
+          <div class="team-switcher-block">
+            <div class="team-switcher-row">
+              <label class="team-switcher-label">团队</label>
+              <select
+                class="team-select"
+                :value="activeTeamId ?? ''"
+                @change="onTeamChange"
+              >
+                <option v-for="t in teams" :key="t.id" :value="t.id">
+                  {{ t.name }}（{{ t.member_count }}人）
+                </option>
+              </select>
+            </div>
+            <div v-if="activeTeamMemberNames.length" class="team-member-names" :title="activeTeamMemberNames.join('、')">
+              {{ activeTeamMemberNames.join('、') }}
+            </div>
+          </div>
+        </div>
+        <div v-if="user" class="user-menu">
+          <NuxtLink to="/activity" class="credits-badge" title="查看积分明细">
+            <span class="credits-label">积分</span>
+            <span class="credits-value">{{ creditsBalance }}</span>
+          </NuxtLink>
+          <span class="user-name">{{ user.display_name || user.username }}</span>
+          <span v-if="isAdmin" class="tag tag-accent">管理员</span>
+          <button type="button" class="btn btn-ghost btn-sm" @click="logout">退出</button>
+        </div>
         <div class="film-strip">
           <span class="film-frame"></span>
           <span class="film-frame"></span>
@@ -52,6 +93,26 @@ import brandLogo from '~/assets/huobao-logo.png'
 
 const route = useRoute()
 const showBrandImage = ref(true)
+const { user, isAdmin, init, logout } = useAuth()
+const { teams, activeTeamId, activeTeamMemberNames, selectTeam, canManageTeam, loadActiveTeamMembers } = useTeam()
+
+function onTeamChange(e) {
+  const id = Number(e.target.value)
+  if (!id) return
+  selectTeam(id)
+  if (route.path === '/') window.location.reload()
+  else navigateTo('/')
+}
+
+const creditsBalance = computed(() => {
+  const value = user.value?.credits_balance
+  return Number.isFinite(value) ? value : '—'
+})
+
+onMounted(async () => {
+  await init()
+  await loadActiveTeamMembers()
+})
 </script>
 
 <style scoped>
@@ -134,7 +195,73 @@ const showBrandImage = ref(true)
   font-weight: 600;
 }
 
-.header-right { display: flex; align-items: center; margin-left: auto; }
+.header-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.team-switcher {
+  display: flex;
+  align-items: flex-start;
+}
+.team-switcher-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 220px;
+}
+.team-switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-switcher-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.team-select {
+  min-width: 120px;
+  max-width: 180px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 12px;
+}
+.team-member-names {
+  padding-left: 34px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.credits-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  text-decoration: none;
+  color: inherit;
+}
+.credits-badge:hover { border-color: var(--accent); }
+.credits-label { font-size: 11px; color: var(--text-dim); }
+.credits-value { font-size: 12px; font-weight: 700; color: var(--accent-text); }
+.user-name {
+  font-size: 13px;
+  color: var(--text-2);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Film strip decoration */
 .film-strip {

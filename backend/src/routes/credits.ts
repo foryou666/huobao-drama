@@ -1,0 +1,73 @@
+import { Hono } from 'hono'
+import { success, badRequest } from '../utils/response.js'
+import { requireAuth, requireAdmin, getAuthUser, type AuthVariables } from '../middleware/auth.js'
+import {
+  getUserBalance,
+  grantCredits,
+  listCreditPricing,
+  listCreditTransactions,
+  updateCreditPricing,
+} from '../services/credits.js'
+import { logActivity } from '../services/activity.js'
+import { resolveAuditScope } from '../services/team-audit.js'
+
+const app = new Hono<{ Variables: AuthVariables }>()
+
+app.use('*', requireAuth)
+
+app.get('/balance', (c) => {
+  const user = getAuthUser(c)
+  return success(c, { balance: getUserBalance(user.id) })
+})
+
+app.get('/transactions', (c) => {
+  const user = getAuthUser(c)
+  const all = c.req.query('all') === '1'
+  const team = c.req.query('team') === '1'
+  const teamId = c.req.query('team_id') ? Number(c.req.query('team_id')) : undefined
+  const userIdParam = c.req.query('user_id') ? Number(c.req.query('user_id')) : undefined
+  const limit = Number(c.req.query('limit') || 50)
+  const offset = Number(c.req.query('offset') || 0)
+
+  const resolved = resolveAuditScope(c, user, { all, team, teamId, userId: userIdParam })
+  if (!resolved.ok) return resolved.response
+  const { scope } = resolved
+  const result = listCreditTransactions({ userIds: scope.userIds, limit, offset })
+  return success(c, { ...result, scope: scope.mode, team_id: scope.teamId ?? null })
+})
+
+app.get('/pricing', (c) => success(c, { items: listCreditPricing() }))
+
+app.put('/pricing/:action', requireAdmin, async (c) => {
+  const action = c.req.param('action')
+  const body = await c.req.json()
+  const cost = Number(body.cost)
+  if (!Number.isFinite(cost) || cost < 0) return badRequest(c, 'cost 必须是非负整数')
+  updateCreditPricing(action, cost, body.label, body.description)
+  logActivity(getAuthUser(c), {
+    action: 'credits.pricing.update',
+    summary: `更新积分定价：${action} → ${cost}`,
+    metadata: { action, cost },
+  })
+  return success(c)
+})
+
+app.post('/grant', requireAdmin, async (c) => {
+  const body = await c.req.json()
+  const userId = Number(body.user_id)
+  const amount = Number(body.amount)
+  if (!userId) return badRequest(c, 'user_id is required')
+  const admin = getAuthUser(c)
+  const result = grantCredits(userId, amount, admin.id, body.summary)
+  if (!result.ok) return badRequest(c, result.message || '充值失败')
+  logActivity(admin, {
+    action: 'credits.grant',
+    summary: body.summary || `为用户 #${userId} 充值 ${amount} 积分`,
+    resourceType: 'user',
+    resourceId: userId,
+    metadata: { amount, balance: result.balance },
+  })
+  return success(c, { balance: result.balance, transaction_id: result.transactionId })
+})
+
+export default app

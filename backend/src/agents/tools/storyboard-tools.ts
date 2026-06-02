@@ -8,6 +8,109 @@ import { db, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { isSeedance2Model } from '../../constants/seedance.js'
+import { isChengmengProvider } from '../../constants/chengmeng.js'
+
+function getEpisodeVideoConfig(episodeId: number) {
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep?.videoConfigId) return null
+  const [cfg] = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.id, ep.videoConfigId)).all()
+  return cfg || null
+}
+
+function getEpisodeVideoModel(episodeId: number): string | null {
+  return getEpisodeVideoConfig(episodeId)?.model || null
+}
+
+function isSeedance2EpisodeVideo(episodeId: number): boolean {
+  const cfg = getEpisodeVideoConfig(episodeId)
+  if (!cfg) return false
+  if (isChengmengProvider(cfg.provider)) return true
+  try {
+    const models = cfg.model ? JSON.parse(cfg.model) : []
+    const model = Array.isArray(models) ? models[0] : cfg.model
+    return isSeedance2Model(model)
+  } catch {
+    return isSeedance2Model(cfg.model)
+  }
+}
+
+function getVideoGenerationConstraints(videoModel: string | null, episodeId?: number) {
+  const isSeedance2 = episodeId ? isSeedance2EpisodeVideo(episodeId) : isSeedance2Model(videoModel)
+  if (isSeedance2) {
+    return {
+      provider_hint: 'seedance_2',
+      max_clip_seconds: 15,
+      target_shot_seconds: '12-15',
+      min_shot_seconds: 10,
+      rule: '每条 storyboard 对应一次视频生成；单条最长 15 秒。禁止把 2 秒快切拆成独立 storyboard。video_prompt 必须用红果工业格式：首行「图片1是…，图片2是…」（禁止 @图片）+ 多个【镜头 NNN】子块（每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词）。duration 填 12-15 且等于所有「时长：N 秒」之和。禁止仅用 0-3秒/<n> 简写。',
+    }
+  }
+  return {
+    provider_hint: 'generic',
+    max_clip_seconds: 12,
+    target_shot_seconds: '10-15',
+    min_shot_seconds: 8,
+    rule: '每条 storyboard 尽量 10-15 秒；video_prompt 按 3 秒分段描述镜内变化。',
+  }
+}
+
+/** 从 video_prompt 推断镜长：优先累加「时长：N 秒」；否则解析 9-12秒 时间轴 */
+function inferDurationFromVideoPrompt(videoPrompt?: string | null): number | null {
+  const text = String(videoPrompt || '')
+  if (!text) return null
+
+  const blockDurations: number[] = []
+  for (const match of text.matchAll(/时长[：:]\s*(\d+)\s*秒/g)) {
+    const sec = Number(match[1])
+    if (Number.isFinite(sec) && sec > 0) blockDurations.push(sec)
+  }
+  if (blockDurations.length >= 2) {
+    const sum = blockDurations.reduce((a, b) => a + b, 0)
+    if (sum >= 4) return sum
+  }
+
+  let maxEnd = 0
+  for (const match of text.matchAll(/(\d+)\s*[-–—]\s*(\d+)\s*秒/g)) {
+    const end = Number(match[2])
+    if (Number.isFinite(end)) maxEnd = Math.max(maxEnd, end)
+  }
+  if (maxEnd <= 0) return null
+  return maxEnd
+}
+
+function normalizeStoryboardDuration(
+  duration: number | undefined,
+  videoModel: string | null,
+  videoPrompt?: string | null,
+  episodeId?: number,
+): number {
+  const { min_shot_seconds, max_clip_seconds } = getVideoGenerationConstraints(videoModel, episodeId)
+  const parsed = Math.round(Number(duration || 0))
+  const inferred = inferDurationFromVideoPrompt(videoPrompt)
+
+  const pick = (value: number) => Math.min(max_clip_seconds, Math.max(min_shot_seconds, value))
+
+  if (parsed >= min_shot_seconds && parsed <= max_clip_seconds) return parsed
+  if (inferred != null && inferred >= min_shot_seconds && inferred <= max_clip_seconds) return inferred
+  if (inferred != null && inferred > max_clip_seconds) return max_clip_seconds
+
+  // Agent 仍填 1–3 秒（旧模版）：优先用 video_prompt 推断，否则默认 15，不再统一压成 12
+  if (parsed > 0 && parsed <= 3) {
+    if (inferred != null && inferred >= 4) return pick(inferred)
+    return (episodeId ? isSeedance2EpisodeVideo(episodeId) : isSeedance2Model(videoModel)) ? 15 : 10
+  }
+
+  if (parsed > max_clip_seconds) return max_clip_seconds
+  if (parsed > 0 && parsed < min_shot_seconds) {
+    if (inferred != null && inferred >= min_shot_seconds) return pick(inferred)
+    return min_shot_seconds
+  }
+
+  if (inferred != null && inferred >= min_shot_seconds) return pick(inferred)
+  return (episodeId ? isSeedance2EpisodeVideo(episodeId) : isSeedance2Model(videoModel)) ? 15 : 10
+}
 
 function syncStoryboardCharacters(storyboardId: number, characterIds: number[]) {
   db.delete(schema.storyboardCharacters)
@@ -109,12 +212,19 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           storyboard_count: s.storyboardCount || 0,
         }))
 
+      const videoModel = getEpisodeVideoModel(episodeId)
+      const videoGeneration = getVideoGenerationConstraints(videoModel, episodeId)
+
       const payload = {
         episode: {
           id: ep.id,
           title: ep.title,
           episode_number: ep.episodeNumber,
           description: ep.description || '',
+        },
+        video_generation: {
+          model: videoModel,
+          ...videoGeneration,
         },
         script,
         characters,
@@ -189,9 +299,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       }
       db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
 
+      const videoModel = getEpisodeVideoModel(episodeId)
       let totalDuration = 0
       for (const sb of storyboards) {
         validateStoryboardBindings(episodeId, sb.scene_id, sb.character_ids)
+        const duration = normalizeStoryboardDuration(sb.duration, videoModel, sb.video_prompt, episodeId)
         const res = db.insert(schema.storyboards).values({
           episodeId,
           storyboardNumber: sb.shot_number,
@@ -203,11 +315,11 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
           atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
           videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
           soundEffect: sb.sound_effect,
-          sceneId: sb.scene_id, duration: sb.duration || 10,
+          sceneId: sb.scene_id, duration,
           createdAt: ts, updatedAt: ts,
         }).run()
         syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])
-        totalDuration += sb.duration || 10
+        totalDuration += duration
       }
 
       db.update(schema.episodes)
@@ -283,7 +395,14 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('description' in fields) updates.description = fields.description
       if ('dialogue' in fields) updates.dialogue = fields.dialogue
       if ('scene_id' in fields) updates.sceneId = fields.scene_id
-      if ('duration' in fields) updates.duration = fields.duration
+      if ('duration' in fields) {
+        updates.duration = normalizeStoryboardDuration(
+          fields.duration,
+          getEpisodeVideoModel(episodeId),
+          fields.video_prompt,
+          episodeId,
+        )
+      }
       db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, storyboard_id)).run()
       if ('character_ids' in fields) syncStoryboardCharacters(storyboard_id, fields.character_ids || [])
       logTaskSuccess('StoryboardTool', 'update-complete', {

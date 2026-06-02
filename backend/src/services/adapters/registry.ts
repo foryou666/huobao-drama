@@ -12,6 +12,7 @@ import { VolcEngineVideoAdapter } from './volcengine-video'
 import { ViduVideoAdapter } from './vidu-video'
 import { AliImageAdapter } from './ali-image'
 import { AliVideoAdapter } from './ali-video'
+import { ChengmengVideoAdapter } from './chengmeng-video'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
 // 图片 Adapter 注册表
@@ -21,8 +22,9 @@ export const imageAdapters: Record<string, ImageProviderAdapter> = {
   gemini: new GeminiImageAdapter(),
   volcengine: new VolcEngineImageAdapter(),
   ali: new AliImageAdapter(),
-  // Chatfire - 待确认 API 格式，暂用 OpenAI
+  // Chatfire / GeekNow(NewAPI) — OpenAI 兼容 /v1/images/generations
   chatfire: new OpenAIImageAdapter(),
+  geeknow: new OpenAIImageAdapter(),
 }
 
 // 视频 Adapter 注册表
@@ -31,6 +33,7 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
   volcengine: new VolcEngineVideoAdapter(),
   vidu: new ViduVideoAdapter(),
   ali: new AliVideoAdapter(),
+  chengmeng: new ChengmengVideoAdapter(),
   // Chatfire 视频 - 待确认 API 格式
 }
 
@@ -58,5 +61,7 @@ export function getImageAdapter(provider: string): ImageProviderAdapter {
  * @returns 对应的 Adapter，未知厂商返回 MiniMax 默认
  */
 export function getVideoAdapter(provider: string): VideoProviderAdapter {
-  return videoAdapters[provider.toLowerCase()] || videoAdapters['minimax']
+  const key = provider.toLowerCase()
+  if (key === 'volcengine_proxy') return videoAdapters['volcengine']
+  return videoAdapters[key] || videoAdapters['minimax']
 }

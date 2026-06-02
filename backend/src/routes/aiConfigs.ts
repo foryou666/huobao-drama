@@ -5,14 +5,27 @@ import { success, notFound, created, badRequest, now } from '../utils/response.j
 import { toSnakeCase } from '../utils/transform.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
 import { redactUrl, logTaskError, logTaskProgress, logTaskSuccess } from '../utils/task-logger.js'
+import { SEEDANCE_VIDEO_PRESETS } from '../constants/video-presets.js'
+import { SEEDANCE_DOC_URL, SEEDANCE_MODELS, SEEDANCE_ARK_BASE_URL } from '../constants/seedance.js'
+import { denyUnlessAdmin, getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
 
 const app = new Hono()
 
+function formatAiConfig(row: typeof schema.aiServiceConfigs.$inferSelect, maskKey: boolean) {
+  const item = {
+    ...toSnakeCase(row),
+    model: row.model ? JSON.parse(row.model) : [],
+  } as Record<string, unknown>
+  if (maskKey && item.api_key) item.api_key = '********'
+  return item
+}
+
 const HUOBAO_PRESET_SERVICES = [
-  { serviceType: 'text', label: '文本', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 100 },
-  { serviceType: 'image', label: '图片', provider: 'gemini', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
-  { serviceType: 'video', label: '视频', provider: 'volcengine', baseUrl: 'https://api.chatfire.site/volcengine', model: 'doubao-seedance-1-5-pro-251215', priority: 98 },
-  { serviceType: 'audio', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
+  { serviceType: 'text', name: '红果默认文本服务', label: '文本', provider: 'chatfire', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-preview', priority: 100 },
+  { serviceType: 'image', name: '红果默认图片服务', label: '图片', provider: 'gemini', baseUrl: 'https://api.chatfire.site', model: 'gemini-3-pro-image-preview', priority: 99 },
+  ...SEEDANCE_VIDEO_PRESETS,
+  { serviceType: 'audio', name: '红果默认音频服务', label: '音频', provider: 'minimax', baseUrl: 'https://api.chatfire.site/minimax', model: 'speech-2.8-hd', priority: 97 },
 ] as const
 
 const HUOBAO_AGENT_DEFAULTS = [
@@ -59,7 +72,7 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     return { method: 'POST', url: url.toString(), headers: geminiHeaders(apiKey, true), body: {} }
   }
 
-  if (p === 'openai' || p === 'openrouter' || p === 'chatfire') {
+  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'geeknow') {
     return {
       method: 'GET',
       url: joinProviderUrl(baseUrl, '/v1', '/models'),
@@ -68,7 +81,17 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     }
   }
 
-  if (p === 'ali') {
+  if (p === 'ali' || p.startsWith('ali-')) {
+    const base = (baseUrl || '').replace(/\/+$/, '')
+    if (serviceType === 'text' || base.includes('/compatible-mode')) {
+      const modelsPath = base.includes('/compatible-mode') ? '/models' : '/compatible-mode/v1/models'
+      return {
+        method: 'GET',
+        url: joinProviderUrl(baseUrl, '', modelsPath),
+        headers: bearerHeaders(apiKey),
+        body: undefined,
+      }
+    }
     return {
       method: 'POST',
       url: joinProviderUrl(baseUrl, '/api/v1', serviceType === 'video'
@@ -79,7 +102,7 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     }
   }
 
-  if (p === 'volcengine') {
+  if (p === 'volcengine' || p === 'volcengine_proxy') {
     const path = serviceType === 'video'
       ? '/contents/generations/tasks'
       : '/images/generations'
@@ -114,6 +137,15 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     }
   }
 
+  if (p === 'chengmeng') {
+    return {
+      method: 'GET',
+      url: joinProviderUrl(baseUrl, '', '/api/tasks'),
+      headers: bearerHeaders(apiKey),
+      body: undefined,
+    }
+  }
+
   return {
     method: 'GET',
     url: joinProviderUrl(baseUrl, '', m ? `/${m}` : '/'),
@@ -122,21 +154,50 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
   }
 }
 
+// GET /ai-configs/seedance-models — Seedance 模型与官方文档
+app.get('/seedance-models', (c) => {
+  return success(c, {
+    doc_url: SEEDANCE_DOC_URL,
+    ark_base_url: SEEDANCE_ARK_BASE_URL,
+    api_path: '/api/v3/contents/generations/tasks',
+    models: [
+      {
+        id: SEEDANCE_MODELS.V2_0,
+        label: 'Seedance 2.0',
+        duration_seconds: [4, 15],
+        description: '标准版，画质优先。官方文档：创建视频生成任务 API',
+      },
+      {
+        id: SEEDANCE_MODELS.V2_0_FAST,
+        label: 'Seedance 2.0 Fast',
+        duration_seconds: [4, 15],
+        description: '快速版，速度优先，接口与 2.0 相同',
+      },
+      {
+        id: SEEDANCE_MODELS.V1_5_PRO,
+        label: 'Seedance 1.5 Pro',
+        duration_seconds: [4, 12],
+        description: '上一代模型，ChatFire 等代理常用',
+      },
+    ],
+  })
+})
+
 // GET /ai-configs?service_type=text
 app.get('/', async (c) => {
   const serviceType = c.req.query('service_type')
   let rows = db.select().from(schema.aiServiceConfigs).all()
   if (serviceType) rows = rows.filter(r => r.serviceType === serviceType)
 
-  const parsed = rows.map(r => ({
-    ...toSnakeCase(r),
-    model: r.model ? JSON.parse(r.model) : [],
-  }))
+  const maskKey = getAuthUser(c).role !== 'admin'
+  const parsed = rows.map(r => formatAiConfig(r, maskKey))
   return success(c, parsed)
 })
 
 // POST /ai-configs
 app.post('/', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   const body = await c.req.json()
   const ts = now()
 
@@ -161,14 +222,20 @@ app.post('/', async (c) => {
   const [row] = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.id, Number(res.lastInsertRowid))).all()
 
-  return created(c, {
-    ...toSnakeCase(row),
-    model: row.model ? JSON.parse(row.model) : [],
+  logActivity(getAuthUser(c), {
+    action: 'settings.ai_config.create',
+    summary: `新增 AI 配置：${row.name}`,
+    resourceType: 'ai_config',
+    resourceId: row.id,
   })
+
+  return created(c, formatAiConfig(row, false))
 })
 
 // POST /ai-configs/huobao-preset
 app.post('/huobao-preset', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   const body = await c.req.json()
   const apiKey = String(body.api_key || '').trim()
   if (!apiKey) return badRequest(c, 'api_key is required')
@@ -176,13 +243,21 @@ app.post('/huobao-preset', async (c) => {
   const ts = now()
 
   for (const preset of HUOBAO_PRESET_SERVICES) {
-    const [existing] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.serviceType, preset.serviceType)).all()
-      .filter(row => row.provider === preset.provider)
+    const sameType = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.serviceType, preset.serviceType)).all()
+    const existing = sameType.find(row => {
+      if (row.name === preset.name) return true
+      try {
+        const models = row.model ? JSON.parse(row.model) : []
+        return Array.isArray(models) && models.includes(preset.model)
+      } catch {
+        return false
+      }
+    })
 
     const values = {
       serviceType: preset.serviceType,
       provider: preset.provider,
-      name: `火宝默认${preset.label}服务`,
+      name: preset.name,
       baseUrl: preset.baseUrl,
       apiKey,
       model: JSON.stringify([preset.model]),
@@ -240,6 +315,11 @@ app.post('/huobao-preset', async (c) => {
     agentCount: HUOBAO_AGENT_DEFAULTS.length,
   })
 
+  logActivity(getAuthUser(c), {
+    action: 'settings.huobao_preset',
+    summary: '应用红果一键配置',
+  })
+
   return success(c, {
     configs,
     agents,
@@ -249,6 +329,8 @@ app.post('/huobao-preset', async (c) => {
 
 // POST /ai-configs/test
 app.post('/test', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   const body = await c.req.json()
   if (!body.service_type || !body.provider || !body.base_url) {
     return badRequest(c, 'service_type, provider and base_url are required')
@@ -272,7 +354,14 @@ app.post('/test', async (c) => {
       body: probe.body ? JSON.stringify(probe.body) : undefined,
     })
     const text = await resp.text()
+    const tunnelDown = /tunnel.*unavailable|cpolar/i.test(text)
     const reachable = [200, 204, 400, 401, 403].includes(resp.status)
+    let message = reachable
+      ? (resp.ok ? '端点可访问，认证与路径基本正常' : '端点已响应，请根据状态码判断认证或路径是否正确')
+      : '端点未按预期响应，请检查 Base URL 和代理前缀'
+    if (tunnelDown || (resp.status === 502 && body.provider === 'chengmeng')) {
+      message = '橙盟 API 隧道不可用。请将 Base URL 改为 https://api.chengmeng.site（勿使用 cpolar 临时地址）'
+    }
     const payload = {
       ok: resp.ok,
       reachable,
@@ -280,9 +369,7 @@ app.post('/test', async (c) => {
       status_text: resp.statusText,
       method: probe.method,
       url: probeUrl,
-      message: reachable
-        ? (resp.ok ? '端点可访问，认证与路径基本正常' : '端点已响应，请根据状态码判断认证或路径是否正确')
-        : '端点未按预期响应，请检查 Base URL 和代理前缀',
+      message,
       response_preview: text.slice(0, 240),
     }
     if (reachable) {
@@ -321,14 +408,13 @@ app.get('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const [row] = db.select().from(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).all()
   if (!row) return notFound(c)
-  return success(c, {
-    ...toSnakeCase(row),
-    model: row.model ? JSON.parse(row.model) : [],
-  })
+  return success(c, formatAiConfig(row, getAuthUser(c).role !== 'admin'))
 })
 
 // PUT /ai-configs/:id
 app.put('/:id', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
   const updates: Record<string, any> = { updatedAt: now() }
@@ -342,13 +428,27 @@ app.put('/:id', async (c) => {
   if ('is_active' in body) updates.isActive = body.is_active
 
   db.update(schema.aiServiceConfigs).set(updates).where(eq(schema.aiServiceConfigs.id, id)).run()
+  logActivity(getAuthUser(c), {
+    action: 'settings.ai_config.update',
+    summary: `更新 AI 配置 #${id}`,
+    resourceType: 'ai_config',
+    resourceId: id,
+  })
   return success(c)
 })
 
 // DELETE /ai-configs/:id
 app.delete('/:id', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
   const id = Number(c.req.param('id'))
   db.delete(schema.aiServiceConfigs).where(eq(schema.aiServiceConfigs.id, id)).run()
+  logActivity(getAuthUser(c), {
+    action: 'settings.ai_config.delete',
+    summary: `删除 AI 配置 #${id}`,
+    resourceType: 'ai_config',
+    resourceId: id,
+  })
   return success(c)
 })
 

@@ -3,9 +3,13 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
+import { getDramaGridCellSize } from '../utils/image-size.js'
 import { splitGridImage } from '../services/grid-split.js'
 import { createAgent } from '../agents/index.js'
 import { logTaskError, logTaskPayload, logTaskProgress } from '../utils/task-logger.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
+import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 
 const app = new Hono()
 
@@ -421,6 +425,13 @@ app.post('/prompt', async (c) => {
     return badRequest(c, 'episode_id required')
   }
 
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.GRID_PROMPT, {
+    summary: '生成宫格提示词',
+    dramaId: drama_id ? Number(drama_id) : undefined,
+    episodeId: resolvedEpisodeId,
+  })
+  if (billed.error) return billed.error
+
   try {
     const agentPayload = await tryAgentGridPrompt(
       resolvedEpisodeId,
@@ -512,11 +523,16 @@ app.post('/generate', async (c) => {
   const prompt = custom_prompt || buildGridPrompt(mode, storyboards, rows, cols, dramaStyle, referenceAssets)
   const referenceImages = referenceAssets.map((asset) => asset.path)
 
-  // Size: first_last mode uses Nx2 layout
-  const cellW = 960, cellH = 540
   const actualCols = cols
   const actualRows = rows
+  const { cellW, cellH } = drama_id ? getDramaGridCellSize(Number(drama_id)) : { cellW: 960, cellH: 540 }
   const size = `${cellW * actualCols}x${cellH * actualRows}`
+
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.GRID_GENERATE, {
+    summary: `生成宫格图 ${actualRows}x${actualCols}`,
+    dramaId: drama_id ? Number(drama_id) : undefined,
+  })
+  if (billed.error) return billed.error
 
   try {
     const genId = await generateImage({
@@ -525,6 +541,7 @@ app.post('/generate', async (c) => {
       size,
       frameType: `grid_${mode}_${actualRows}x${actualCols}`,
       referenceImages,
+      creditTransactionId: billed.charge.transactionId,
     })
 
     logTaskProgress('GridGenerate', 'reference-images', {
@@ -535,6 +552,14 @@ app.post('/generate', async (c) => {
       referenceCount: referenceImages.length,
     })
 
+    logActivity(getAuthUser(c), {
+      action: 'grid.generate',
+      summary: `生成宫格图 ${actualRows}x${actualCols}`,
+      dramaId: drama_id ? Number(drama_id) : undefined,
+      creditCost: billed.charge.cost,
+      metadata: { mode, rows: actualRows, cols: actualCols, generation_id: genId, credit_tx_id: billed.charge.transactionId },
+    })
+
     return success(c, {
       image_generation_id: genId,
       grid: { rows: actualRows, cols: actualCols },
@@ -542,8 +567,14 @@ app.post('/generate', async (c) => {
       storyboard_ids,
       prompt,
       reference_images: referenceImages,
+      credits_balance: billed.charge.balance,
     })
   } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '宫格图生成失败退款',
+      dramaId: drama_id ? Number(drama_id) : undefined,
+      metadata: { reason: err.message },
+    })
     return badRequest(c, err.message)
   }
 })

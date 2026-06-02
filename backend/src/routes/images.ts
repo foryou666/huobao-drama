@@ -4,6 +4,9 @@ import { db, schema } from '../db/index.js'
 import { success, created, now, badRequest } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
+import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 
 const app = new Hono()
 
@@ -12,13 +15,23 @@ app.post('/', async (c) => {
   const body = await c.req.json()
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
+  const billed = tryChargeUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, {
+    summary: '生成镜头图',
+    dramaId: body.drama_id ? Number(body.drama_id) : undefined,
+    resourceType: 'storyboard',
+    resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+  })
+  if (billed.error) return billed.error
+
   try {
     let configId: number | undefined = body.config_id
+    let dramaId: number | undefined = body.drama_id ? Number(body.drama_id) : undefined
     if (body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
         const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
         if (ep?.imageConfigId != null) configId = ep.imageConfigId
+        if (!dramaId && ep) dramaId = ep.dramaId
       }
     }
 
@@ -26,13 +39,13 @@ app.post('/', async (c) => {
       storyboardId: body.storyboard_id,
       sceneId: body.scene_id,
       characterId: body.character_id,
-      dramaId: body.drama_id,
+      dramaId,
       frameType: body.frame_type,
     })
     logTaskPayload('ImageAPI', 'request body', body)
     const id = await generateImage({
       storyboardId: body.storyboard_id,
-      dramaId: body.drama_id,
+      dramaId,
       sceneId: body.scene_id,
       characterId: body.character_id,
       prompt: body.prompt,
@@ -41,13 +54,30 @@ app.post('/', async (c) => {
       referenceImages: body.reference_images,
       frameType: body.frame_type,
       configId,
+      creditTransactionId: billed.charge.transactionId,
     })
 
     const [record] = db.select().from(schema.imageGenerations)
       .where(eq(schema.imageGenerations.id, id)).all()
     logTaskSuccess('ImageAPI', 'generate', { generationId: id, provider: record?.provider })
-    return created(c, record)
+    logActivity(getAuthUser(c), {
+      action: 'image.generate',
+      summary: '生成镜头图片',
+      resourceType: 'storyboard',
+      resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+      dramaId,
+      creditCost: billed.charge.cost,
+      metadata: { generation_id: id, frame_type: body.frame_type, credit_tx_id: billed.charge.transactionId },
+    })
+    return created(c, { ...record, credits_balance: billed.charge.balance })
   } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '图片生成失败退款',
+      dramaId: body.drama_id ? Number(body.drama_id) : undefined,
+      resourceType: 'storyboard',
+      resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+      metadata: { reason: err.message },
+    })
     logTaskError('ImageAPI', 'generate', { error: err.message })
     return badRequest(c, err.message)
   }

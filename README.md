@@ -1,4 +1,4 @@
-# 🎬 Huobao Drama - AI 短剧生成平台
+# 🎬 红果短剧 - AI 短剧生成平台
 
 <div align="center">
 
@@ -16,10 +16,7 @@
 
 ## 📖 项目简介
 
-Huobao Drama 是一个基于 AI 的短剧自动化生产平台，实现从剧本生成、角色设计、分镜制作到视频合成的全流程自动化。
-
-火宝短剧商业版地址：[火宝短剧商业版](https://drama.chatfire.site/shortvideo)
-火宝小说生成：[火宝小说生成](https://marketing.chatfire.site/huobao-novel/)
+红果短剧 是一个基于 AI 的短剧自动化生产平台，实现从剧本生成、角色设计、分镜制作到视频合成的全流程自动化。
 
 ### 🎯 核心价值
 
@@ -155,7 +152,7 @@ cp configs/config.example.yaml configs/config.yaml
 
 ```yaml
 app:
-  name: "Huobao Drama API"
+  name: "红果短剧 API"
   version: "1.0.0"
   debug: true
 
@@ -471,7 +468,7 @@ cd ../frontend && npm run build
 
 ## 👨‍💻 关于我们
 
-**AI 火宝 - AI 工作室创业中**
+**红果短剧**
 
 - 🏠 **位置**: 中国南京
 - 🚀 **状态**: 创业中
@@ -502,6 +499,6 @@ cd ../frontend && npm run build
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=chatfire-AI/huobao-drama&type=date&legend=top-left)](https://www.star-history.com/#chatfire-AI/huobao-drama&type=date&legend=top-left)
-Made with ❤️ by Huobao Team
+Made with ❤️ by 红果短剧 Team
 
 </div>

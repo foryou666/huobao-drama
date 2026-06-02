@@ -84,6 +84,20 @@ export async function saveBase64Image(base64Data: string, mimeType: string, subD
   return `static/${subDir}/${filename}`
 }
 
+export async function readLocalImageDimensions(relativePath: string): Promise<{ width: number; height: number } | null> {
+  try {
+    const normalized = String(relativePath || '').trim().replace(/^\/+/, '')
+    if (!normalized.startsWith('static/')) return null
+    const filePath = getAbsolutePath(normalized)
+    if (!fs.existsSync(filePath)) return null
+    const meta = await sharp(filePath).metadata()
+    if (!meta.width || !meta.height) return null
+    return { width: meta.width, height: meta.height }
+  } catch {
+    return null
+  }
+}
+
 export function readImageAsDataUrl(relativePath: string): string {
   const filePath = getAbsolutePath(relativePath)
   const buffer = fs.readFileSync(filePath)
@@ -146,6 +160,29 @@ function extToMimeType(ext: string): string {
     '.jpeg': 'image/jpeg',
     '.webp': 'image/webp',
     '.gif': 'image/gif',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.mov': 'video/quicktime',
   }
-  return map[ext] || 'image/png'
+  return map[ext] || 'application/octet-stream'
+}
+
+export function readFileAsDataUrl(relativePath: string, maxBytes = 5 * 1024 * 1024): string | null {
+  const localPath = relativePath.startsWith('/static/')
+    ? relativePath.slice(1)
+    : relativePath.startsWith('static/')
+      ? relativePath
+      : `static/${relativePath}`
+  const filePath = getAbsolutePath(localPath)
+  if (!fs.existsSync(filePath)) return null
+  const stat = fs.statSync(filePath)
+  if (stat.size > maxBytes) return null
+  const buffer = fs.readFileSync(filePath)
+  const ext = path.extname(filePath).toLowerCase()
+  const mimeType = extToMimeType(ext)
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
 }

@@ -2,12 +2,16 @@ export default defineNuxtConfig({
   srcDir: 'app/',
   ssr: false,
   devtools: { enabled: false },
+  devServer: {
+    host: '0.0.0.0',
+    port: 3013,
+  },
   experimental: {
     appManifest: false,
   },
   app: {
     head: {
-      title: '火宝短剧',
+      title: '红果短剧',
       meta: [{ name: 'viewport', content: 'width=device-width, initial-scale=1' }],
       link: [
         { rel: 'icon', type: 'image/png', href: '/favicon.png' },
@@ -18,7 +22,13 @@ export default defineNuxtConfig({
   vite: {
     server: {
       proxy: {
-        '/api': { target: 'http://localhost:5679', changeOrigin: true },
+        '/api': {
+          target: 'http://localhost:5679',
+          changeOrigin: true,
+          // Agent 分镜拆解等长任务可能超过默认代理超时
+          timeout: 600_000,
+          proxyTimeout: 600_000,
+        },
         '/static': { target: 'http://localhost:5679', changeOrigin: true },
       },
     },

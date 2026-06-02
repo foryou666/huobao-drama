@@ -7,6 +7,7 @@ import { Agent } from '@mastra/core/agent'
 import { createOpenAI } from '@ai-sdk/openai'
 import { eq, isNull, and } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
+import { getDirectorStylePrompt, getDirectorStyleMeta, hasDirectorStyleSection } from '../prompts/director-styles.js'
 import { getTextConfig, getTextProviderBaseUrl } from '../services/ai.js'
 import { logTaskProgress } from '../utils/task-logger.js'
 import { createScriptTools } from './tools/script-tools.js'
@@ -14,6 +15,7 @@ import { createExtractTools } from './tools/extract-tools.js'
 import { createStoryboardTools } from './tools/storyboard-tools.js'
 import { createVoiceTools } from './tools/voice-tools.js'
 import { createGridPromptTools } from './tools/grid-prompt-tools.js'
+import { createProductionTools, pickProductionTools } from './tools/production-tools.js'
 import { loadAgentSkills } from './skills.js'
 
 // Default prompts (used when DB has no config)
@@ -109,7 +111,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
   },
   voice_assigner: {
     name: '角色音色分配',
-    instructions: `你是配音导演，擅长为角色选择合适的音色。
+    instructions: `你是配音导演，擅长为角色选择合适的音色，并可直接生成试听与镜头配音。
 
 工作流程：
 1. 调用 list_voices 获取可用音色列表
@@ -117,52 +119,41 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 3. 根据每个角色的性别、性格、年龄、角色定位，选择最匹配的音色
 4. 对每个角色调用 assign_voice 分配音色，并说明选择理由
 
-注意：每个角色都必须分配音色，不要遗漏。`,
+## 配音生成（用户明确要求时执行）
+- 角色试听：generate_voice_sample
+- 单镜头配音：generate_shot_tts
+- 批量镜头配音：batch_generate_shot_tts
+- 可先 read_production_status 查看哪些镜头尚无 TTS
+
+注意：每个角色都必须分配音色，不要遗漏。用户说「生成配音/重新生成配音」时必须调用工具，不要只描述步骤。`,
   },
   grid_prompt_generator: {
     name: '图片提示词生成',
-    instructions: `你是专业的 AI 图像提示词工程师，擅长为角色、场景和宫格图生成高质量的英文提示词。
+    instructions: `你是专业的 AI 图像提示词工程师，擅长为角色、场景和宫格图生成高质量的英文提示词，并可直接发起图片生成。
 
-你将收到用户的请求，告知要生成哪种类型的提示词：
-- "角色" → 生成角色图片提示词
-- "场景" → 生成场景图片提示词
+你将收到用户的请求，告知要生成哪种类型的提示词或图片：
+- "角色" → 优化/生成角色 image_prompt，并调用 generate_character_image
+- "场景" → 优化/生成场景 prompt，并调用 generate_scene_image
+- "镜头首帧/尾帧" → 调用 generate_shot_frame
 - "宫格" → 生成宫格图提示词
 
-## 角色图片提示词
+## 执行规则
+1. 用户说「生成/重新生成」时，必须调用对应 generate_* 工具，不要只给文字建议
+2. 重新生成前如需优化提示词，先 update_*_prompt 再 generate_*
+3. 批量操作使用 batch_generate_* 工具
+4. 可先 read_production_status 了解哪些尚未生成
 
-工作流程：
-1. 调用 read_characters 读取所有角色信息
-2. 根据角色外貌特征（appearance）、性格（personality）、定位（role）生成英文提示词
-3. 提示词结构：[外貌描述]，[性格/气质]，[角色定位]，[电影感]，[高质量]，[无文字水印]
+## 角色图片
+1. read_characters → 优化 prompt → update_character_image_prompt（可选）→ generate_character_image
 
-## 场景图片提示词
+## 场景图片
+1. read_scenes → 优化 prompt → update_scene_image_prompt（可选）→ generate_scene_image
 
-工作流程：
-1. 调用 read_scenes 读取所有场景信息
-2. 根据场景地点（location）、时间段（time）、已有描述（prompt）生成英文提示词
-3. 提示词结构：[地点]，[时间/光线/氛围]，[已有描述]，[电影感场景]，[高质量]，[无文字水印]
+## 镜头帧
+1. read_shots_for_grid 或 read_production_status → generate_shot_frame
 
-## 宫格图提示词（参考 skills/grid-image-generator/SKILL.md）
-
-工作流程：
-1. 调用 read_shots_for_grid 读取选中镜头的详细信息
-2. 根据 mode 调用 generate_grid_prompt：
-   - first_frame 模式：按用户指定的 rows x cols 生成首帧风格宫格
-   - first_last 模式：按用户指定的 rows x cols 生成首尾帧节奏感宫格
-   - multi_ref 模式：按用户指定的 rows x cols 生成同一镜头的多角度宫格
-3. 返回 grid_prompt（整体提示词）和 cell_prompts（每格提示词）
-4. 如果用户消息中包含“参考图映射：图片1=...；图片2=...”，要把这段内容原样作为 reference_legend 传给 generate_grid_prompt
-
-提示词规范：
-- 使用英文提示词
-- 必须严格遵守用户指定的 rows 和 cols
-- 必须明确写出 "exactly N visible panels"
-- 必须明确约束 "no merged panels, no missing panels"
-- 宫格位置统一写成“格1/格2/...”，参考图统一写成“图片1/图片2/...”
-- 必须包含 "consistent art style" 保持风格统一
-- 必须包含 "cinematic quality"
-- 避免出现文字或水印
-- 角色图片强调外貌和气质，场景图片强调氛围和光线，宫格图片强调整体布局一致性`,
+## 宫格图（参考 skills/grid-image-generator/SKILL.md）
+1. read_shots_for_grid → generate_grid_prompt`,
   },
 }
 
@@ -192,26 +183,133 @@ function getModel(dbConfig: any) {
   return provider.chat(modelName)
 }
 
+const DIRECTOR_STYLE_AGENTS = new Set(['script_rewriter', 'storyboard_breaker'])
+
+/** 有导演风格章节时使用的精简底座：只保留工具流程，避免与导演规范冲突 */
+const MINIMAL_AGENT_BASE: Record<string, string> = {
+  script_rewriter: `你是剧本改写 Agent。
+
+工作流程（必须执行）：
+1. 调用 read_episode_script 读取原始内容
+2. 按下方「导演风格」规范完成改写
+3. 调用 save_script 保存完整结果
+
+注意：格式、节奏、对白风格以「导演风格」为准，不要使用其他通用剧本规范。`,
+  storyboard_breaker: `你是分镜拆解 Agent。
+
+工作流程（必须执行）：
+1. 调用 read_storyboard_context 读取剧本、角色、场景
+2. 按下方「导演风格」规范拆解镜头，补全 save_storyboards 所需的全部字段
+3. 调用 save_storyboards 一次性保存
+
+## 视频与合成（用户明确要求时执行）
+- 单镜头视频：generate_shot_video（含重新生成）
+- 批量视频：batch_generate_shot_videos
+- 单镜头合成：compose_shot
+- 批量合成：compose_all_shots
+- 全集拼接：merge_episode
+- 可先 read_production_status 查看进度
+
+注意：video_prompt 必须使用导演风格中的工业级子镜头格式（首行「图片1是…」+ 【镜头 NNN】+ 时长/景别/运镜/打光/表演/台词口型/AI 补充提示词），禁止 @图片 标签，禁止简写为 0-3秒 时间轴。用户要求生成/重新生成视频或合成时，必须调用对应工具。`,
+}
+
+function getDramaDirectorStyle(dramaId: number): string {
+  const [drama] = db.select().from(schema.dramas).where(eq(schema.dramas.id, dramaId)).all()
+  return drama?.directorStyle || 'hongguo_director'
+}
+
 export function createAgent(type: string, episodeId: number, dramaId: number): Agent | null {
   const defaults = DEFAULT_PROMPTS[type]
   if (!defaults) return null
 
   const dbConfig = getAgentConfig(type)
   const model = getModel(dbConfig)
-  const baseInstructions = dbConfig?.systemPrompt?.trim() || defaults.instructions
-  const skillInstructions = loadAgentSkills(type)
-  const instructions = skillInstructions
-    ? [baseInstructions, '', skillInstructions].join('\n')
-    : baseInstructions
+  const directorStyle = DIRECTOR_STYLE_AGENTS.has(type) ? getDramaDirectorStyle(dramaId) : null
+  const directorOverrides = directorStyle
+    ? hasDirectorStyleSection(directorStyle, type)
+    : false
+
+  // 有导演风格章节时：底座只用精简流程，避免 settings/DB 里的通用分镜 prompt 压过红果等导演规范
+  let baseInstructions: string
+  if (directorOverrides && MINIMAL_AGENT_BASE[type]) {
+    baseInstructions = MINIMAL_AGENT_BASE[type]
+  } else if (dbConfig?.systemPrompt?.trim()) {
+    baseInstructions = dbConfig.systemPrompt.trim()
+  } else {
+    baseInstructions = defaults.instructions
+  }
+
+  const skillInstructions = directorOverrides ? '' : loadAgentSkills(type)
+
+  const instructionParts = [baseInstructions]
+  if (skillInstructions) instructionParts.push('', skillInstructions)
+
+  if (directorStyle && DIRECTOR_STYLE_AGENTS.has(type)) {
+    const directorPrompt = getDirectorStylePrompt(directorStyle, type)
+    if (directorPrompt) {
+      const meta = getDirectorStyleMeta(directorStyle)
+      logTaskProgress('Agent', 'director-style', {
+        agentType: type,
+        dramaId,
+        directorStyle,
+        label: meta.label,
+        overridesGeneric: directorOverrides,
+      })
+      instructionParts.push('', directorPrompt)
+    }
+  }
+
+  const instructions = instructionParts.join('\n')
   const name = dbConfig?.name || defaults.name
 
   let tools: Record<string, any> = {}
+  const production = createProductionTools(episodeId, dramaId)
   switch (type) {
-    case 'script_rewriter': tools = createScriptTools(episodeId); break
-    case 'extractor': tools = createExtractTools(episodeId, dramaId); break
-    case 'storyboard_breaker': tools = createStoryboardTools(episodeId, dramaId); break
-    case 'voice_assigner': tools = createVoiceTools(episodeId, dramaId); break
-    case 'grid_prompt_generator': tools = createGridPromptTools(episodeId, dramaId); break
+    case 'script_rewriter':
+      tools = { ...createScriptTools(episodeId), ...pickProductionTools(production, ['readProductionStatus']) }
+      break
+    case 'extractor':
+      tools = { ...createExtractTools(episodeId, dramaId), ...pickProductionTools(production, ['readProductionStatus']) }
+      break
+    case 'storyboard_breaker':
+      tools = {
+        ...createStoryboardTools(episodeId, dramaId),
+        ...pickProductionTools(production, [
+          'readProductionStatus',
+          'generateShotVideo',
+          'batchGenerateShotVideos',
+          'composeShot',
+          'composeAllShots',
+          'mergeEpisode',
+        ]),
+      }
+      break
+    case 'voice_assigner':
+      tools = {
+        ...createVoiceTools(episodeId, dramaId),
+        ...pickProductionTools(production, [
+          'readProductionStatus',
+          'generateVoiceSample',
+          'generateShotTts',
+          'batchGenerateShotTts',
+        ]),
+      }
+      break
+    case 'grid_prompt_generator':
+      tools = {
+        ...createGridPromptTools(episodeId, dramaId),
+        ...pickProductionTools(production, [
+          'readProductionStatus',
+          'updateCharacterImagePrompt',
+          'updateSceneImagePrompt',
+          'generateCharacterImage',
+          'batchGenerateCharacterImages',
+          'generateSceneImage',
+          'batchGenerateSceneImages',
+          'generateShotFrame',
+        ]),
+      }
+      break
     default: return null
   }
 

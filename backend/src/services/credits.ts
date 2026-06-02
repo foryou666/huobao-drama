@@ -1,0 +1,348 @@
+import { desc, eq, inArray } from 'drizzle-orm'
+import { db, schema } from '../db/index.js'
+import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, type CreditAction } from '../constants/credit-actions.js'
+import { now } from '../utils/response.js'
+import { getAppMeta, setAppMeta } from '../db/index.js'
+
+const CREDIT_PRICING_MIGRATION_KEY = 'credit_pricing_defaults_v2'
+
+export interface ChargeContext {
+  summary?: string
+  dramaId?: number
+  episodeId?: number
+  resourceType?: string
+  resourceId?: number
+  quantity?: number
+  metadata?: Record<string, unknown>
+}
+
+export interface ChargeResult {
+  ok: boolean
+  cost: number
+  balance: number
+  transactionId?: number
+  message?: string
+}
+
+export function seedCreditPricing() {
+  const ts = now()
+  for (const item of DEFAULT_CREDIT_PRICING) {
+    const [existing] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, item.action)).all()
+    if (existing) continue
+    db.insert(schema.creditPricing).values({
+      action: item.action,
+      label: item.label,
+      description: item.description,
+      cost: item.defaultCost,
+      updatedAt: ts,
+    }).run()
+  }
+}
+
+/** 一次性将已有库中的积分单价同步到最新默认值（不覆盖管理员后续手动调整前的首次迁移） */
+export function applyCreditPricingDefaultsIfNeeded() {
+  seedCreditPricing()
+  if (getAppMeta(CREDIT_PRICING_MIGRATION_KEY)) return
+
+  for (const item of DEFAULT_CREDIT_PRICING) {
+    updateCreditPricing(item.action, item.defaultCost, item.label, item.description)
+  }
+  setAppMeta(CREDIT_PRICING_MIGRATION_KEY, now())
+}
+
+export function getActionCost(action: string, quantity = 1): number {
+  const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+  const unit = row?.cost ?? DEFAULT_CREDIT_PRICING.find(item => item.action === action)?.defaultCost ?? 0
+  return Math.max(0, unit * Math.max(1, quantity))
+}
+
+export function getUserBalance(userId: number): number {
+  const [user] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+  return user?.creditsBalance ?? 0
+}
+
+export function listCreditPricing() {
+  seedCreditPricing()
+  const rows = db.select().from(schema.creditPricing).all()
+  const labelMap = new Map(DEFAULT_CREDIT_PRICING.map(item => [item.action, item]))
+  return rows
+    .map(row => ({
+      action: row.action,
+      label: row.label || labelMap.get(row.action as CreditAction)?.label || row.action,
+      description: row.description || labelMap.get(row.action as CreditAction)?.description || '',
+      cost: row.cost,
+      updated_at: row.updatedAt,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
+}
+
+export function updateCreditPricing(action: string, cost: number, label?: string, description?: string) {
+  const normalized = Math.max(0, Math.floor(cost))
+  const ts = now()
+  const [existing] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+  const fallback = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+  if (existing) {
+    db.update(schema.creditPricing).set({
+      cost: normalized,
+      label: label ?? existing.label,
+      description: description ?? existing.description,
+      updatedAt: ts,
+    }).where(eq(schema.creditPricing.action, action)).run()
+  } else {
+    db.insert(schema.creditPricing).values({
+      action,
+      label: label || fallback?.label || action,
+      description: description || fallback?.description || '',
+      cost: normalized,
+      updatedAt: ts,
+    }).run()
+  }
+}
+
+export function chargeCredits(userId: number, action: string, context: ChargeContext = {}): ChargeResult {
+  const quantity = Math.max(1, context.quantity ?? 1)
+  const cost = getActionCost(action, quantity)
+  if (cost <= 0) {
+    return { ok: true, cost: 0, balance: getUserBalance(userId) }
+  }
+
+  return db.transaction(() => {
+    const [user] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+    if (!user) return { ok: false, cost, balance: 0, message: '用户不存在' }
+
+    const balance = user.creditsBalance ?? 0
+    if (balance < cost) {
+      return {
+        ok: false,
+        cost,
+        balance,
+        message: `积分不足：本次需要 ${cost} 积分，当前余额 ${balance} 积分`,
+      }
+    }
+
+    const newBalance = balance - cost
+    const ts = now()
+    db.update(schema.users)
+      .set({ creditsBalance: newBalance, updatedAt: ts })
+      .where(eq(schema.users.id, userId))
+      .run()
+
+    const res = db.insert(schema.creditTransactions).values({
+      userId,
+      amount: -cost,
+      balanceAfter: newBalance,
+      type: 'charge',
+      action,
+      summary: context.summary || null,
+      dramaId: context.dramaId ?? null,
+      episodeId: context.episodeId ?? null,
+      resourceType: context.resourceType || null,
+      resourceId: context.resourceId ?? null,
+      metadata: context.metadata ? JSON.stringify(context.metadata) : null,
+      createdAt: ts,
+    }).run()
+
+    return {
+      ok: true,
+      cost,
+      balance: newBalance,
+      transactionId: Number(res.lastInsertRowid),
+    }
+  })
+}
+
+export interface RefundResult {
+  ok: boolean
+  cost: number
+  balance: number
+  transactionId?: number
+  message?: string
+  alreadyRefunded?: boolean
+}
+
+function parseTransactionMetadata(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw?.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function findRefundForCharge(chargeTransactionId: number) {
+  const refunds = db.select().from(schema.creditTransactions)
+    .where(eq(schema.creditTransactions.type, 'refund'))
+    .all()
+  return refunds.find(row => parseTransactionMetadata(row.metadata).charge_tx_id === chargeTransactionId) || null
+}
+
+/** 将扣费交易退回用户余额（幂等：同一 charge 只退一次） */
+export function refundCreditTransaction(
+  chargeTransactionId: number,
+  context: ChargeContext & { metadata?: Record<string, unknown> } = {},
+): RefundResult | null {
+  if (!chargeTransactionId) return null
+
+  const existingRefund = findRefundForCharge(chargeTransactionId)
+  if (existingRefund) {
+    return {
+      ok: true,
+      cost: Math.abs(existingRefund.amount),
+      balance: existingRefund.balanceAfter,
+      transactionId: existingRefund.id,
+      alreadyRefunded: true,
+    }
+  }
+
+  const [charge] = db.select().from(schema.creditTransactions)
+    .where(eq(schema.creditTransactions.id, chargeTransactionId))
+    .all()
+  if (!charge) return { ok: false, cost: 0, balance: 0, message: '扣费记录不存在' }
+  if (charge.type !== 'charge') return { ok: false, cost: 0, balance: 0, message: '非扣费交易，无法退款' }
+
+  const refundAmount = Math.abs(charge.amount)
+  if (refundAmount <= 0) {
+    return { ok: true, cost: 0, balance: getUserBalance(charge.userId) }
+  }
+
+  return db.transaction(() => {
+    const [user] = db.select().from(schema.users).where(eq(schema.users.id, charge.userId)).all()
+    if (!user) return { ok: false, cost: refundAmount, balance: 0, message: '用户不存在' }
+
+    const balance = (user.creditsBalance ?? 0) + refundAmount
+    const ts = now()
+    db.update(schema.users)
+      .set({ creditsBalance: balance, updatedAt: ts })
+      .where(eq(schema.users.id, charge.userId))
+      .run()
+
+    const res = db.insert(schema.creditTransactions).values({
+      userId: charge.userId,
+      amount: refundAmount,
+      balanceAfter: balance,
+      type: 'refund',
+      action: charge.action,
+      summary: context.summary || `退款：${charge.summary || charge.action}`,
+      dramaId: context.dramaId ?? charge.dramaId ?? null,
+      episodeId: context.episodeId ?? charge.episodeId ?? null,
+      resourceType: context.resourceType ?? charge.resourceType ?? null,
+      resourceId: context.resourceId ?? charge.resourceId ?? null,
+      metadata: JSON.stringify({
+        charge_tx_id: chargeTransactionId,
+        ...(context.metadata || {}),
+      }),
+      createdAt: ts,
+    }).run()
+
+    return {
+      ok: true,
+      cost: refundAmount,
+      balance,
+      transactionId: Number(res.lastInsertRowid),
+    }
+  })
+}
+
+export function grantCredits(
+  userId: number,
+  amount: number,
+  operatorId: number,
+  summary?: string,
+): ChargeResult {
+  const delta = Math.floor(amount)
+  if (delta <= 0) return { ok: false, cost: 0, balance: getUserBalance(userId), message: '充值积分必须大于 0' }
+
+  return db.transaction(() => {
+    const [user] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+    if (!user) return { ok: false, cost: 0, balance: 0, message: '用户不存在' }
+
+    const balance = (user.creditsBalance ?? 0) + delta
+    const ts = now()
+    db.update(schema.users)
+      .set({ creditsBalance: balance, updatedAt: ts })
+      .where(eq(schema.users.id, userId))
+      .run()
+
+    const res = db.insert(schema.creditTransactions).values({
+      userId,
+      amount: delta,
+      balanceAfter: balance,
+      type: 'grant',
+      action: 'admin.grant',
+      summary: summary || `管理员充值 ${delta} 积分`,
+      metadata: JSON.stringify({ operator_id: operatorId }),
+      createdAt: ts,
+    }).run()
+
+    return { ok: true, cost: -delta, balance, transactionId: Number(res.lastInsertRowid) }
+  })
+}
+
+export function listCreditTransactions(opts: {
+  userId?: number
+  userIds?: number[]
+  limit?: number
+  offset?: number
+}) {
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
+  const offset = Math.max(opts.offset ?? 0, 0)
+  let query = db.select().from(schema.creditTransactions).orderBy(desc(schema.creditTransactions.createdAt))
+  if (opts.userIds?.length) {
+    query = query.where(inArray(schema.creditTransactions.userId, opts.userIds)) as typeof query
+  } else if (opts.userId) {
+    query = query.where(eq(schema.creditTransactions.userId, opts.userId)) as typeof query
+  }
+  const rows = query.all()
+
+  const slice = rows.slice(offset, offset + limit)
+  const userIds = [...new Set(slice.map(row => row.userId))]
+  const users = userIds.length
+    ? db.select().from(schema.users).all().filter(u => userIds.includes(u.id))
+    : []
+  const userMap = new Map(users.map(u => [u.id, u]))
+  const pricing = new Map(listCreditPricing().map(item => [item.action, item.label]))
+
+  return {
+    items: slice.map(row => {
+      const meta = row.metadata ? JSON.parse(row.metadata) : null
+      const u = userMap.get(row.userId)
+      return {
+        id: row.id,
+        user_id: row.userId,
+        username: u?.username,
+        display_name: u?.displayName || u?.username,
+        operator_id: row.userId,
+        operator_name: u?.displayName || u?.username,
+        amount: row.amount,
+        balance_after: row.balanceAfter,
+        type: row.type,
+        action: row.action,
+        action_label: row.type === 'refund'
+          ? `${pricing.get(row.action) || row.action}（退款）`
+          : (pricing.get(row.action) || row.action),
+        summary: row.summary,
+        drama_id: row.dramaId,
+        episode_id: row.episodeId,
+        resource_type: row.resourceType,
+        resource_id: row.resourceId,
+        metadata: meta,
+        created_at: row.createdAt,
+      }
+    }),
+    total: rows.length,
+    limit,
+    offset,
+  }
+}
+
+export function ensureUserCredits(userId: number) {
+  const [user] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+  if (!user) return
+  if (user.creditsBalance == null) {
+    db.update(schema.users)
+      .set({ creditsBalance: DEFAULT_USER_CREDITS, updatedAt: now() })
+      .where(eq(schema.users.id, userId))
+      .run()
+  }
+}

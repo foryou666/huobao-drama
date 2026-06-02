@@ -3,14 +3,48 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
 import { generateVideo } from '../services/video-generation.js'
+import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { getAuthUser } from '../middleware/auth.js'
+import { logActivity } from '../services/activity.js'
+import { tryChargeUser, tryRefundCharge } from '../utils/credit-charge.js'
+import { resolveVideoCreditCharge } from '../constants/credit-actions.js'
 
 const app = new Hono()
+
+function resolveVideoConfig(body: Record<string, unknown>) {
+  let configId = body.config_id != null ? Number(body.config_id) : undefined
+  if (body.storyboard_id) {
+    const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
+    if (sb) {
+      const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
+      if (ep?.videoConfigId != null) configId = ep.videoConfigId
+    }
+  }
+  if (configId) return getConfigById(configId)
+  return getActiveConfig('video')
+}
 
 // POST /videos — Generate video
 app.post('/', async (c) => {
   const body = await c.req.json()
   if (!body.prompt) return badRequest(c, 'prompt is required')
+
+  const videoConfig = resolveVideoConfig(body)
+  const billing = resolveVideoCreditCharge(videoConfig?.provider)
+
+  const billed = tryChargeUser(c, billing.action, {
+    summary: '生成镜头视频',
+    quantity: billing.quantity,
+    dramaId: body.drama_id ? Number(body.drama_id) : undefined,
+    resourceType: 'storyboard',
+    resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+    metadata: {
+      billed_seconds: billing.billedSeconds,
+      provider: videoConfig?.provider || null,
+    },
+  })
+  if (billed.error) return billed.error
 
   try {
     let configId: number | undefined = body.config_id
@@ -39,16 +73,40 @@ app.post('/', async (c) => {
       firstFrameUrl: body.first_frame_url,
       lastFrameUrl: body.last_frame_url,
       referenceImageUrls: body.reference_image_urls,
+      contentRefs: body.content_refs,
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
       configId,
+      creditTransactionId: billed.charge.transactionId,
     })
 
     const [record] = db.select().from(schema.videoGenerations)
       .where(eq(schema.videoGenerations.id, id)).all()
     logTaskSuccess('VideoAPI', 'generate', { generationId: id, provider: record?.provider })
+    logActivity(getAuthUser(c), {
+      action: 'video.generate',
+      summary: '生成镜头视频',
+      resourceType: 'storyboard',
+      resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+      dramaId: body.drama_id ? Number(body.drama_id) : undefined,
+      creditCost: billed.charge.cost,
+      metadata: {
+        generation_id: id,
+        credit_tx_id: billed.charge.transactionId,
+        billed_seconds: billing.billedSeconds,
+        billing_action: billing.action,
+        provider: videoConfig?.provider || null,
+      },
+    })
     return created(c, record)
   } catch (err: any) {
+    tryRefundCharge(billed.charge.transactionId, {
+      summary: '视频生成失败退款',
+      dramaId: body.drama_id ? Number(body.drama_id) : undefined,
+      resourceType: 'storyboard',
+      resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
+      metadata: { reason: err.message },
+    })
     logTaskError('VideoAPI', 'generate', { error: err.message })
     return badRequest(c, err.message)
   }

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Huobao Drama — AI-powered drama/video production tool. Full TypeScript stack.
+红果短剧 — AI-powered drama/video production tool. Full TypeScript stack.
 
 ## Structure
 

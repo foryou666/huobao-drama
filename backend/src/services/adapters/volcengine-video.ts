@@ -12,12 +12,22 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
+import { seedanceDurationBounds, SEEDANCE_MODELS } from '../../constants/seedance.js'
+import {
+  buildSeedance2GenerateRequest,
+  parseVideoContentRefs,
+  shouldUseSeedance2Multimodal,
+} from '../../utils/seedance-content.js'
 
 export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   provider = 'volcengine'
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
-    const model = record.model || config.model || 'doubao-seedance-1-5-pro-251215'
+    const model = record.model || config.model || SEEDANCE_MODELS.V1_5_PRO
+    const contentRefs = parseVideoContentRefs(record.referencePayload)
+    if (shouldUseSeedance2Multimodal(model, contentRefs)) {
+      return buildSeedance2GenerateRequest(config, record, contentRefs)
+    }
 
     const content: any[] = [{ type: 'text', text: record.prompt || '' }]
 
@@ -45,7 +55,7 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       content,
       generate_audio: true,
       ratio: record.aspectRatio || 'adaptive',
-      duration: this.normalizeDuration(record.duration),
+      duration: this.normalizeDuration(record.duration, model),
       watermark: false,
     }
 
@@ -102,9 +112,10 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     return result.video_url || result.content?.video_url || result.data?.video_url || null
   }
 
-  private normalizeDuration(duration?: number | null): number {
-    const parsed = Math.round(Number(duration || 5))
-    if (!Number.isFinite(parsed)) return 5
-    return Math.min(12, Math.max(4, parsed))
+  private normalizeDuration(duration?: number | null, model?: string): number {
+    const { min, max, defaultSec } = seedanceDurationBounds(model)
+    const parsed = Math.round(Number(duration || defaultSec))
+    if (!Number.isFinite(parsed)) return defaultSec
+    return Math.min(max, Math.max(min, parsed))
   }
 }

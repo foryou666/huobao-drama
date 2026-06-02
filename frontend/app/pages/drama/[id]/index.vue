@@ -13,7 +13,8 @@
           <h1 class="page-title">{{ drama.title }}</h1>
           <div class="page-meta">
             <span v-if="drama.style" class="style-chip">{{ drama.style }}</span>
-            <span v-if="drama.style" class="meta-divider"></span>
+            <span v-if="directorStyleLabel" class="style-chip director-chip">{{ directorStyleLabel }}</span>
+            <span v-if="drama.style || directorStyleLabel" class="meta-divider"></span>
             <span class="meta-item">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               {{ drama.characters?.length || 0 }} 角色
@@ -26,13 +27,58 @@
           </div>
         </div>
       </div>
-      <button class="btn btn-primary" @click="openAddEpisode">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        添加集
-      </button>
+      <div v-if="canManageDrama" class="head-actions">
+        <button v-if="drama.is_archived" class="btn" @click="restoreDrama">
+          恢复项目
+        </button>
+        <button v-else class="btn" @click="archiveDrama">
+          归档
+        </button>
+        <button class="btn btn-primary" @click="openAddEpisode">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          添加集
+        </button>
+      </div>
     </div>
+
+    <!-- Team sharing -->
+    <section v-if="drama" class="share-panel card">
+      <div class="share-head">
+        <div>
+          <div class="share-title">团队共享</div>
+          <div class="share-desc">
+            归属团队：{{ drama.owner_team_name || '—' }}
+            <span v-if="drama.is_shared_project" class="tag tag-accent">外部共享项目</span>
+          </div>
+        </div>
+      </div>
+      <div v-if="shareInfo?.shared_teams?.length" class="share-tags">
+        <span v-for="t in shareInfo.shared_teams" :key="t.team_id" class="share-tag">
+          {{ t.team_name }}
+          <button
+            v-if="canManageShares"
+            type="button"
+            class="share-tag-remove"
+            title="取消共享"
+            @click="removeShare(t.team_id)"
+          >×</button>
+        </span>
+      </div>
+      <p v-else class="share-empty">尚未共享给其他团队</p>
+      <form v-if="canManageShares" class="share-form" @submit.prevent="addShare">
+        <select v-model.number="shareTeamId" class="input" required>
+          <option :value="null" disabled>选择要共享的团队</option>
+          <option
+            v-for="t in shareTeamOptions"
+            :key="t.id"
+            :value="t.id"
+          >{{ t.name }}</option>
+        </select>
+        <button type="submit" class="btn btn-sm" :disabled="!shareTeamId">添加共享</button>
+      </form>
+    </section>
 
     <!-- Episode List -->
     <div class="section-label">
@@ -68,6 +114,17 @@
             <polyline points="9 18 15 12 9 6"/>
           </svg>
         </div>
+        <button
+          v-if="canManageDrama && ep.can_delete"
+          type="button"
+          class="btn btn-ghost btn-icon ep-delete"
+          title="删除空集"
+          @click.stop="deleteEpisode(ep)"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+          </svg>
+        </button>
       </div>
 
       <!-- Empty episode state -->
@@ -151,11 +208,18 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, dramaAPI, episodeAPI } from '~/composables/useApi'
+import { aiConfigAPI, dramaAPI, episodeAPI, promptsAPI, teamsAPI } from '~/composables/useApi'
+import { useTeam } from '~/composables/useTeam'
 
 const route = useRoute()
+const { activeTeamId } = useTeam()
 const drama = ref(null)
 const dramaId = Number(route.params.id)
+const directorStyles = ref([])
+const directorStyleLabel = computed(() => {
+  const id = drama.value?.director_style || drama.value?.directorStyle || 'hongguo_director'
+  return directorStyles.value.find(s => s.id === id)?.label || ''
+})
 const addDialog = ref(false)
 const creatingEpisode = ref(false)
 const newEpisodeTitle = ref('')
@@ -165,6 +229,17 @@ const audioConfigs = ref([])
 const newEpisodeImageConfigId = ref(null)
 const newEpisodeVideoConfigId = ref(null)
 const newEpisodeAudioConfigId = ref(null)
+const shareInfo = ref(null)
+const allTeams = ref([])
+const shareTeamId = ref(null)
+
+const canManageShares = computed(() => Boolean(drama.value?.can_manage_shares))
+const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
+const shareTeamOptions = computed(() => {
+  const ownerId = drama.value?.team_id
+  const shared = new Set((shareInfo.value?.shared_teams || []).map(t => t.team_id))
+  return allTeams.value.filter(t => t.id !== ownerId && !shared.has(t.id))
+})
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
 
@@ -180,9 +255,53 @@ const videoConfigOptions = computed(() => videoConfigs.value.map(c => ({ label: 
 const audioConfigOptions = computed(() => audioConfigs.value.map(c => ({ label: configLabel(c), value: c.id })))
 const canCreateEpisode = computed(() => !!(newEpisodeImageConfigId.value && newEpisodeVideoConfigId.value && newEpisodeAudioConfigId.value))
 
+async function loadDirectorStyles() {
+  try {
+    const res = await promptsAPI.directorStyles()
+    directorStyles.value = res.items || []
+  } catch {
+    directorStyles.value = [
+      { id: 'hongguo_director', label: '红果导演' },
+      { id: 'super_director', label: '超级导演' },
+      { id: 'north_america_director', label: '北美导演' },
+    ]
+  }
+}
+
 async function load() {
   try {
     drama.value = await dramaAPI.get(dramaId)
+    drama.value.is_shared_project = activeTeamId.value != null
+      && drama.value.team_id != null
+      && drama.value.team_id !== activeTeamId.value
+    shareInfo.value = await dramaAPI.shares(dramaId)
+    if (drama.value.can_manage_shares) {
+      const dir = await teamsAPI.directory()
+      allTeams.value = dir.items || []
+    }
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function addShare() {
+  if (!shareTeamId.value) return
+  try {
+    const res = await dramaAPI.addShare(dramaId, shareTeamId.value)
+    shareInfo.value = { ...shareInfo.value, shared_teams: res.shared_teams }
+    shareTeamId.value = null
+    toast.success('已添加共享团队')
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function removeShare(teamId) {
+  if (!confirm('确定取消对该团队的共享？')) return
+  try {
+    const res = await dramaAPI.removeShare(dramaId, teamId)
+    shareInfo.value = { ...shareInfo.value, shared_teams: res.shared_teams }
+    toast.success('已取消共享')
   } catch (e) {
     toast.error(e.message)
   }
@@ -231,7 +350,46 @@ async function addEpisode() {
   }
 }
 
-onMounted(() => { load(); loadConfigs() })
+async function archiveDrama() {
+  const summary = drama.value?.content_summary || '含制作内容'
+  const msg = drama.value?.can_delete
+    ? `归档后将从列表隐藏，可随时恢复。\n\n当前内容：${summary}`
+    : `该项目含制作内容，无法直接删除。\n\n${drama.value?.delete_block_reason || summary}\n\n是否改为归档？`
+  if (!confirm(`归档「${drama.value?.title}」？\n\n${msg}`)) return
+  try {
+    await dramaAPI.archive(dramaId)
+    toast.success('已归档')
+    navigateTo('/')
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function restoreDrama() {
+  if (!confirm(`恢复项目「${drama.value?.title}」到列表？`)) return
+  try {
+    await dramaAPI.restore(dramaId)
+    toast.success('已恢复')
+    load()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+async function deleteEpisode(ep) {
+  const num = ep.episode_number || ep.episodeNumber
+  const summary = ep.content_summary || '无制作内容'
+  if (!confirm(`确定删除第 ${num} 集？\n\n当前内容：${summary}\n\n仅允许删除无制作内容的集。`)) return
+  try {
+    await episodeAPI.del(ep.id)
+    toast.success('已删除')
+    load()
+  } catch (e) {
+    toast.error(e.message)
+  }
+}
+
+onMounted(() => { loadDirectorStyles(); load(); loadConfigs() })
 </script>
 
 <style scoped>
@@ -249,6 +407,7 @@ onMounted(() => { load(); loadConfigs() })
   margin-bottom: 24px;
   gap: 20px;
 }
+.head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .head-left { display: flex; align-items: flex-start; gap: 12px; }
 .head-info { display: flex; flex-direction: column; gap: 8px; }
 
@@ -337,6 +496,14 @@ onMounted(() => { load(); loadConfigs() })
 
 .ep-arrow { color: var(--text-3); flex-shrink: 0; transition: transform 0.18s; }
 .ep-card:hover .ep-arrow { transform: translateX(3px); color: var(--accent); }
+.ep-delete {
+  flex-shrink: 0;
+  opacity: 0;
+  color: var(--text-3);
+  transition: opacity 0.18s, color 0.18s;
+}
+.ep-card:hover .ep-delete { opacity: 1; }
+.ep-delete:hover { color: var(--error); }
 
 /* Empty */
 .ep-empty {
@@ -476,6 +643,29 @@ onMounted(() => { load(); loadConfigs() })
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; font-weight: 600; color: var(--text-1); }
 .field-hint { font-size: 12px; color: var(--text-3); }
+
+.share-panel {
+  margin-bottom: 20px;
+  padding: 16px 18px;
+}
+.share-head { margin-bottom: 12px; }
+.share-title { font-size: 14px; font-weight: 600; }
+.share-desc { font-size: 12px; color: var(--text-3); margin-top: 4px; display: flex; align-items: center; gap: 8px; }
+.share-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.share-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-2);
+  font-size: 12px;
+}
+.share-tag-remove {
+  border: none; background: none; cursor: pointer;
+  color: var(--text-3); font-size: 14px; line-height: 1; padding: 0;
+}
+.share-tag-remove:hover { color: var(--error); }
+.share-empty { font-size: 12px; color: var(--text-3); margin: 0 0 12px; }
+.share-form { display: flex; gap: 10px; align-items: center; }
+.share-form .input { flex: 1; max-width: 280px; }
 
 @media (max-width: 860px) {
   .dialog {
