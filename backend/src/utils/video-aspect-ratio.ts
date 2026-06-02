@@ -6,9 +6,16 @@ import { isSeedance2Model } from '../constants/seedance.js'
 
 const FIXED_SEEDANCE_RATIOS = new Set(['16:9', '9:16', '4:3', '3:4', '1:1', '21:9'])
 
-/** ChatFire 等网关有时用 aspectRatio 字段校验，与官方 Ark 的 ratio 并存 */
-export function isChatfireVolcengineGateway(baseUrl?: string | null): boolean {
-  return String(baseUrl || '').toLowerCase().includes('chatfire')
+/** 火山官方 Ark 根地址（仅 ratio 字段，无 aspectRatio） */
+export function isOfficialArkVolcengine(baseUrl?: string | null): boolean {
+  return String(baseUrl || '').toLowerCase().includes('volces.com')
+}
+
+/** ChatFire 等第三方火山代理会额外校验 aspectRatio，且只接受 adaptive */
+export function shouldSendSeedanceAspectRatioField(baseUrl?: string | null): boolean {
+  if (isOfficialArkVolcengine(baseUrl)) return false
+  const url = String(baseUrl || '').toLowerCase()
+  return url.includes('chatfire') || url.includes('/volcengine')
 }
 
 /**
@@ -36,8 +43,9 @@ export function seedanceRatioRequestFields(
 ): Record<string, string> {
   const ratio = normalizeSeedanceRatio(aspectRatio, model, { hasReferenceMedia })
   const fields: Record<string, string> = { ratio }
-  if (isChatfireVolcengineGateway(baseUrl)) {
-    fields.aspectRatio = ratio
+  // 第三方网关（ChatFire 等）的 aspectRatio 字段仅接受 adaptive，不能与 ratio 共用 9:16
+  if (shouldSendSeedanceAspectRatioField(baseUrl)) {
+    fields.aspectRatio = 'adaptive'
   }
   return fields
 }
