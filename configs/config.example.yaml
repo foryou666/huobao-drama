@@ -27,7 +27,8 @@ storage:
     bucket: "llingjingmanju"
     region: "oss-cn-qingdao"
     public_base_url: "https://llingjingmanju.oss-cn-qingdao.aliyuncs.com"
-    key_prefix: "hongguoduanju"
+    # 可选全局前缀；对象路径默认 {drama_id}/asset/{文件名}
+    # key_prefix: ""
     # 凭证请写在 backend/.env（勿提交 git）
     # access_key_id: ""
     # access_key_secret: ""

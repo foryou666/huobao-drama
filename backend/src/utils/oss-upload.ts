@@ -4,17 +4,19 @@
 import fs from 'fs'
 import path from 'path'
 import OSS from 'ali-oss'
+import { eq, or } from 'drizzle-orm'
 import { getAbsolutePath } from './storage.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
+import { now } from './response.js'
+import { db, schema } from '../db/index.js'
+import { ossKeyPrefix, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
 
 let client: OSS | null = null
-/** 已上传的 static 路径 → OSS objectKey */
-const objectKeyCache = new Map<string, string>()
 
 /** 签名 URL 有效期（秒），橙盟异步任务需足够长 */
 const SIGNED_URL_EXPIRES_SEC = 7 * 24 * 3600
 
-function ossBucket(): string {
+export function ossBucket(): string {
   const fromEnv = (process.env.OSS_BUCKET || '').trim()
   if (fromEnv) return fromEnv
   const endpoint = (process.env.OSS_ENDPOINT || process.env.OSS_PUBLIC_BASE_URL || '').trim()
@@ -26,15 +28,7 @@ function ossRegion(): string {
   return (process.env.OSS_REGION || 'oss-cn-qingdao').trim()
 }
 
-function ossPublicBase(): string {
-  const custom = (process.env.OSS_PUBLIC_BASE_URL || process.env.OSS_ENDPOINT || '').trim().replace(/\/+$/, '')
-  if (custom) return custom
-  return `https://${ossBucket()}.${ossRegion()}.aliyuncs.com`
-}
-
-function ossKeyPrefix(): string {
-  return (process.env.OSS_KEY_PREFIX || 'hongguoduanju').replace(/^\/+|\/+$/g, '')
-}
+export { ossKeyPrefix } from './oss-path.js'
 
 export function isOssConfigured(): boolean {
   return !!(process.env.OSS_ACCESS_KEY_ID?.trim() && process.env.OSS_ACCESS_KEY_SECRET?.trim())
@@ -71,50 +65,102 @@ function mimeFromPath(filePath: string): string {
   return map[ext] || 'application/octet-stream'
 }
 
-function buildObjectKey(relativeStaticPath: string): string {
+function buildFallbackObjectKey(relativeStaticPath: string): string {
   const normalized = relativeStaticPath.replace(/^\/+/, '')
+  const projectKey = resolveProjectObjectKeyForStaticPath(normalized)
+  if (projectKey) return projectKey
   const prefix = ossKeyPrefix()
-  return prefix ? `${prefix}/${normalized}` : normalized
+  const fallback = `unknown/asset/${normalized.replace(/^static\//, '')}`
+  return prefix ? `${prefix}/${fallback}` : fallback
 }
 
-function buildSignedUrl(objectKey: string): string {
+function upsertPathMapping(localPath: string, objectKey: string) {
+  const normalized = localPath.replace(/^\/+/, '')
+  const ts = now()
+  db.insert(schema.ossStaticMappings)
+    .values({ localPath: normalized, objectKey, updatedAt: ts })
+    .onConflictDoUpdate({
+      target: schema.ossStaticMappings.localPath,
+      set: { objectKey, updatedAt: ts },
+    })
+    .run()
+}
+
+export function lookupOssObjectKey(localPath: string): string | null {
+  const normalized = String(localPath || '').trim().replace(/^\/+/, '')
+  if (!normalized) return null
+
+  const mapped = db.select()
+    .from(schema.ossStaticMappings)
+    .where(eq(schema.ossStaticMappings.localPath, normalized))
+    .all()[0]
+  if (mapped?.objectKey) return mapped.objectKey
+
+  const [char] = db.select()
+    .from(schema.characters)
+    .where(or(
+      eq(schema.characters.imageUrl, normalized),
+      eq(schema.characters.localPath, normalized),
+    ))
+    .all()
+  if (char?.ossObjectKey) return char.ossObjectKey
+
+  const [scene] = db.select()
+    .from(schema.scenes)
+    .where(or(
+      eq(schema.scenes.imageUrl, normalized),
+      eq(schema.scenes.localPath, normalized),
+    ))
+    .all()
+  if (scene?.ossObjectKey) return scene.ossObjectKey
+
+  return null
+}
+
+export function signOssObjectKey(objectKey: string): string {
   return getClient().signatureUrl(objectKey, {
     expires: SIGNED_URL_EXPIRES_SEC,
     method: 'GET',
   })
 }
 
-/** 将 static/... 本地路径上传到 OSS，返回带签名的公网 https URL */
+/** 上传本地文件到指定 OSS objectKey（覆盖写入） */
+export async function putLocalFileToOss(absPath: string, objectKey: string): Promise<void> {
+  await getClient().put(objectKey, absPath, {
+    headers: {
+      'Content-Type': mimeFromPath(absPath),
+    },
+  })
+}
+
+/**
+ * 兜底：按 static 路径上传 OSS（镜头帧等非角色/场景资源）
+ * 角色/场景图应在生成/上传时已同步，此处仅处理未映射资源
+ */
 export async function uploadStaticToOss(relativeStaticPath: string): Promise<string> {
   const normalized = relativeStaticPath.replace(/^\/+/, '')
   if (!normalized.startsWith('static/')) {
     throw new Error(`仅支持 static/ 路径上传 OSS: ${relativeStaticPath}`)
   }
 
-  let objectKey = objectKeyCache.get(normalized)
-  if (!objectKey) {
-    const absPath = getAbsolutePath(normalized)
-    if (!fs.existsSync(absPath)) {
-      throw new Error(`本地文件不存在: ${normalized}`)
-    }
-
-    objectKey = buildObjectKey(normalized)
-    const oss = getClient()
-    await oss.put(objectKey, absPath, {
-      headers: {
-        'Content-Type': mimeFromPath(absPath),
-      },
-    })
-    objectKeyCache.set(normalized, objectKey)
-    logTaskProgress('OSS', 'uploaded', { path: normalized, objectKey })
+  const existingKey = lookupOssObjectKey(normalized)
+  if (existingKey) {
+    return signOssObjectKey(existingKey)
   }
 
-  const url = buildSignedUrl(objectKey)
-  logTaskProgress('OSS', 'signed-url', { path: normalized, objectKey })
-  return url
+  const absPath = getAbsolutePath(normalized)
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`本地文件不存在: ${normalized}`)
+  }
+
+  const objectKey = buildFallbackObjectKey(normalized)
+  await putLocalFileToOss(absPath, objectKey)
+  upsertPathMapping(normalized, objectKey)
+  logTaskProgress('OSS', 'uploaded-fallback', { path: normalized, objectKey })
+  return signOssObjectKey(objectKey)
 }
 
-/** 解析媒体 URL：已是 http(s) 则原样返回；本地 static/ 则上传 OSS */
+/** 解析媒体 URL：已是 http(s) 则原样返回；本地 static/ 优先读 OSS 映射签名 */
 export async function resolveMediaUrlForExternalApi(value: string | null | undefined): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
@@ -126,6 +172,10 @@ export async function resolveMediaUrlForExternalApi(value: string | null | undef
 
   if (staticPath && isOssConfigured()) {
     try {
+      const mappedKey = lookupOssObjectKey(staticPath)
+      if (mappedKey) {
+        return signOssObjectKey(mappedKey)
+      }
       return await uploadStaticToOss(staticPath)
     } catch (err: any) {
       logTaskWarn('OSS', 'upload-failed', { path: staticPath, error: err?.message || String(err) })

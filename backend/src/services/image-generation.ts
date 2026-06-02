@@ -12,6 +12,11 @@ import { syncCharacterAsset, syncSceneAsset } from './asset-library.js'
 import { upsertSceneAngleImage } from '../utils/scene-image-variants.js'
 import { formatProviderError } from '../utils/format-provider-error.js'
 import { failImageGeneration } from '../utils/generation-failure.js'
+import {
+  trySyncCharacterImageAfterGeneration,
+  trySyncSceneImageAfterGeneration,
+  trySyncStoryboardImageAfterGeneration,
+} from '../utils/oss-entity-sync.js'
 
 function resolveOutfitLabel(record: typeof schema.imageGenerations.$inferSelect): string {
   if (record.propId) {
@@ -362,6 +367,11 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
   }
   if (record?.characterId) applyCharacterImageCompletion(record, localPath)
   applySceneImageCompletion(record, localPath)
+  if (record) {
+    await trySyncCharacterImageAfterGeneration(record, localPath)
+    await trySyncSceneImageAfterGeneration(record, localPath)
+    await trySyncStoryboardImageAfterGeneration(record, localPath)
+  }
 }
 
 async function handleImageCompleteBase64(id: number, provider: string, base64Data: string, mimeType: string) {
@@ -386,4 +396,9 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
   }
   if (record?.characterId) applyCharacterImageCompletion(record, localPath)
   applySceneImageCompletion(record, localPath)
+  if (record) {
+    await trySyncCharacterImageAfterGeneration(record, localPath)
+    await trySyncSceneImageAfterGeneration(record, localPath)
+    await trySyncStoryboardImageAfterGeneration(record, localPath)
+  }
 }

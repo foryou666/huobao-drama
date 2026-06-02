@@ -378,6 +378,16 @@ ensureColumn('assets', 'source_id', 'INTEGER')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')
 ensureColumn('image_generations', 'credit_transaction_id', 'INTEGER')
 ensureColumn('video_generations', 'credit_transaction_id', 'INTEGER')
+ensureColumn('characters', 'oss_object_key', 'TEXT')
+ensureColumn('scenes', 'oss_object_key', 'TEXT')
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS oss_static_mappings (
+    local_path TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+`)
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS credit_pricing (

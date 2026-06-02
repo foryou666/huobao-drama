@@ -8,6 +8,7 @@ import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import { resolveSceneImagePrompt } from '../utils/scene-image-prompt.js'
 import { saveUploadedFile } from '../utils/storage.js'
+import { syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncSceneAsset } from '../services/asset-library.js'
 import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 import { getUserBalance } from '../services/credits.js'
@@ -92,6 +93,7 @@ app.post('/:id/upload-image', async (c) => {
       .set({ imageUrl: path, localPath: path, updatedAt: ts })
       .where(eq(schema.scenes.id, id))
       .run()
+    await syncScenePrimaryImage(id, path)
     syncSceneAsset(id)
     logActivity(getAuthUser(c), {
       action: 'scene.image.upload',

@@ -65,6 +65,7 @@ export const characters = sqliteTable('characters', {
   seedanceAssetId: text('seedance_asset_id'),
   seedanceAssetGroupId: text('seedance_asset_group_id'),
   seedanceAssetStatus: text('seedance_asset_status'),
+  ossObjectKey: text('oss_object_key'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
@@ -98,6 +99,7 @@ export const scenes = sqliteTable('scenes', {
   referenceImages: text('reference_images'),
   status: text('status').default('pending'),
   localPath: text('local_path'),
+  ossObjectKey: text('oss_object_key'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
@@ -374,6 +376,13 @@ export const creditTransactions = sqliteTable('credit_transactions', {
 })
 
 export type CreditTransactionType = 'charge' | 'grant' | 'refund'
+
+/** static/ 本地路径 → OSS objectKey，角色/场景图在生成或上传时写入 */
+export const ossStaticMappings = sqliteTable('oss_static_mappings', {
+  localPath: text('local_path').primaryKey(),
+  objectKey: text('object_key').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
 
 export const activityLogs = sqliteTable('activity_logs', {
   id: integer('id').primaryKey({ autoIncrement: true }),

@@ -9,6 +9,7 @@ import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import { resolveCharacterImagePrompt } from '../utils/character-image-prompt.js'
 import { saveUploadedFile } from '../utils/storage.js'
+import { syncCharacterPrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncCharacterAsset } from '../services/asset-library.js'
 import { getConfigById, getActiveConfig } from '../services/ai.js'
 import {
@@ -117,6 +118,7 @@ app.post('/:id/upload-image', async (c) => {
       .set({ imageUrl: path, localPath: path, updatedAt: ts })
       .where(eq(schema.characters.id, id))
       .run()
+    await syncCharacterPrimaryImage(id, path)
     syncCharacterAsset(id)
     logActivity(getAuthUser(c), {
       action: 'character.image.upload',
