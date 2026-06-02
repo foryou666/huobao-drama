@@ -927,21 +927,21 @@
                       <div class="char-transform-row char-outfit-transform">
                         <span class="char-transform-label">Seedance</span>
                         <div class="char-transform-btns">
-                          <button
-                            v-for="preset in CHARACTER_IMAGE_TRANSFORMS"
-                            :key="`${outfit.outfit_id}:${preset.id}`"
-                            type="button"
-                            class="btn btn-sm char-transform-btn"
-                            :title="charTransformTitle(c, preset, outfit.outfit_id)"
-                            :disabled="charTransformDisabled(c, outfit.outfit_id)"
-                            @click="transformCharImg(c.id, preset.id, preset.label, outfit.outfit_id)"
-                          >
-                            {{ isPendingCharTransform(c.id, preset.id, outfit.outfit_id) ? '转换中' : preset.label }}
-                          </button>
-                          <GenerationTimer
-                            v-if="isPendingCharTransform(c.id, preset.id, outfit.outfit_id)"
-                            :task-key="charTransformTimerKeyFor(c.id, preset.id, outfit.outfit_id)"
-                          />
+                          <template v-for="preset in CHARACTER_IMAGE_TRANSFORMS" :key="`${outfit.outfit_id}:${preset.id}`">
+                            <button
+                              type="button"
+                              class="btn btn-sm char-transform-btn"
+                              :title="charTransformTitle(c, preset, outfit.outfit_id)"
+                              :disabled="charTransformDisabled(c, outfit.outfit_id)"
+                              @click="transformCharImg(c.id, preset.id, preset.label, outfit.outfit_id)"
+                            >
+                              {{ isPendingCharTransform(c.id, preset.id, outfit.outfit_id) ? '转换中' : preset.label }}
+                            </button>
+                            <GenerationTimer
+                              v-if="isPendingCharTransform(c.id, preset.id, outfit.outfit_id)"
+                              :task-key="charTransformTimerKeyFor(c.id, preset.id, outfit.outfit_id)"
+                            />
+                          </template>
                         </div>
                       </div>
                     </div>
@@ -974,21 +974,21 @@
                     <span class="char-transform-label">原图 Seedance</span>
                     <span class="dim char-transform-size-hint">按原图尺寸</span>
                     <div class="char-transform-btns">
-                      <button
-                        v-for="preset in CHARACTER_IMAGE_TRANSFORMS"
-                        :key="preset.id"
-                        type="button"
-                        class="btn btn-sm char-transform-btn"
-                        :title="charTransformTitle(c, preset, 'primary')"
-                        :disabled="charTransformDisabled(c, 'primary')"
-                        @click="transformCharImg(c.id, preset.id, preset.label, 'primary')"
-                      >
-                        {{ isPendingCharTransform(c.id, preset.id, 'primary') ? '转换中' : preset.label }}
-                      </button>
-                      <GenerationTimer
-                        v-if="isPendingCharTransform(c.id, preset.id, 'primary')"
-                        :task-key="charTransformTimerKeyFor(c.id, preset.id, 'primary')"
-                      />
+                      <template v-for="preset in CHARACTER_IMAGE_TRANSFORMS" :key="preset.id">
+                        <button
+                          type="button"
+                          class="btn btn-sm char-transform-btn"
+                          :title="charTransformTitle(c, preset, 'primary')"
+                          :disabled="charTransformDisabled(c, 'primary')"
+                          @click="transformCharImg(c.id, preset.id, preset.label, 'primary')"
+                        >
+                          {{ isPendingCharTransform(c.id, preset.id, 'primary') ? '转换中' : preset.label }}
+                        </button>
+                        <GenerationTimer
+                          v-if="isPendingCharTransform(c.id, preset.id, 'primary')"
+                          :task-key="charTransformTimerKeyFor(c.id, preset.id, 'primary')"
+                        />
+                      </template>
                     </div>
                   </div>
                   <div v-if="!imageReferenceSupported" class="char-transform-note dim">{{ imageReferenceSupportHint() }}</div>
