@@ -18,6 +18,7 @@ import {
   parseVideoContentRefs,
   shouldUseSeedance2Multimodal,
 } from '../../utils/seedance-content.js'
+import { seedanceRatioRequestFields } from '../../utils/video-aspect-ratio.js'
 
 export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   provider = 'volcengine'
@@ -50,11 +51,12 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       } catch {}
     }
 
+    const hasReferenceMedia = content.some(item => item.type === 'image_url')
     const body: any = {
       model,
       content,
       generate_audio: true,
-      ratio: record.aspectRatio || 'adaptive',
+      ...seedanceRatioRequestFields(record.aspectRatio, model, hasReferenceMedia, config.baseUrl),
       duration: this.normalizeDuration(record.duration, model),
       watermark: false,
     }
