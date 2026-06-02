@@ -7,6 +7,7 @@ import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import { resolveSceneImagePrompt } from '../utils/scene-image-prompt.js'
+import { saveUploadedFile } from '../utils/storage.js'
 import { syncSceneAsset } from '../services/asset-library.js'
 import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 import { getUserBalance } from '../services/credits.js'
@@ -70,6 +71,39 @@ app.put('/:id', async (c) => {
   db.update(schema.scenes).set(updates).where(eq(schema.scenes.id, id)).run()
   syncSceneAsset(id)
   return success(c)
+})
+
+// POST /scenes/:id/upload-image — 手动上传场景主视角图
+app.post('/:id/upload-image', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, id)).all()
+  if (!scene) return badRequest(c, 'Scene not found')
+
+  const body = await c.req.parseBody()
+  const file = body['file']
+  if (!file || !(file instanceof File)) return badRequest(c, 'file is required')
+  if (!file.type.startsWith('image/')) return badRequest(c, '仅支持图片文件')
+
+  try {
+    const buffer = await file.arrayBuffer()
+    const path = await saveUploadedFile(buffer, 'scenes', file.name)
+    const ts = now()
+    db.update(schema.scenes)
+      .set({ imageUrl: path, localPath: path, updatedAt: ts })
+      .where(eq(schema.scenes.id, id))
+      .run()
+    syncSceneAsset(id)
+    logActivity(getAuthUser(c), {
+      action: 'scene.image.upload',
+      summary: `上传场景图：${scene.location}`,
+      resourceType: 'scene',
+      resourceId: id,
+      dramaId: scene.dramaId,
+    })
+    return success(c, { path, url: `/${path}` })
+  } catch (err: any) {
+    return badRequest(c, err.message || '上传失败')
+  }
 })
 
 // GET /scenes/angle-presets

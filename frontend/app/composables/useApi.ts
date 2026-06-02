@@ -330,6 +330,11 @@ export const characterAPI = {
 
 export const sceneAPI = {
   update: (id: number, data: any) => api.put(`/scenes/${id}`, data),
+  uploadImage: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return uploadForm(`/scenes/${id}/upload-image`, form)
+  },
   generateImage: (id: number, episodeId: number, prompt?: string) =>
     api.post(`/scenes/${id}/generate-image`, { episode_id: episodeId, ...(prompt ? { prompt } : {}) }),
   generateAngle: (id: number, data: { episode_id: number; angle_id: string; prompt?: string }) =>
@@ -503,6 +508,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'character.voice_sample': '音色试听',
   'character.image.upload': '上传角色图',
   'scene.image': '生成场景图',
+  'scene.image.upload': '上传场景图',
   'scene.image.angle': '场景多角度',
   'scene.image.angle.batch': '场景全部角度',
   'scene.image.angle.sheet': '场景多视角拼板',

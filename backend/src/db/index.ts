@@ -375,7 +375,6 @@ ensureColumn('storyboards', 'scene_angle_id', 'TEXT')
 ensureColumn('scenes', 'reference_images', 'TEXT')
 ensureColumn('assets', 'source_type', 'TEXT')
 ensureColumn('assets', 'source_id', 'INTEGER')
-ensureColumn('users', 'credits_balance', 'INTEGER DEFAULT 10000')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')
 ensureColumn('image_generations', 'credit_transaction_id', 'INTEGER')
 ensureColumn('video_generations', 'credit_transaction_id', 'INTEGER')
@@ -485,6 +484,8 @@ sqlite.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_drama_team_shares_team_id ON drama_team_shares(team_id);
 `)
+
+ensureColumn('users', 'credits_balance', 'INTEGER DEFAULT 10000')
 
 function seedDefaultAdmin() {
   const count = sqlite.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }

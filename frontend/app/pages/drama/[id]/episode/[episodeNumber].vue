@@ -826,9 +826,11 @@
                     class="previewable-image"
                     @click.stop="openImageViewer('/' + (c.image_url || c.imageUrl), `${c.name} 角色形象`)"
                   />
-                  <div v-else class="asset-cover-empty">
+                  <label v-else class="asset-cover-empty asset-cover-upload" :class="{ 'is-disabled': isPendingCharImage(c.id) || isPendingCharUpload(c.id) }">
+                    <input type="file" accept="image/*" hidden :disabled="isPendingCharImage(c.id) || isPendingCharUpload(c.id)" @change="uploadCharImage(c.id, $event)" />
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                  </div>
+                    <span class="asset-cover-upload-text">{{ isPendingCharUpload(c.id) ? '上传中…' : '点击上传形象' }}</span>
+                  </label>
                   <span class="asset-cover-badge" :class="(c.image_url || c.imageUrl) ? 'is-ready' : (isPendingCharImage(c.id) ? 'is-pending' : '')">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
                 </div>
                 <div class="asset-body">
@@ -894,9 +896,15 @@
                   <div class="asset-foot-row">
                     <span :class="['dot', (c.image_url || c.imageUrl) && 'ok', isPendingCharImage(c.id) && 'pending']" />
                     <span class="dim" style="font-size:10px">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
-                    <button class="btn btn-sm" :disabled="isPendingCharImage(c.id)" @click="openAssetPicker('character', c.id)">人物资产</button>
-                    <button class="btn btn-sm" :disabled="charOutfitDisabled(c)" @click="openAssetPicker('costume', c.id)">选服装换装</button>
-                    <button class="btn btn-sm ml-auto" :disabled="isPendingCharImage(c.id) || assistantRunning" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : '生成' }}</button>
+                    <div class="asset-foot-actions">
+                      <button class="btn btn-sm" :disabled="isPendingCharImage(c.id)" @click="openAssetPicker('character', c.id)">人物资产</button>
+                      <button class="btn btn-sm" :disabled="charOutfitDisabled(c)" @click="openAssetPicker('costume', c.id)">选服装换装</button>
+                      <label class="btn btn-sm asset-upload-btn" :class="{ 'is-disabled': isPendingCharImage(c.id) || isPendingCharUpload(c.id) }">
+                        <input type="file" accept="image/*" hidden :disabled="isPendingCharImage(c.id) || isPendingCharUpload(c.id)" @change="uploadCharImage(c.id, $event)" />
+                        {{ isPendingCharUpload(c.id) ? '上传中' : '上传' }}
+                      </label>
+                      <button class="btn btn-sm btn-primary" :disabled="isPendingCharImage(c.id) || assistantRunning" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : 'AI 生成' }}</button>
+                    </div>
                   </div>
                   <div class="char-transform-row">
                     <span class="char-transform-label">原图 Seedance</span>
@@ -943,9 +951,11 @@
                     class="previewable-image"
                     @click.stop="openImageViewer('/' + (s.image_url || s.imageUrl), `${s.location} 场景图`)"
                   />
-                  <div v-else class="asset-cover-empty">
+                  <label v-else class="asset-cover-empty asset-cover-upload" :class="{ 'is-disabled': isPendingSceneImage(s.id) || isPendingSceneUpload(s.id) }">
+                    <input type="file" accept="image/*" hidden :disabled="isPendingSceneImage(s.id) || isPendingSceneUpload(s.id)" @change="uploadSceneImage(s.id, $event)" />
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                  </div>
+                    <span class="asset-cover-upload-text">{{ isPendingSceneUpload(s.id) ? '上传中…' : '点击上传场景图' }}</span>
+                  </label>
                   <span class="asset-cover-badge" :class="(s.image_url || s.imageUrl) ? 'is-ready' : (isPendingSceneImage(s.id) ? 'is-pending' : '')">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
                 </div>
                 <div class="asset-body">
@@ -965,8 +975,14 @@
                   <div class="asset-foot-row">
                     <span :class="['dot', (s.image_url || s.imageUrl) && 'ok', isPendingSceneImage(s.id) && 'pending']" />
                     <span class="dim" style="font-size:10px">{{ (s.image_url || s.imageUrl) ? '已生成' : (isPendingSceneImage(s.id) ? '生成中' : '待生成') }}</span>
-                    <button class="btn btn-sm" :disabled="isPendingSceneImage(s.id)" @click="openAssetPicker('scene', s.id)">资产库</button>
-                    <button class="btn btn-sm ml-auto" :disabled="isPendingSceneImage(s.id) || assistantRunning" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : '生成主视角' }}</button>
+                    <div class="asset-foot-actions">
+                      <button class="btn btn-sm" :disabled="isPendingSceneImage(s.id)" @click="openAssetPicker('scene', s.id)">资产库</button>
+                      <label class="btn btn-sm asset-upload-btn" :class="{ 'is-disabled': isPendingSceneImage(s.id) || isPendingSceneUpload(s.id) }">
+                        <input type="file" accept="image/*" hidden :disabled="isPendingSceneImage(s.id) || isPendingSceneUpload(s.id)" @change="uploadSceneImage(s.id, $event)" />
+                        {{ isPendingSceneUpload(s.id) ? '上传中' : '上传' }}
+                      </label>
+                      <button class="btn btn-sm btn-primary" :disabled="isPendingSceneImage(s.id) || assistantRunning" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : 'AI 生成' }}</button>
+                    </div>
                   </div>
                   <div v-if="s.image_url || s.imageUrl" class="char-transform-row">
                     <span class="char-transform-label">多角度</span>
@@ -2083,9 +2099,11 @@ const imageConfigs = ref([])
 const videoConfigs = ref([])
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
+const pendingCharUploadIds = ref([])
 const pendingCharTransformKeys = ref([])
 const pendingCharOutfitKeys = ref([])
 const pendingSceneImageIds = ref([])
+const pendingSceneUploadIds = ref([])
 const pendingSceneAngleKeys = ref([])
 const pendingShotFrameKeys = ref([])
 const pendingBlockingIds = ref([])
@@ -2126,6 +2144,10 @@ function configLabel(config) {
 
 function isPendingCharImage(id) {
   return pendingCharImageIds.value.includes(id)
+}
+
+function isPendingCharUpload(id) {
+  return pendingCharUploadIds.value.includes(id)
 }
 
 function isPendingCharTransform(charId, transformId, source = 'primary') {
@@ -2226,6 +2248,10 @@ onBeforeUnmount(() => {
 
 function isPendingSceneImage(id) {
   return pendingSceneImageIds.value.includes(id)
+}
+
+function isPendingSceneUpload(id) {
+  return pendingSceneUploadIds.value.includes(id)
 }
 
 function framePendingKey(id, frameType) {
@@ -3656,6 +3682,29 @@ function genCharImg(id) {
   })
 }
 
+async function uploadCharImage(charId, event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  if (isPendingCharUpload(charId)) return
+  pendingCharUploadIds.value.push(charId)
+  try {
+    const res = await characterAPI.uploadImage(charId, file)
+    const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
+    if (!path) throw new Error('上传失败')
+    toast.success('角色形象已上传')
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingCharUploadIds.value = pendingCharUploadIds.value.filter(item => item !== charId)
+    if (event?.target) event.target.value = ''
+  }
+}
+
 async function generateCharOutfit(charId, asset, customPrompt) {
   const char = chars.value.find(item => item.id === charId)
   if (!char) return
@@ -3777,6 +3826,29 @@ function genSceneImg(id) {
       return done
     }, 36)
   })
+}
+
+async function uploadSceneImage(sceneId, event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  if (isPendingSceneUpload(sceneId)) return
+  pendingSceneUploadIds.value.push(sceneId)
+  try {
+    const res = await sceneAPI.uploadImage(sceneId, file)
+    const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
+    if (!path) throw new Error('上传失败')
+    toast.success('场景图已上传')
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingSceneUploadIds.value = pendingSceneUploadIds.value.filter(item => item !== sceneId)
+    if (event?.target) event.target.value = ''
+  }
 }
 
 function isPendingSceneAngle(sceneId, angleId) {
@@ -5274,6 +5346,24 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   background: rgba(19, 51, 121, 0.92);
 }
 .asset-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
+.asset-cover-upload {
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.18s var(--ease-out), color 0.18s var(--ease-out);
+}
+.asset-cover-upload:hover:not(.is-disabled) {
+  background: rgba(19, 51, 121, 0.06);
+  color: var(--accent);
+}
+.asset-cover-upload.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.asset-cover-upload-text {
+  font-size: 11px;
+  font-weight: 600;
+}
 .asset-body { padding: 8px 10px; }
 .asset-name { font-size: 13px; font-weight: 600; }
 .asset-meta { font-size: 11px; }
@@ -5293,7 +5383,25 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
 }
 .asset-foot { display: flex; align-items: center; gap: 4px; padding: 6px 10px; border-top: 1px solid var(--border); }
 .asset-foot-col { flex-direction: column; align-items: stretch; gap: 6px; }
-.asset-foot-row { display: flex; align-items: center; gap: 4px; width: 100%; }
+.asset-foot-row { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px; width: 100%; }
+.asset-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.asset-upload-btn {
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+}
+.asset-upload-btn.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .char-transform-row {
   display: flex;
   align-items: center;
