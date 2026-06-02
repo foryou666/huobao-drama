@@ -19,6 +19,7 @@ import {
   userCanManageDrama,
 } from '../services/drama-shares.js'
 import { assessDramaDeletion, assessEpisodeDeletion, toDeletionInfo } from '../services/deletion-guards.js'
+import { episodeSummaryToSnakeCase, getEpisodeSummariesForDrama } from '../services/episode-summary.js'
 
 const app = new Hono()
 
@@ -238,9 +239,31 @@ app.get('/:id', async (c) => {
     .where(eq(schema.props.dramaId, id))
 
   const deletion = toDeletionInfo(assessDramaDeletion(id))
+  const episodeSummaries = getEpisodeSummariesForDrama(id, activeEps.map(ep => ep.id))
   const episodesWithDeletion = activeEps.map(ep => ({
     ...toSnakeCase(ep),
     ...toDeletionInfo(assessEpisodeDeletion(ep.id)),
+    summary: episodeSummaryToSnakeCase(episodeSummaries.get(ep.id) || {
+      script: {
+        has_script: false,
+        has_source: false,
+        script_char_count: 0,
+        source_char_count: 0,
+        estimate_duration_sec: 0,
+      },
+      activity: {
+        total: 0,
+        operator_count: 0,
+        recent_operators: [],
+        last_operator_name: null,
+        last_operated_at: null,
+      },
+      characters: { total: 0, with_image: 0 },
+      scenes: { total: 0, with_image: 0 },
+      storyboards: { total: 0, with_image: 0, with_video: 0 },
+      last_operator_name: null,
+      last_operated_at: null,
+    }),
   }))
 
   return success(c, {

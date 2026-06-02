@@ -791,8 +791,13 @@
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           </div>
           <div class="empty-title">尚未准备就绪</div>
-          <div class="empty-desc">{{ !scriptContent ? '请先完成剧本编写' : '请先完成分镜拆解' }}</div>
-          <button class="btn btn-primary" @click="panel = 'script'">前往剧本</button>
+          <div class="empty-desc">{{ !scriptContent ? '请先完成剧本编写' : '可先 AI 拆解分镜，或直接手动添加镜头开始制作视频' }}</div>
+          <div class="step-empty-actions">
+            <button v-if="scriptContent && !sbs.length" class="btn btn-primary" @click="addShot({ openVideos: true })">手动添加镜头</button>
+            <button class="btn" :class="{ 'btn-primary': !scriptContent }" @click="panel = 'script'">
+              {{ !scriptContent ? '前往剧本' : '前往分镜拆解' }}
+            </button>
+          </div>
         </div>
 
         <template v-else>
@@ -1542,6 +1547,10 @@
               <span v-if="isChengmengVideoActive" class="tag tag-warn">800 积分/条（15 秒）</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" @click="addShot">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  添加镜头
+                </button>
                 <button class="btn btn-sm" :disabled="assistantRunning" @click="batchVideos">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   批量视频
@@ -3758,7 +3767,22 @@ function genSample(id) {
   if (!char) return
   sendAssistant(`请为角色「${char.name}」（character_id=${id}）生成音色试听，调用 generate_voice_sample`, refresh)
 }
-async function addShot() { await storyboardAPI.create({ episode_id: epId.value, storyboard_number: sbs.value.length + 1, title: `镜头${sbs.value.length + 1}`, duration: 10 }); refresh() }
+async function addShot(options = {}) {
+  try {
+    const nextNum = sbs.value.length + 1
+    await storyboardAPI.create({
+      episode_id: epId.value,
+      storyboard_number: nextNum,
+      title: `镜头 ${nextNum}`,
+      duration: 10,
+    })
+    toast.success(`已添加镜头 #${String(nextNum).padStart(2, '0')}`)
+    await refresh()
+    if (options.openVideos) prodTab.value = 'videos'
+  } catch (e) {
+    toast.error(e?.message || '添加镜头失败')
+  }
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))

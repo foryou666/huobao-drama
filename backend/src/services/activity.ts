@@ -70,6 +70,59 @@ export function logCreditActivity(
   })
 }
 
+export function formatActivityLogRow(
+  row: typeof schema.activityLogs.$inferSelect,
+  userMap: Map<number, typeof schema.users.$inferSelect>,
+) {
+  const meta = row.metadata ? JSON.parse(row.metadata) : null
+  const u = userMap.get(row.userId)
+  return {
+    id: row.id,
+    user_id: row.userId,
+    username: u?.username || meta?.operator_username,
+    display_name: u?.displayName || u?.username || meta?.operator_name,
+    operator_id: meta?.operator_id ?? row.userId,
+    operator_name: meta?.operator_name || u?.displayName || u?.username,
+    action: row.action,
+    summary: row.summary,
+    resource_type: row.resourceType,
+    resource_id: row.resourceId,
+    drama_id: row.dramaId,
+    episode_id: row.episodeId,
+    metadata: meta,
+    credit_cost: row.creditCost ?? 0,
+    created_at: row.createdAt,
+  }
+}
+
+function buildUserMap(userIds: number[]) {
+  const users = userIds.length
+    ? db.select().from(schema.users).all().filter(u => userIds.includes(u.id))
+    : []
+  return new Map(users.map(u => [u.id, u]))
+}
+
+export function listEpisodeActivityLogs(episodeId: number, opts?: { limit?: number; offset?: number }) {
+  const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200)
+  const offset = Math.max(opts?.offset ?? 0, 0)
+  const rows = db.select().from(schema.activityLogs)
+    .orderBy(desc(schema.activityLogs.createdAt))
+    .all()
+    .filter(row =>
+      row.episodeId === episodeId
+      || (row.resourceType === 'episode' && row.resourceId === episodeId),
+    )
+  const slice = rows.slice(offset, offset + limit)
+  const userIds = [...new Set(slice.map(r => r.userId))]
+  const userMap = buildUserMap(userIds)
+  return {
+    items: slice.map(row => formatActivityLogRow(row, userMap)),
+    total: rows.length,
+    limit,
+    offset,
+  }
+}
+
 export function listActivityLogs(opts: {
   userId?: number
   userIds?: number[]
@@ -87,32 +140,9 @@ export function listActivityLogs(opts: {
   const rows = query.all()
   const slice = rows.slice(offset, offset + limit)
   const userIds = [...new Set(slice.map(r => r.userId))]
-  const users = userIds.length
-    ? db.select().from(schema.users).all().filter(u => userIds.includes(u.id))
-    : []
-  const userMap = new Map(users.map(u => [u.id, u]))
+  const userMap = buildUserMap(userIds)
   return {
-    items: slice.map(row => {
-      const meta = row.metadata ? JSON.parse(row.metadata) : null
-      const u = userMap.get(row.userId)
-      return {
-        id: row.id,
-        user_id: row.userId,
-        username: u?.username || meta?.operator_username,
-        display_name: u?.displayName || u?.username || meta?.operator_name,
-        operator_id: meta?.operator_id ?? row.userId,
-        operator_name: meta?.operator_name || u?.displayName || u?.username,
-        action: row.action,
-        summary: row.summary,
-        resource_type: row.resourceType,
-        resource_id: row.resourceId,
-        drama_id: row.dramaId,
-        episode_id: row.episodeId,
-        metadata: meta,
-        credit_cost: row.creditCost ?? 0,
-        created_at: row.createdAt,
-      }
-    }),
+    items: slice.map(row => formatActivityLogRow(row, userMap)),
     total: rows.length,
     limit,
     offset,

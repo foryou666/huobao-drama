@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
-import { logActivity } from '../services/activity.js'
+import { logActivity, listEpisodeActivityLogs } from '../services/activity.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { assessEpisodeDeletion } from '../services/deletion-guards.js'
 import {
@@ -250,6 +250,18 @@ app.get('/:id/pipeline-status', async (c) => {
       merge_episode: { status: latestMerge?.status === 'completed' ? 'done' : (latestMerge ? latestMerge.status : 'pending'), merged_url: latestMerge?.mergedUrl },
     },
   })
+})
+
+// GET /episodes/:id/activity-logs — 本集操作日志
+app.get('/:id/activity-logs', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const access = assertEpisodeTeamAccess(c, episodeId)
+  if (access.error) return access.error
+
+  const limit = Number(c.req.query('limit') || 50)
+  const offset = Number(c.req.query('offset') || 0)
+  const result = listEpisodeActivityLogs(episodeId, { limit, offset })
+  return success(c, result)
 })
 
 export default app

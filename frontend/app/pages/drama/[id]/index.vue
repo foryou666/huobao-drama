@@ -104,10 +104,26 @@
         <div class="ep-body">
           <span class="ep-title">{{ ep.title }}</span>
           <div class="ep-status">
-            <span :class="['status-dot', hasScript(ep) ? 'dot-ready' : 'dot-pending']"></span>
-            <span class="status-text">{{ hasScript(ep) ? '已完成剧本' : '待编写' }}</span>
-            <span v-if="ep.duration" class="ep-duration">{{ ep.duration }}s</span>
+            <span :class="['status-dot', scriptStatus(ep).ready ? 'dot-ready' : 'dot-pending']"></span>
+            <span class="status-text">{{ scriptStatus(ep).label }}</span>
           </div>
+          <div class="ep-summary">
+            <span class="ep-summary-item ep-summary-item-script">{{ summaryLine(ep, 'script') }}</span>
+            <span v-if="summaryLine(ep, 'characters')" class="ep-summary-item">{{ summaryLine(ep, 'characters') }}</span>
+            <span v-if="summaryLine(ep, 'scenes')" class="ep-summary-item">{{ summaryLine(ep, 'scenes') }}</span>
+            <span v-if="summaryLine(ep, 'storyboards')" class="ep-summary-item">{{ summaryLine(ep, 'storyboards') }}</span>
+          </div>
+          <button
+            v-if="activityPreview(ep)"
+            type="button"
+            class="ep-meta ep-meta-btn"
+            @click.stop="openActivityLogs(ep)"
+          >
+            <span>{{ activityPreview(ep) }}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
         </div>
         <div class="ep-arrow">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -137,6 +153,39 @@
           </svg>
         </div>
         <p>点击上方「添加集」创建第一集</p>
+      </div>
+    </div>
+
+    <div v-if="activityDialog.open" class="dialog-mask" @click.self="closeActivityLogs">
+      <div class="card dialog activity-dialog">
+        <div class="dialog-head">
+          <div class="dialog-head-copy">
+            <div class="dialog-kicker">Activity Log</div>
+            <div class="dialog-title-row">
+              <div class="dialog-title">{{ activityDialog.title }}</div>
+              <span v-if="activityDialog.total" class="dialog-badge">{{ activityDialog.total }} 条</span>
+            </div>
+            <div class="dialog-sub">本集所有操作记录，含不同成员的操作时间与动作说明。</div>
+          </div>
+          <button class="back-btn" @click="closeActivityLogs">关闭</button>
+        </div>
+        <div class="activity-dialog-body">
+          <div v-if="activityDialog.loading" class="activity-empty">加载中...</div>
+          <div v-else-if="!activityDialog.items.length" class="activity-empty">暂无操作记录</div>
+          <div v-else class="activity-log-list">
+            <div v-for="item in activityDialog.items" :key="item.id" class="activity-log-item">
+              <div class="activity-log-head">
+                <span class="activity-log-action">{{ actionLabel(item.action) }}</span>
+                <span class="activity-log-time">{{ fmtDateTime(item.created_at) }}</span>
+              </div>
+              <div class="activity-log-meta">
+                <span>{{ item.operator_name || item.display_name || item.username || '未知用户' }}</span>
+                <span v-if="item.credit_cost > 0" class="activity-log-cost">-{{ item.credit_cost }} 积分</span>
+              </div>
+              <div v-if="item.summary" class="activity-log-summary">{{ item.summary }}</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -208,7 +257,7 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, dramaAPI, episodeAPI, promptsAPI, teamsAPI } from '~/composables/useApi'
+import { aiConfigAPI, dramaAPI, episodeAPI, promptsAPI, teamsAPI, ACTION_LABELS } from '~/composables/useApi'
 import { useTeam } from '~/composables/useTeam'
 
 const route = useRoute()
@@ -232,6 +281,14 @@ const newEpisodeAudioConfigId = ref(null)
 const shareInfo = ref(null)
 const allTeams = ref([])
 const shareTeamId = ref(null)
+const activityDialog = ref({
+  open: false,
+  loading: false,
+  episodeId: null,
+  title: '',
+  total: 0,
+  items: [],
+})
 
 const canManageShares = computed(() => Boolean(drama.value?.can_manage_shares))
 const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
@@ -242,6 +299,144 @@ const shareTeamOptions = computed(() => {
 })
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
+
+function getEpisodeSummary(ep) {
+  return ep.summary || null
+}
+
+function formatCount(n) {
+  const value = Number(n) || 0
+  if (value >= 10000) return `${(value / 10000).toFixed(1)} 万`
+  return String(value)
+}
+
+function scriptStatus(ep) {
+  const s = getEpisodeSummary(ep)?.script
+  const scriptText = String(ep.script_content || ep.scriptContent || '').trim()
+  const sourceText = String(ep.content || '').trim()
+  if (s?.has_script || scriptText) {
+    return { ready: true, label: '已完成剧本' }
+  }
+  if (s?.has_source || sourceText) {
+    return { ready: false, label: '已有素材 · 待改写' }
+  }
+  return { ready: false, label: '待编写' }
+}
+
+function imageProgressLabel(total, done) {
+  if (!total) return ''
+  if (done >= total) return '图片已生成'
+  if (done > 0) return `图片 ${done}/${total}`
+  return '图片未生成'
+}
+
+function summaryLine(ep, kind) {
+  const s = getEpisodeSummary(ep)
+  if (kind === 'script') {
+    const sc = s?.script
+    const scriptText = String(ep.script_content || ep.scriptContent || '').trim()
+    const sourceText = String(ep.content || '').trim()
+    const hasScriptText = sc?.has_script ?? Boolean(scriptText)
+    const hasSourceText = sc?.has_source ?? Boolean(sourceText)
+    const scriptChars = sc?.script_char_count ?? [...scriptText.replace(/\s+/g, '')].length
+    const sourceChars = sc?.source_char_count ?? [...sourceText.replace(/\s+/g, '')].length
+    const durationSec = sc?.estimate_duration_sec ?? Math.max(0, Number(ep.duration) || 0)
+
+    if (hasScriptText) {
+      const parts = [`剧本 ${formatCount(scriptChars)} 字`]
+      if (hasSourceText && sourceChars > 0) parts.push(`素材 ${formatCount(sourceChars)} 字`)
+      if (durationSec > 0) parts.push(`预估 ${durationSec}s`)
+      return parts.join(' · ')
+    }
+    if (hasSourceText) {
+      const parts = [`素材 ${formatCount(sourceChars)} 字`, '待 AI 改写']
+      if (durationSec > 0) parts.push(`预估 ${durationSec}s`)
+      return parts.join(' · ')
+    }
+    return '暂无剧本'
+  }
+  if (!s) return ''
+  if (kind === 'characters') {
+    const total = s.characters?.total || 0
+    if (!total) return ''
+    const done = s.characters?.with_image || 0
+    return `角色 ${total} 个 · ${imageProgressLabel(total, done)}`
+  }
+  if (kind === 'scenes') {
+    const total = s.scenes?.total || 0
+    if (!total) return ''
+    const done = s.scenes?.with_image || 0
+    return `场景 ${total} 个 · ${imageProgressLabel(total, done)}`
+  }
+  if (kind === 'storyboards') {
+    const total = s.storyboards?.total || 0
+    if (!total) return ''
+    const img = s.storyboards?.with_image || 0
+    const vid = s.storyboards?.with_video || 0
+    const parts = [`镜头 ${total} 个`]
+    if (img > 0) parts.push(`图 ${img}/${total}`)
+    if (vid > 0) parts.push(`视频 ${vid}/${total}`)
+    if (img === 0 && vid === 0) parts.push('未生成')
+    return parts.join(' · ')
+  }
+  return ''
+}
+
+function activityPreview(ep) {
+  const act = getEpisodeSummary(ep)?.activity
+  const at = act?.last_operated_at || getEpisodeSummary(ep)?.last_operated_at || ep.updated_at || ep.updatedAt
+  const time = at ? fmtDateTime(at) : ''
+
+  if ((act?.total || 0) > 0) {
+    const parts = [`${act.total} 条操作`]
+    if ((act.operator_count || 0) > 1) {
+      parts.push(`${act.operator_count} 人参与`)
+    } else if (act.last_operator_name) {
+      parts.push(`操作人 ${act.last_operator_name}`)
+    }
+    if (time) parts.push(time)
+    return parts.join(' · ')
+  }
+
+  if (act?.last_operator_name && time) return `操作人 ${act.last_operator_name} · ${time}`
+  if (time) return `更新于 ${time}`
+  return ''
+}
+
+function actionLabel(action) {
+  return ACTION_LABELS[action] || action
+}
+
+async function openActivityLogs(ep) {
+  activityDialog.value = {
+    open: true,
+    loading: true,
+    episodeId: ep.id,
+    title: ep.title || `第 ${ep.episode_number || ep.episodeNumber} 集`,
+    total: getEpisodeSummary(ep)?.activity?.total || 0,
+    items: [],
+  }
+  try {
+    const res = await episodeAPI.activityLogs(ep.id, { limit: 100 })
+    activityDialog.value.items = res.items || []
+    activityDialog.value.total = res.total || activityDialog.value.items.length
+  } catch (e) {
+    toast.error(e.message || '加载操作日志失败')
+    activityDialog.value.open = false
+  } finally {
+    activityDialog.value.loading = false
+  }
+}
+
+function closeActivityLogs() {
+  activityDialog.value.open = false
+}
+
+function fmtDateTime(value) {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return String(value || '')
+  return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
 
 function configLabel(config) {
   if (!config) return ''
@@ -451,10 +646,10 @@ onMounted(() => { loadDirectorStyles(); load(); loadConfigs() })
 }
 
 /* Episode Grid */
-.ep-grid { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+.ep-grid { display: flex; flex-direction: column; gap: 10px; max-width: 860px; }
 
 .ep-card {
-  display: flex; align-items: center; gap: 16px;
+  display: flex; align-items: flex-start; gap: 16px;
   padding: 14px 16px;
   cursor: pointer;
   animation: fadeUp 0.35s var(--ease-out) both;
@@ -486,15 +681,117 @@ onMounted(() => { loadDirectorStyles(); load(); loadConfigs() })
 .ep-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .ep-title { font-size: 14px; font-weight: 600; color: var(--text-0); }
 .ep-status { display: flex; align-items: center; gap: 6px; }
+.ep-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 2px;
+}
+.ep-summary-item {
+  font-size: 11px;
+  color: var(--text-2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+}
+.ep-summary-item-script {
+  color: var(--text-1);
+  background: rgba(76,125,255,0.06);
+  border-color: rgba(76,125,255,0.12);
+}
+.ep-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ep-meta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.18s;
+}
+.ep-meta-btn:hover {
+  color: var(--accent-text);
+}
+.ep-meta-btn svg {
+  opacity: 0.7;
+  transition: transform 0.18s;
+}
+.ep-meta-btn:hover svg {
+  transform: translateY(1px);
+}
+
+.activity-dialog {
+  width: min(640px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+}
+.activity-dialog-body {
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.activity-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.activity-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.activity-log-item {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.72);
+  border: 1px solid rgba(27, 41, 64, 0.08);
+}
+.activity-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.activity-log-action {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+.activity-log-time {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.activity-log-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.activity-log-cost {
+  color: var(--accent-text);
+}
+.activity-log-summary {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
 .status-dot {
   width: 6px; height: 6px; border-radius: 50%;
 }
 .dot-ready { background: var(--success); }
 .dot-pending { background: var(--text-3); }
 .status-text { font-size: 11px; color: var(--text-3); }
-.ep-duration { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); margin-left: 4px; }
 
-.ep-arrow { color: var(--text-3); flex-shrink: 0; transition: transform 0.18s; }
+.ep-arrow { color: var(--text-3); flex-shrink: 0; transition: transform 0.18s; margin-top: 12px; }
 .ep-card:hover .ep-arrow { transform: translateX(3px); color: var(--accent); }
 .ep-delete {
   flex-shrink: 0;

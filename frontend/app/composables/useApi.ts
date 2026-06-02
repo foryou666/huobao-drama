@@ -101,6 +101,13 @@ export const episodeAPI = {
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
   pipelineStatus: (id: number) => api.get(`/episodes/${id}/pipeline-status`),
+  activityLogs: (id: number, params?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return api.get<{ items: any[]; total: number; limit: number; offset: number }>(`/episodes/${id}/activity-logs${qs ? `?${qs}` : ''}`)
+  },
 }
 
 export const storyboardAPI = {
