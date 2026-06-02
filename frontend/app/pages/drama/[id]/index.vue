@@ -98,7 +98,10 @@
         :key="ep.id"
         class="card ep-card"
         :style="{ animationDelay: `${i * 0.05}s` }"
-        @click="navigateTo(`/drama/${drama.id}/episode/${ep.episode_number || ep.episodeNumber}`)"
+        role="button"
+        tabindex="0"
+        @click="openEpisode(ep)"
+        @keydown.enter.prevent="openEpisode(ep)"
       >
         <div class="ep-number">E{{ String(ep.episode_number || ep.episodeNumber).padStart(2, '0') }}</div>
         <div class="ep-body">
@@ -299,6 +302,21 @@ const shareTeamOptions = computed(() => {
 })
 
 function hasScript(ep) { return !!(ep.script_content || ep.scriptContent) }
+
+function episodeRoute(ep) {
+  const num = Number(ep?.episode_number ?? ep?.episodeNumber)
+  if (!Number.isFinite(num) || num <= 0) return ''
+  return `/drama/${dramaId}/episode/${num}`
+}
+
+function openEpisode(ep) {
+  const to = episodeRoute(ep)
+  if (!to) {
+    toast.error('该集缺少集数编号，无法打开')
+    return
+  }
+  navigateTo(to)
+}
 
 function getEpisodeSummary(ep) {
   return ep.summary || null

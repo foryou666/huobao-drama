@@ -1,5 +1,16 @@
 <template>
-  <div class="studio" v-if="drama">
+  <div v-if="pageLoading" class="studio-loading">
+    <Loader2 :size="28" class="animate-spin" />
+    <span>正在加载第 {{ episodeNumber }} 集…</span>
+  </div>
+  <div v-else-if="pageError" class="studio-loading">
+    <span>{{ pageError }}</span>
+    <div class="studio-loading-actions">
+      <button type="button" class="btn" @click="refresh">重试</button>
+      <button type="button" class="btn btn-primary" @click="navigateTo(`/drama/${dramaId}`)">返回项目</button>
+    </div>
+  </div>
+  <div class="studio" v-else-if="drama">
     <header class="studio-topbar">
       <div class="studio-topbar-main">
         <button class="back-btn topbar-back" @click="navigateTo(`/drama/${dramaId}`)">
@@ -75,6 +86,7 @@
         >
           <div class="pipe-section-label">{{ section.label }}</div>
           <button
+            type="button"
             v-for="item in section.items"
             :key="item.key"
             :class="['pipe-item pipe-item-sub', { active: activeSubStepKey === item.key, done: item.done }]"
@@ -123,6 +135,7 @@
     <main class="main">
       <div v-if="activeSubSteps.length" class="stage-subnav">
         <button
+          type="button"
           v-for="sub in activeSubSteps"
           :key="sub.key"
           :class="['stage-subnav-item', { active: activeSubStepKey === sub.key, done: sub.done }]"
@@ -785,8 +798,8 @@
 
       <!-- ===== PRODUCTION PANEL ===== -->
       <div v-else-if="panel === 'production'" class="content-panel">
-        <!-- Guard: need script -->
-        <div v-if="!scriptContent || !sbs.length" class="step-empty" style="flex:1">
+        <!-- Guard: storyboard-dependent production steps -->
+        <div v-if="productionPanelBlocked" class="step-empty" style="flex:1">
           <div class="empty-visual">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           </div>
@@ -855,7 +868,16 @@
                 </button>
               </div>
             </div>
-            <div class="asset-grid">
+            <div v-if="!chars.length" class="step-empty" style="padding: 28px 16px">
+              <div class="empty-title">尚未提取角色</div>
+              <div class="empty-desc">请先在「提取」步骤中从剧本提取角色，再回来生成形象。</div>
+              <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
+            </div>
+            <div v-else-if="!visualChars.length" class="step-empty" style="padding: 28px 16px">
+              <div class="empty-title">无需生成形象</div>
+              <div class="empty-desc">当前角色均为旁白/画外音，仅保留声音即可。</div>
+            </div>
+            <div v-else class="asset-grid">
               <div v-for="c in visualChars" :key="c.id" class="card asset-card">
                 <div class="asset-cover">
                   <img
@@ -2112,10 +2134,12 @@ definePageMeta({ layout: 'studio' })
 
 const route = useRoute()
 const dramaId = Number(route.params.id)
-const episodeNumber = Number(route.params.episodeNumber)
+const episodeNumber = computed(() => Number(route.params.episodeNumber))
 
 const drama = ref(null), episode = ref(null), chars = ref([]), scenes = ref([]), sbs = ref([]), mergeData = ref(null)
 const panel = ref('script')
+const pageLoading = ref(true)
+const pageError = ref('')
 
 const localRaw = ref(''), localScript = ref('')
 const rawContent = computed(() => episode.value?.content || '')
@@ -2128,8 +2152,13 @@ const voiceSampleCount = computed(() => chars.value.filter(c => c.voice_sample_u
 const composedCount = computed(() => sbs.value.filter(s => s.composed_video_url || s.composedVideoUrl).length)
 const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.mergedUrl || null)
 
-const scriptStep = ref(0)
 const prodTab = ref('chars')
+const productionPanelBlocked = computed(() => {
+  if (['chars', 'scenes'].includes(prodTab.value)) return false
+  if (!scriptContent.value) return true
+  return !sbs.value.length
+})
+
 const prodTabIdx = computed({
   get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
   set: (v) => { prodTab.value = prodTabDefs.value[v]?.id || 'chars' },
@@ -2713,7 +2742,7 @@ const gridHistory = ref([])
 const showAllGridHistory = ref(false)
 const activeGridCell = ref(0)
 const gridAssignmentPage = ref(0)
-const gridStorageKey = computed(() => `huobao:grid:${dramaId}:${epId.value || episodeNumber}`)
+const gridStorageKey = computed(() => `huobao:grid:${dramaId}:${epId.value || episodeNumber.value}`)
 
 const gridModes = [
   { id: 'first_frame', label: '首帧', desc: '每格=一个镜头的首帧' },
@@ -2860,7 +2889,7 @@ const gridBlankStyle = computed(() => {
 
 // Production step helpers
 function prodStepDone(id) {
-  if (id === 'chars') return !visualCharTotal.value || charImgCount.value === visualCharTotal.value
+  if (id === 'chars') return !!visualCharTotal.value && charImgCount.value === visualCharTotal.value
   if (id === 'scenes') return !!scenes.value.length && sceneImgCount.value === scenes.value.length
   if (id === 'dubbing') return !!sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)
   if (id === 'shots') return !!sbs.value.length && shotImgCount.value === sbs.value.length
@@ -3256,8 +3285,8 @@ function mainStageDone(stageId) {
   if (stageId === 'script') return !!scriptContent.value
   if (stageId === 'assets') {
     const charsReady = !!chars.value.length && charsVoiced.value === chars.value.length
-    const charImagesReady = !visualCharTotal.value || charImgCount.value === visualCharTotal.value
-    const sceneImagesReady = !scenes.value.length || sceneImgCount.value === scenes.value.length
+    const charImagesReady = prodStepDone('chars')
+    const sceneImagesReady = prodStepDone('scenes')
     return charsReady && charImagesReady && sceneImagesReady
   }
   if (stageId === 'storyboard') {
@@ -3314,13 +3343,20 @@ const activeSubSteps = computed(() => {
     return [
       { key: 'script:extract', label: '提取角色场景', done: !!chars.value.length },
       { key: 'script:voice', label: '分配音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'prod:chars', label: '角色形象', done: !visualCharTotal.value || charImgCount.value === visualCharTotal.value },
-      { key: 'prod:scenes', label: '场景图片', done: !scenes.value.length || sceneImgCount.value === scenes.value.length },
+      { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
+      { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
     ]
   }
   if (activeMainStage.value === 'storyboard') {
+    const assetSteps = chars.value.length
+      ? [
+          { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
+          { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
+        ]
+      : []
     return [
       { key: 'script:storyboard', label: '分镜拆解', done: !!sbs.value.length },
+      ...assetSteps,
       { key: 'prod:dubbing', label: '配音生成', done: !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value },
       { key: 'prod:shots', label: '镜头图片', done: !!sbs.value.length && shotImgCount.value === sbs.value.length },
       { key: 'prod:videos', label: '视频生成', done: !!sbs.value.length && shotVidCount.value === sbs.value.length },
@@ -3388,14 +3424,16 @@ function goSubStep(key) {
       'script:storyboard': 4,
     }
     scriptStep.value = stepMap[key] ?? 0
-    return
-  }
-  if (key.startsWith('prod:')) {
+  } else if (key.startsWith('prod:')) {
     panel.value = 'production'
     prodTab.value = key.replace('prod:', '')
-    return
+  } else {
+    panel.value = 'export'
   }
-  panel.value = 'export'
+  nextTick(() => {
+    if (typeof document === 'undefined') return
+    document.querySelector('.main')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  })
 }
 
 const pipelineProgress = computed(() => {
@@ -3691,37 +3729,58 @@ watch(rawContent, v => { localRaw.value = v }, { immediate: true })
 watch(scriptContent, v => { localScript.value = v }, { immediate: true })
 
 async function refresh() {
+  const preservedPanel = panel.value
+  const preservedProdTab = prodTab.value
+  const preservedScriptStep = scriptStep.value
+  if (!drama.value) pageLoading.value = true
+  pageError.value = ''
   try {
     drama.value = await dramaAPI.get(dramaId)
-    const ep = drama.value.episodes?.find(e => (e.episode_number || e.episodeNumber) === episodeNumber)
-    if (ep) {
-      episode.value = ep
-      try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
-      try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
-      sbs.value = await episodeAPI.storyboards(ep.id)
-      if (sbs.value.length) {
-        if (selectedSb.value?.id) {
-          selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
-        } else {
-          selectedSb.value = sbs.value[0]
-        }
+    const ep = drama.value.episodes?.find(e => Number(e.episode_number ?? e.episodeNumber) === episodeNumber.value)
+    if (!ep) {
+      pageError.value = `未找到第 ${episodeNumber.value} 集`
+      drama.value = null
+      return
+    }
+    episode.value = ep
+    try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
+    try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
+    sbs.value = await episodeAPI.storyboards(ep.id)
+    if (sbs.value.length) {
+      if (selectedSb.value?.id) {
+        selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
       } else {
-        selectedSb.value = null
+        selectedSb.value = sbs.value[0]
       }
+    } else {
+      selectedSb.value = null
+    }
 
-      const epHasContent = !!(episode.value?.content)
-      const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
-      const epHasSbs = sbs.value.length > 0
+    const epHasContent = !!(episode.value?.content)
+    const epHasScript = !!(episode.value?.script_content || episode.value?.scriptContent)
+    const epHasSbs = sbs.value.length > 0
 
-      if (epHasSbs) scriptStep.value = 4
+    if (preservedPanel === 'production') {
+      panel.value = preservedPanel
+      prodTab.value = preservedProdTab
+    } else if (preservedPanel === 'export') {
+      panel.value = 'export'
+    } else {
+      panel.value = 'script'
+      if (preservedScriptStep <= 4 && preservedScriptStep >= 0 && preservedPanel === 'script') {
+        scriptStep.value = preservedScriptStep
+      } else if (epHasSbs) scriptStep.value = 4
       else if (epHasScript && chars.value.some(c => c.voice_style || c.voiceStyle)) scriptStep.value = 3
       else if (epHasScript && chars.value.length) scriptStep.value = 2
       else if (epHasScript || epHasContent) scriptStep.value = 1
       else scriptStep.value = 0
-      await loadLatestGridImage()
     }
+    await loadLatestGridImage()
   } catch (e) {
-    toast.error(e.message)
+    pageError.value = e.message || '加载失败'
+    if (!drama.value) drama.value = null
+  } finally {
+    pageLoading.value = false
   }
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
 }
@@ -4731,9 +4790,34 @@ async function loadVoices() {
 
 watch([lockedAudioConfigId, audioConfigs], () => { loadVoices() }, { deep: true })
 onMounted(() => { refresh(); loadConfigs(); loadVoices() })
+
+watch(() => route.params.episodeNumber, () => {
+  panel.value = 'script'
+  prodTab.value = 'chars'
+  scriptStep.value = 0
+  episode.value = null
+  refresh()
+})
 </script>
 
 <style scoped>
+.studio-loading {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-2);
+  font-size: 14px;
+  background: var(--bg-base);
+}
+.studio-loading-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /* ===== Studio Layout ===== */
 .studio {
   display: flex;
@@ -5012,6 +5096,8 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   font-size: 12px; font-weight: 600;
   background: none; border: 1px solid transparent; color: var(--text-2); cursor: pointer;
   transition: all 0.14s; width: 100%; text-align: left;
+  position: relative;
+  z-index: 1;
 }
 .pipe-item:hover { background: rgba(255,255,255,0.3); color: var(--text-0); }
 .pipe-item.active {
@@ -5037,6 +5123,7 @@ onMounted(() => { refresh(); loadConfigs(); loadVoices() })
   bottom: -7px;
   width: 1px;
   background: rgba(27, 41, 64, 0.07);
+  pointer-events: none;
 }
 
 .pipe-icon {
