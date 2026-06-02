@@ -2094,7 +2094,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import {
-  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download,
+  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2,
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, assetAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, uploadAPI } from '~/composables/useApi'
 import { useEpisodeAssistant } from '~/composables/useEpisodeAssistant'
@@ -2152,6 +2152,7 @@ const voiceSampleCount = computed(() => chars.value.filter(c => c.voice_sample_u
 const composedCount = computed(() => sbs.value.filter(s => s.composed_video_url || s.composedVideoUrl).length)
 const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.mergedUrl || null)
 
+const scriptStep = ref(0)
 const prodTab = ref('chars')
 const productionPanelBlocked = computed(() => {
   if (['chars', 'scenes'].includes(prodTab.value)) return false
@@ -3729,11 +3730,11 @@ watch(rawContent, v => { localRaw.value = v }, { immediate: true })
 watch(scriptContent, v => { localScript.value = v }, { immediate: true })
 
 async function refresh() {
+  if (!drama.value) pageLoading.value = true
+  pageError.value = ''
   const preservedPanel = panel.value
   const preservedProdTab = prodTab.value
   const preservedScriptStep = scriptStep.value
-  if (!drama.value) pageLoading.value = true
-  pageError.value = ''
   try {
     drama.value = await dramaAPI.get(dramaId)
     const ep = drama.value.episodes?.find(e => Number(e.episode_number ?? e.episodeNumber) === episodeNumber.value)
