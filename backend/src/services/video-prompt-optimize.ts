@@ -27,7 +27,7 @@ function getVideoPromptRule(episodeId: number): string {
     ? isChengmengProvider(cfg.provider) || isSeedance2Model(model)
     : false
   if (isSeedance2) {
-    return '首行「图片1是…，图片2是…」自然语言引用（禁止 @图片）；多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词；各块「时长：N 秒」之和等于镜头总时长；禁止仅用 0-3秒/<n> 简写。'
+    return '首行「图片1是…，图片2是…」自然语言引用（禁止 @图片）；多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词；默认 MS/MCU 面部完整入镜，ECU 仅末块钩子；各块「时长：N 秒」之和等于镜头总时长；禁止仅用 0-3秒/<n> 简写。'
   }
   return '按 3 秒分段描述镜内变化；可使用 <location>/<role> 标记；保持与镜头时长一致。'
 }
@@ -93,7 +93,7 @@ export type VideoPromptOptimizeFocus =
   | 'dialogue'
   | 'general'
 
-const HONGGUO_DIRECTOR_BASE = `你是红果竖屏网剧资深导演，熟悉强钩子、快反转、对白驱动、情绪特写与竖屏构图。优化时保持剧情与总时长不变，只改 video_prompt 中与专项相关的表述。`
+const HONGGUO_DIRECTOR_BASE = `你是红果竖屏网剧资深导演，熟悉强钩子、快反转、对白驱动与竖屏构图。优化时保持剧情与总时长不变，只改 video_prompt 中与专项相关的表述。默认 MS/MCU 保证面部完整入镜，禁止连续 CU/ECU 裁脸。`
 
 const FOCUS_INSTRUCTIONS: Record<Exclude<VideoPromptOptimizeFocus, 'general'>, string> = {
   transition: `${HONGGUO_DIRECTOR_BASE}
@@ -107,9 +107,9 @@ const FOCUS_INSTRUCTIONS: Record<Exclude<VideoPromptOptimizeFocus, 'general'>, s
   shot: `${HONGGUO_DIRECTOR_BASE}
 
 【专项：镜头优化】
-1. 以红果网剧导演分镜规范，逐段复检景别（ELS/LS/MS/MCU/CU/ECU 等）与构图意图。
-2. 优化：竖屏 9:16 下主体突出、情绪高点用近景/特写、信息交代用中全景、避免景别跳跃混乱。
-3. 每段补充或修正：景别、机位角度、画面重心、人物站位与视线关系；符合竖屏短剧「钩子—情绪—信息」节奏。
+1. 以红果网剧导演分镜规范，逐段复检景别（MS/MCU/CU/ECU）与构图意图。
+2. 优化：竖屏 9:16 下**默认 MS/MCU**，面部完整入镜（含额头下巴）；CU 仅情绪高点（每镜最多 1–2 块）；ECU 仅末块钩子；信息交代用 MS；避免连续特写导致裁脸。
+3. 每段补充或修正：景别、机位角度、画面重心、人物站位与视线关系；AI 补充提示词加入 full face visible, head and shoulders in frame。
 4. 保留参考图映射与各块时长；非景别/构图相关内容尽量保留。`,
 
   camera: `${HONGGUO_DIRECTOR_BASE}

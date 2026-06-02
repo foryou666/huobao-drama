@@ -62,9 +62,9 @@
 
 - **分镜粒度（storyboard）**：单条记录 **12–15 秒**（优先 15）；**禁止**为快切拆成大量 1–3 秒 storyboard
 - **镜内节奏（video_prompt）**：在同一 `video_prompt` 内写 **6–8 个子镜头块**，每块 **时长：2 秒**（末块可 2–3 秒凑满总时长），每块必须含完整工业字段（景别/运镜/打光/表演/台词/AI 补充提示词）
-- 景别限制：仅 MS / MCU / CU / ECU，严禁全身全景、大远景
+- **景别策略（防裁脸）**：默认 **MS / MCU** 拍对白与动作，**面部完整入镜**（含额头与下巴）；**CU** 仅用于单点情绪高点（每条 storyboard 最多 1–2 块）；**ECU** 仅末段钩子镜 1 块；禁止连续 CU/ECU 导致半脸裁切
 - 禁用红线：严禁空镜/风景镜、严禁慢镜头（致命一击除外）、严禁思考发呆、严禁背面镜头、严禁服装描述
-- 运镜强制：禁止「固定+正面」；每镜必须有动感运镜（微推/微拉/极速推镜/快速横移/快速摇移/快速下移）
+- 运镜强制：禁止「固定+正面」；每镜必须有动感运镜（**微推/微拉**为主；**极速推镜**仅钩子镜末块）
 - 角度强制：优先 OTS、45 度侧角、侧面平视；正面平视仅用于情绪爆发
 - 节奏：台词无缝衔接；约每 20 秒一小爽点；每集至少 4 爽点 + 1 强钩子结尾
 - 连戏：同场景色彩光影一致
@@ -81,10 +81,10 @@
 
 **景别与运镜对照**
 
-- MCU：OTS+微推 / OTS+极速推镜 / 45度侧+微推
-- CU：正面+极速推镜 / 45度侧+微推 / 正面+极速推镜→骤停
-- ECU：正面+极速推镜
-- MS：侧面+快速横移 / 45度侧+快速摇移 / 正面+缓慢横移
+- MCU：OTS+微推 / OTS+微拉 / 45度侧+微推（对白默认）
+- CU：45度侧+微推 / OTS+微推（情绪高点，每镜最多 1–2 块）
+- ECU：正面+微推（**仅钩子镜末块**，且须写 full face visible）
+- MS：侧面+快速横移 / 45度侧+快速摇移 / 正面+缓慢横移（信息交代、双人站位）
 
 **运镜关键词库**
 
@@ -123,18 +123,19 @@ AI 补充提示词：{英文关键词：景别+角度+运镜+表演+光影+8K ul
 ...（重复直至本子镜头总时长 = 该 storyboard 的 duration，通常 12–15 秒）
 ```
 
-**钩子镜**：最后 1–2 个子镜头块用 ECU + 极速推镜 + 瞳孔地震 / 强逆光；可加 `flash white transition, 0.3 seconds`。
+**钩子镜**：最后 **1 个子镜头块**可用 ECU + 微推或极速推镜 + 瞳孔地震 / 强逆光；可加 `flash white transition, 0.3 seconds`。其余子块默认 MS/MCU，AI 补充提示词须含 `full face visible, head and shoulders in frame`。
 
 ### 七、连戏检查清单（保存前自检）
 
 □ 同场景打光写「严格继承场景基准」 □ 无固定+正面 □ 每子镜头块有动感运镜 □ **每条 storyboard 12–15 秒**
 □ 快切写在 `video_prompt` 的 **多个 2 秒子镜头块** 内，**未**拆成多条 storyboard □ 转折有闪白或快速摇移
-□ 每个子镜头块含 **AI 补充提示词** 英文行 □ 有台词时 **台词/音效** 含口型匹配细则 □ 钩子镜末段 ECU+极速推镜
+□ 每个子镜头块含 **AI 补充提示词** 英文行 □ 有台词时 **台词/音效** 含口型匹配细则 □ **默认 MS/MCU 面部完整入镜** □ 钩子镜末段才 ECU
 
 ### 八、AI 生成避坑速查
 
-正面+固定 → OTS+微推 或 45度侧+极速推镜 | 跳戏 → flash white transition, 0.3 seconds
-钩子弱 → ECU+极速推镜+瞳孔地震+强逆光 | 表演模糊 → 眼睛睁大/嘴角冷笑/眉头紧皱
+正面+固定 → OTS+微推 或 45度侧+微推 | 跳戏 → flash white transition, 0.3 seconds
+裁脸/半脸 → 改 MS/MCU + full face visible, head and shoulders in frame | 连续特写 → 每镜至少 4 块用 MS/MCU
+钩子弱 → ECU+微推+瞳孔地震+强逆光（仅末块） | 表演模糊 → 眼睛睁大/嘴角冷笑/眉头紧皱
 运镜单一 → 每 3–5 镜换运镜类型
 
 ### 九、系统字段映射（调用 save_storyboards 时必须遵守）
@@ -171,40 +172,40 @@ AI 补充提示词：{英文关键词：景别+角度+运镜+表演+光影+8K ul
    `【镜头 NNN - 标题】` → 时长 → 景别与角度 → 运镜方式 → 打光细化 → 表演与微表情 → 台词/音效 → AI 补充提示词
 4. **有对白时**，「台词/音效」必须包含：  
    `【嘴巴动作明显，口型与台词精准匹配，一字一句对应，说话时嘴唇开合自然，舌头和牙齿动作真实，没有口型错位、不动嘴或乱张嘴的情况，…】角色名（语气/方言）：台词`
-5. **AI 补充提示词** 每块必填英文：景别+角度+运镜+表演+光影+`动态运镜，8K ultra realistic`+无字幕水印
+5. **AI 补充提示词** 每块必填英文：景别+角度+运镜+表演+光影+`full face visible, head and shoulders in frame`（非钩子块）+`动态运镜，8K ultra realistic`+无字幕水印
 
 **video_prompt 完整示例（单条 storyboard 14 秒 = 7×2 秒子镜头，节选 2 块）：**
 
 ```
 图片1是周妙妙，图片2是王秀兰。禁止出现字幕和文字，要求 AI historical drama，真人实拍电影质感。AI historical drama, 9:16, bright vibrant colors, high saturation, cinematic, 8K, ultra realistic, no text, no watermarks
 
-【镜头 031 - 大脸凑近】
+【镜头 031 - 对峙逼近】
 时长：2 秒
-景别与角度：特写，OTS
-运镜方式：极速推镜跟拍
+景别与角度：中近景，OTS
+运镜方式：微推跟拍
 打光细化：严格继承场景基准，车间冷白顶光
-表演与微表情：王秀兰大脸闯入前景虚化，浓妆狞笑，周妙妙瞳孔瞬间收缩
+表演与微表情：王秀兰闯入前景虚化，浓妆狞笑，周妙妙瞳孔瞬间收缩
 台词 / 音效：【音效】布料摩擦声
-AI 补充提示词：CU，OTS+extreme fast push-in tracking, foreground face blurred, villain smirk, protagonist pupil contraction, cold white factory light, dynamic camera, 8K ultra realistic, no text no watermark
+AI 补充提示词：MCU，OTS+slow push-in tracking, foreground face blurred, villain smirk, protagonist pupil contraction, full face visible head and shoulders in frame, cold white factory light, dynamic camera, 8K ultra realistic, no text no watermark
 
 【镜头 032 - 下颌绷紧】
 时长：2 秒
-景别与角度：特写，45 度侧角
-运镜方式：极速推镜骤停跟拍
+景别与角度：中近景，45 度侧角
+运镜方式：微推跟拍
 打光细化：严格继承场景基准，车间冷白顶光
 表演与微表情：周妙妙下颌肌肉绷紧，喉结微动，右手在画面外缓缓握拳，指节发白
 台词 / 音效：【嘴巴动作明显，口型与台词精准匹配，一字一句对应，说话时嘴唇开合自然，没有口型错位。王秀兰（嚣张刻薄）：叫得真够淫荡！前夫哥就这么顶，离婚五年还饥渴？
-AI 补充提示词：CU，45-degree side angle, extreme fast push-in then stop, jaw clenched, throat bob, fist tightening off-screen, cold factory lighting, dynamic camera, 8K ultra realistic
+AI 补充提示词：MCU，45-degree side angle, slow push-in, jaw clenched, throat bob, fist tightening off-screen, full face visible no cropped face, cold factory lighting, dynamic camera, 8K ultra realistic
 
 （继续 【镜头 033】…直至 7 块合计 14 秒；`duration` 填 14）
 ```
 
-**钩子镜**：最后 1–2 个子镜头块用 ECU + 极速推镜 + 瞳孔地震；末块可加闪白转场。
+**钩子镜**：最后 1 个子镜头块可用 ECU + 微推 + 瞳孔地震；末块可加闪白转场。
 
 ### 十、工作流程
 
 1. 调用 `read_storyboard_context` 读取剧本、角色、场景及 `video_generation` 约束
 2. 按 **12–15 秒/镜** 拆解 storyboard（镜头数约为「集时长÷15」量级）；每条 `video_prompt` 内写 **6–8 个 2 秒工业子镜头块**（第六节格式），1:1 覆盖剧本情节
-3. 每集约 4+ 爽点；集末单独一条 **12–15 秒** 钩子镜（镜内末段 ECU+极速推镜）
+3. 每集约 4+ 爽点；集末单独一条 **12–15 秒** 钩子镜（镜内**仅末块** ECU+微推，其余块 MS/MCU 面部完整入镜）
 4. 调用 `save_storyboards` 一次性保存，字段齐全
 5. 默认覆盖旧分镜；仅用户要求增量修改时才局部 `update_storyboard`

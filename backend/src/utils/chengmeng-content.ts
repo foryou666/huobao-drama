@@ -3,6 +3,7 @@ import { isOssConfigured, resolveMediaUrlForExternalApi } from './oss-upload.js'
 import type { VideoContentRef } from './seedance-content.js'
 import { parseVideoContentRefs } from './seedance-content.js'
 import { CHENGMENT_DEFAULT_GROUP_ID, CHENGMENT_DEFAULT_MODEL_ID, CHENGMENT_DURATION_BOUNDS } from '../constants/chengmeng.js'
+import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 
 function publicBaseUrl() {
   return (process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '')
@@ -102,7 +103,7 @@ export function normalizeChengmengAspectRatio(aspectRatio?: string | null, fallb
  * 工作台仍用「图片1是…」描述，发送前自动补 @ 标签。
  */
 export function buildChengmengPrompt(prompt: string, imageCount: number, videoCount: number): string {
-  let text = String(prompt || '').trim()
+  let text = normalizeVideoPromptFraming(String(prompt || '').trim())
   text = text
     .replace(/@图片\s*(\d+)/gi, '图片$1')
     .replace(/@素材\s*(\d+)/gi, '素材$1')

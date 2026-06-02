@@ -431,6 +431,23 @@ export const videoAPI = {
     if (params?.storyboard_id) query.set('storyboard_id', String(params.storyboard_id))
     return api.get(`/videos${query.size ? `?${query.toString()}` : ''}`)
   },
+  ledger: (params?: {
+    drama_id?: number
+    episode_id?: number
+    status?: string
+    keyword?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.drama_id) query.set('drama_id', String(params.drama_id))
+    if (params?.episode_id) query.set('episode_id', String(params.episode_id))
+    if (params?.status) query.set('status', params.status)
+    if (params?.keyword) query.set('keyword', params.keyword)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    return api.get(`/videos/ledger${query.size ? `?${query.toString()}` : ''}`)
+  },
 }
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),

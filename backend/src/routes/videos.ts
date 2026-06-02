@@ -9,6 +9,9 @@ import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import { tryChargeUser, tryRefundCharge } from '../utils/credit-charge.js'
 import { resolveVideoCreditCharge } from '../constants/credit-actions.js'
+import { resolveActiveTeamId } from '../services/team-access.js'
+import { listVideoLedger } from '../services/video-ledger.js'
+import { toSnakeCase } from '../utils/transform.js'
 
 const app = new Hono()
 
@@ -98,7 +101,7 @@ app.post('/', async (c) => {
         provider: videoConfig?.provider || null,
       },
     })
-    return created(c, record)
+    return created(c, record ? toSnakeCase(record) : null)
   } catch (err: any) {
     tryRefundCharge(billed.charge.transactionId, {
       summary: '视频生成失败退款',
@@ -112,12 +115,28 @@ app.post('/', async (c) => {
   }
 })
 
-// GET /videos/:id
-app.get('/:id', async (c) => {
-  const id = Number(c.req.param('id'))
-  const [row] = db.select().from(schema.videoGenerations)
-    .where(eq(schema.videoGenerations.id, id)).all()
-  return success(c, row || null)
+// GET /videos/ledger — 全量视频生成流水（含已删除分镜的孤儿记录）
+app.get('/ledger', async (c) => {
+  const user = getAuthUser(c)
+  const activeTeamId = resolveActiveTeamId(c, user)
+  const dramaId = c.req.query('drama_id') ? Number(c.req.query('drama_id')) : undefined
+  const episodeId = c.req.query('episode_id') ? Number(c.req.query('episode_id')) : undefined
+  const status = c.req.query('status') || undefined
+  const keyword = c.req.query('keyword') || undefined
+  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
+  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
+
+  const result = listVideoLedger({
+    user,
+    activeTeamId,
+    dramaId: Number.isFinite(dramaId) ? dramaId : undefined,
+    episodeId: Number.isFinite(episodeId) ? episodeId : undefined,
+    status,
+    keyword,
+    limit,
+    offset,
+  })
+  return success(c, result)
 })
 
 // GET /videos — List by storyboard_id or drama_id
@@ -132,7 +151,16 @@ app.get('/', async (c) => {
   rows = rows.filter(r => !r.deletedAt)
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
 
-  return success(c, rows)
+  return success(c, rows.map(row => toSnakeCase(row)))
+})
+
+// GET /videos/:id
+app.get('/:id', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return badRequest(c, 'invalid id')
+  const [row] = db.select().from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.id, id)).all()
+  return success(c, row ? toSnakeCase(row) : null)
 })
 
 // DELETE /videos/:id

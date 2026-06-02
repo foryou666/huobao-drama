@@ -3,6 +3,7 @@ import { joinProviderUrl } from '../services/adapters/url.js'
 import { isSeedance2Model, seedanceDurationBounds } from '../constants/seedance.js'
 import type { AIConfig, VideoGenerationRecord } from '../services/adapters/types.js'
 import { seedanceRatioRequestFields } from './video-aspect-ratio.js'
+import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 
 export type VideoContentRefType = 'image' | 'video' | 'audio'
 export type VideoImageRole = 'first_frame' | 'last_frame' | 'reference_image'
@@ -45,7 +46,7 @@ export function normalizeSeedance2PromptText(prompt: string): string {
 }
 
 export function enrichPromptWithReferenceLabels(prompt: string, refs: VideoContentRef[]): string {
-  const text = normalizeSeedance2PromptText(String(prompt || '').trim())
+  const text = normalizeVideoPromptFraming(normalizeSeedance2PromptText(String(prompt || '').trim()))
   if (!refs.length) return text
 
   if (/图片\s*\d|视频\s*\d|音频\s*\d/i.test(text)) {

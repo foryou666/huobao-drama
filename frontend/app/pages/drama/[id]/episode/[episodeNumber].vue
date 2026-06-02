@@ -4013,7 +4013,7 @@ function doBreakdown() {
   const cfg = resolvedVideoConfig.value
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
   sendAssistant(
-    `请拆解分镜并生成 video_prompt。必须输出工业级 video_prompt（首行「图片1是…，图片2是…」自然语言引用，禁止 @图片 + 多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词），禁止简写为 0-3秒 时间轴。本集视频模型为 ${label}，单条 storyboard 最长 15 秒，duration 等于子块时长之和。`,
+    `请拆解分镜并生成 video_prompt。必须输出工业级 video_prompt（首行「图片1是…，图片2是…」自然语言引用，禁止 @图片 + 多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词），默认 MS/MCU 面部完整入镜，ECU 仅末块钩子，禁止连续特写裁脸。禁止简写为 0-3秒 时间轴。本集视频模型为 ${label}，单条 storyboard 最长 15 秒，duration 等于子块时长之和。`,
     refresh,
   )
 }

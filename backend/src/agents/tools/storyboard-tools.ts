@@ -44,7 +44,7 @@ function getVideoGenerationConstraints(videoModel: string | null, episodeId?: nu
       max_clip_seconds: 15,
       target_shot_seconds: '12-15',
       min_shot_seconds: 10,
-      rule: '每条 storyboard 对应一次视频生成；单条最长 15 秒。禁止把 2 秒快切拆成独立 storyboard。video_prompt 必须用红果工业格式：首行「图片1是…，图片2是…」（禁止 @图片）+ 多个【镜头 NNN】子块（每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词）。duration 填 12-15 且等于所有「时长：N 秒」之和。禁止仅用 0-3秒/<n> 简写。',
+      rule: '每条 storyboard 对应一次视频生成；单条最长 15 秒。禁止把 2 秒快切拆成独立 storyboard。video_prompt 必须用红果工业格式：首行「图片1是…，图片2是…」（禁止 @图片）+ 多个【镜头 NNN】子块（每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词）。默认 MS/MCU 面部完整入镜，CU 仅情绪高点，ECU 仅末块钩子；AI 补充提示词含 full face visible。duration 填 12-15 且等于所有「时长：N 秒」之和。禁止仅用 0-3秒/<n> 简写。',
     }
   }
   return {
