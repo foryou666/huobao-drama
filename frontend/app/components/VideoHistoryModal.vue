@@ -1,5 +1,10 @@
 <template>
-  <div v-if="open" class="video-history-overlay" @click.self="close">
+  <div
+    v-if="open"
+    class="video-history-overlay"
+    @mousedown="onOverlayMouseDown"
+    @click="onOverlayClick"
+  >
     <div class="video-history-dialog card">
       <div class="video-history-head">
         <div>
@@ -80,6 +85,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { videoAPI } from '~/composables/useApi'
+import { useOverlayDismiss } from '~/composables/useOverlayDismiss'
 import { mediaDisplayUrl } from '~/utils/media-url.js'
 
 const props = defineProps({
@@ -187,6 +193,8 @@ async function selectCurrent() {
 function close() {
   emit('close')
 }
+
+const { onOverlayMouseDown, onOverlayClick } = useOverlayDismiss(close)
 
 watch(() => [props.open, props.storyboardId], ([open]) => {
   if (open) loadItems()

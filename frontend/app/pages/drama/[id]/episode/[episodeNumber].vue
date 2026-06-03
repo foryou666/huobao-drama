@@ -1592,7 +1592,7 @@
           </div>
 
           <!-- Sub: Videos -->
-          <div v-else-if="prodTab === 'videos'" class="prod-content">
+          <div v-else-if="prodTab === 'videos'" class="prod-content" :class="{ 'video-aspect-portrait': isPortraitDramaAspect }">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
@@ -1610,30 +1610,36 @@
                 </button>
               </div>
             </div>
-            <div class="prod-grid prod-grid-wide">
-              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
-                <div class="prod-cover" :class="{ 'prod-cover-clickable': hasVid(sb) }" @click="hasVid(sb) && openVideoHistory(sb, i)">
-                  <video
-                    v-if="hasVid(sb)"
-                    :src="displayUrl(getVideoUrl(sb))"
-                    class="prod-video"
-                    controls
-                    preload="metadata"
-                    playsinline
-                    @click.stop
-                  />
+            <div class="prod-grid prod-grid-wide" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
+              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy">
+                <ProdVideoCover
+                  v-if="hasVid(sb)"
+                  :video-url="displayUrl(getVideoUrl(sb))"
+                  :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                  :index-label="`#${String(i + 1).padStart(2, '0')}`"
+                  :portrait="isPortraitDramaAspect"
+                  clickable
+                  @play="openVideoHistory(sb, i)"
+                  @cover-click="openVideoHistory(sb, i)"
+                >
+                  <template #badges>
+                    <span v-if="videoGenCount(sb.id) > 1" class="prod-overlay-badge prod-version-badge">{{ videoGenCount(sb.id) }} 个版本</span>
+                    <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
+                  </template>
+                </ProdVideoCover>
+                <div v-else class="prod-cover">
                   <img
-                    v-else-if="hasImg(sb)"
+                    v-if="hasImg(sb)"
                     :src="displayUrl(getStoryboardCover(sb))"
                     class="previewable-image"
+                    loading="lazy"
+                    decoding="async"
                     @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                   </div>
                   <span class="prod-idx">#{{ String(i+1).padStart(2,'0') }}</span>
-                  <span v-if="videoGenCount(sb.id) > 1" class="prod-overlay-badge prod-version-badge">{{ videoGenCount(sb.id) }} 个版本</span>
-                  <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
                 </div>
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
@@ -1649,7 +1655,7 @@
                       <textarea
                         :value="sb.video_prompt || sb.videoPrompt || ''"
                         class="textarea prod-video-prompt"
-                        rows="6"
+                        rows="3"
                         placeholder="拆解分镜时生成，可在此微调后重新生成"
                         @blur="onVideoPromptBlur(sb, $event)"
                         @dblclick.prevent="openVideoPromptEditor(sb, i)"
@@ -1668,7 +1674,14 @@
                       />
                     </label>
                   </div>
-                  <div class="video-bind-panel">
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-xs prod-card-detail-toggle"
+                    @click="toggleProdCardDetail(sb.id)"
+                  >
+                    {{ isProdCardDetailOpen(sb.id) ? '收起角色/参考配置' : '展开角色/参考配置' }}
+                  </button>
+                  <div v-if="isProdCardDetailOpen(sb.id)" class="video-bind-panel">
                     <div class="video-bind-row">
                       <span class="prod-prompt-label">关联角色</span>
                       <div class="video-bind-pills">
@@ -1804,71 +1817,71 @@
                         </div>
                       </div>
                     </div>
-                  </div>
-                  <div class="video-ref-panel">
-                    <div class="video-ref-head">
-                      <span class="prod-prompt-label">
-                        多模态参考
-                        <span v-if="isSeedance2VideoActive" class="video-ref-hint">（将传入 Seedance 2.0）</span>
-                      </span>
-                      <label class="btn btn-sm video-ref-upload">
-                        上传参考图
-                        <input type="file" accept="image/*" hidden @change="uploadVideoReference(sb, $event)" />
-                      </label>
-                    </div>
-                    <div v-if="collectVideoReferencesExceptBlocking(sb).length" class="video-ref-list">
-                      <div
-                        v-for="ref in collectVideoReferencesExceptBlocking(sb)"
-                        :key="ref.key"
-                        class="video-ref-card"
-                        :class="{ missing: ref.missing }"
-                      >
-                        <button
-                          v-if="ref.url && ref.type === 'image'"
-                          type="button"
-                          class="video-ref-thumb"
-                          @click="openImageViewer(displayUrl(ref.url), ref.label)"
+                    <div class="video-ref-panel">
+                      <div class="video-ref-head">
+                        <span class="prod-prompt-label">
+                          多模态参考
+                          <span v-if="isSeedance2VideoActive" class="video-ref-hint">（将传入 Seedance 2.0）</span>
+                        </span>
+                        <label class="btn btn-sm video-ref-upload">
+                          上传参考图
+                          <input type="file" accept="image/*" hidden @change="uploadVideoReference(sb, $event)" />
+                        </label>
+                      </div>
+                      <div v-if="collectVideoReferencesExceptBlocking(sb).length" class="video-ref-list">
+                        <div
+                          v-for="ref in collectVideoReferencesExceptBlocking(sb)"
+                          :key="ref.key"
+                          class="video-ref-card"
+                          :class="{ missing: ref.missing }"
                         >
-                          <img :src="displayUrl(ref.url)" :alt="ref.label" />
-                        </button>
-                        <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
-                          <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
-                        </div>
-                        <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
-                        <div class="video-ref-meta">
-                          <span v-if="ref.imageIndex" class="video-ref-index">图片{{ ref.imageIndex }}</span>
-                          <span class="video-ref-label">{{ ref.label }}</span>
-                          <span class="video-ref-tag">{{ ref.typeLabel }}{{ ref.promptLabel && ref.promptLabel !== ref.label ? ` · ${ref.promptLabel}` : '' }}</span>
-                          <span v-if="ref.technical" class="video-ref-tag">技术参考</span>
-                          <span v-if="ref.extra" class="video-ref-tag">额外上传</span>
-                        </div>
-                        <div class="video-ref-actions">
-                          <template v-if="ref.source === 'first_frame'">
-                            <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'first_frame')">更换</button>
-                            <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'first_frame')">删除</button>
-                          </template>
-                          <template v-else-if="ref.source === 'last_frame'">
-                            <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'last_frame')">更换</button>
-                            <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'last_frame')">删除</button>
-                          </template>
-                          <template v-else-if="ref.source === 'character'">
-                            <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成图</button>
-                            <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, ref.charId)">移除</button>
-                          </template>
-                          <template v-else-if="ref.source === 'scene'">
-                            <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成图</button>
-                            <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
-                          </template>
-                          <template v-else-if="ref.source === 'reference'">
-                            <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref.url)">删除</button>
-                          </template>
-                          <template v-else-if="ref.source === 'tts'">
-                            <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重新生成</button>
-                          </template>
+                          <button
+                            v-if="ref.url && ref.type === 'image'"
+                            type="button"
+                            class="video-ref-thumb"
+                            @click="openImageViewer(displayUrl(ref.url), ref.label)"
+                          >
+                            <img :src="displayUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
+                          </button>
+                          <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
+                            <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
+                          </div>
+                          <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
+                          <div class="video-ref-meta">
+                            <span v-if="ref.imageIndex" class="video-ref-index">图片{{ ref.imageIndex }}</span>
+                            <span class="video-ref-label">{{ ref.label }}</span>
+                            <span class="video-ref-tag">{{ ref.typeLabel }}{{ ref.promptLabel && ref.promptLabel !== ref.label ? ` · ${ref.promptLabel}` : '' }}</span>
+                            <span v-if="ref.technical" class="video-ref-tag">技术参考</span>
+                            <span v-if="ref.extra" class="video-ref-tag">额外上传</span>
+                          </div>
+                          <div class="video-ref-actions">
+                            <template v-if="ref.source === 'first_frame'">
+                              <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'first_frame')">更换</button>
+                              <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'first_frame')">删除</button>
+                            </template>
+                            <template v-else-if="ref.source === 'last_frame'">
+                              <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'last_frame')">更换</button>
+                              <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'last_frame')">删除</button>
+                            </template>
+                            <template v-else-if="ref.source === 'character'">
+                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成图</button>
+                              <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, ref.charId)">移除</button>
+                            </template>
+                            <template v-else-if="ref.source === 'scene'">
+                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成图</button>
+                              <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
+                            </template>
+                            <template v-else-if="ref.source === 'reference'">
+                              <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref.url)">删除</button>
+                            </template>
+                            <template v-else-if="ref.source === 'tts'">
+                              <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重新生成</button>
+                            </template>
+                          </div>
                         </div>
                       </div>
+                      <div v-else class="dim video-ref-empty-hint">绑定角色/场景或生成首帧后，其余参考素材会显示在这里</div>
                     </div>
-                    <div v-else class="dim video-ref-empty-hint">绑定角色/场景或生成首帧后，其余参考素材会显示在这里</div>
                   </div>
                   <div class="prod-dots">
                     <span :class="['dot', hasImg(sb) && 'ok']" /><span style="font-size:10px">图</span>
@@ -1895,7 +1908,7 @@
           </div>
 
           <!-- Sub: Compose -->
-          <div v-else-if="prodTab === 'compose'" class="prod-content">
+          <div v-else-if="prodTab === 'compose'" class="prod-content" :class="{ 'video-aspect-portrait': isPortraitDramaAspect }">
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ composedCount }}/{{ sbs.length }} 已合成</span>
@@ -1906,36 +1919,33 @@
                 </button>
               </div>
             </div>
-            <div class="prod-grid">
-              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card">
-                <div class="prod-cover">
-                  <video
-                    v-if="hasComposed(sb)"
-                    :src="'/' + getComposedVideoUrl(sb)"
-                    class="prod-video"
-                    controls
-                    preload="metadata"
-                    playsinline
-                  />
-                  <video
-                    v-else-if="hasVid(sb)"
-                    :src="displayUrl(getVideoUrl(sb))"
-                    class="prod-video"
-                    controls
-                    preload="metadata"
-                    playsinline
-                  />
+            <div class="prod-grid" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
+              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy">
+                <ProdVideoCover
+                  v-if="hasComposed(sb) || hasVid(sb)"
+                  :video-url="hasComposed(sb) ? '/' + getComposedVideoUrl(sb) : displayUrl(getVideoUrl(sb))"
+                  :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                  :index-label="`#${String(i + 1).padStart(2, '0')}`"
+                  :portrait="isPortraitDramaAspect"
+                  :show-play="false"
+                >
+                  <template #badges>
+                    <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
+                  </template>
+                </ProdVideoCover>
+                <div v-else class="prod-cover">
                   <img
-                    v-else-if="hasImg(sb)"
+                    v-if="hasImg(sb)"
                     :src="displayUrl(getStoryboardCover(sb))"
                     class="previewable-image"
+                    loading="lazy"
+                    decoding="async"
                     @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
                   <div v-else class="prod-cover-empty">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   </div>
                   <span class="prod-idx">#{{ String(i+1).padStart(2,'0') }}</span>
-                  <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
                 </div>
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
@@ -2178,6 +2188,7 @@ import AssetPickerModal from '~/components/AssetPickerModal.vue'
 import SceneAngleRegenModal from '~/components/SceneAngleRegenModal.vue'
 import VideoHistoryModal from '~/components/VideoHistoryModal.vue'
 import VideoPromptEditorModal from '~/components/VideoPromptEditorModal.vue'
+import ProdVideoCover from '~/components/ProdVideoCover.vue'
 import ManualEntityModal from '~/components/ManualEntityModal.vue'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues } from '~/utils/video-ref-order.js'
@@ -2261,6 +2272,7 @@ const imageAspectOptions = [
 ]
 const imageAspectSaving = ref(false)
 const dramaImageAspect = computed(() => drama.value?.image_aspect_ratio || drama.value?.imageAspectRatio || '9:16')
+const isPortraitDramaAspect = computed(() => dramaImageAspect.value !== '16:9')
 const dramaImageSizeLabel = computed(() => (dramaImageAspect.value === '16:9' ? '1920×1080' : '1080×1920'))
 const dramaImageAspectLabel = computed(() => `${dramaImageAspect.value} · ${dramaImageSizeLabel.value}`)
 const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
@@ -2306,6 +2318,7 @@ function charTransformTimerKeyFor(charId, transformId, source = 'primary') {
 }
 
 const failedVideoMessages = ref({})
+const prodCardDetailOpen = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
 const videoHistory = ref({ open: false, storyboardId: null, title: '', currentVideoUrl: '' })
@@ -2841,6 +2854,17 @@ function isPendingVideo(id) {
 
 function videoFailMessage(id) {
   return failedVideoMessages.value[id] || ''
+}
+
+function isProdCardDetailOpen(id) {
+  return !!prodCardDetailOpen.value[id]
+}
+
+function toggleProdCardDetail(id) {
+  prodCardDetailOpen.value = {
+    ...prodCardDetailOpen.value,
+    [id]: !prodCardDetailOpen.value[id],
+  }
 }
 
 function isPendingCompose(id) {
@@ -6270,16 +6294,44 @@ watch(() => route.params.episodeNumber, () => {
 /* Prod grid */
 .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
 .prod-grid-wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.prod-grid-portrait { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
 .prod-card {
   display: flex; flex-direction: column; overflow: hidden;
-  transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
+  transition: box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
   border-radius: 20px;
   background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58));
 }
-.prod-card:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08); }
+.prod-card-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 560px;
+  contain: layout style paint;
+}
+.prod-grid-wide .prod-card-lazy {
+  contain-intrinsic-size: auto 720px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .prod-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08);
+    transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
+  }
+}
 .prod-cover { position: relative; aspect-ratio: 16/9; background: var(--bg-2); overflow: hidden; }
 .prod-cover img { width: 100%; height: 100%; object-fit: cover; }
 .prod-video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
+.video-aspect-portrait .prod-cover { aspect-ratio: 9 / 16; }
+.video-aspect-portrait .prod-video,
+.video-aspect-portrait .prod-cover img { object-fit: contain; }
+.prod-card-detail-toggle {
+  margin-top: 8px;
+  width: 100%;
+  justify-content: center;
+}
+.prod-grid-wide.prod-grid-portrait { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.video-aspect-portrait .video-blocking-slot { width: 88px; aspect-ratio: 9 / 16; }
+.video-aspect-portrait .video-ref-thumb,
+.video-aspect-portrait .video-ref-thumb-empty,
+.video-aspect-portrait .video-ref-audio { aspect-ratio: 9 / 16; }
 .prod-cover-empty { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
 .prod-idx {
   position: absolute; top: 5px; left: 5px; font-size: 10px; font-weight: 700;
@@ -6332,7 +6384,7 @@ watch(() => route.params.episodeNumber, () => {
 .prod-video-prompt {
   font-size: 13px;
   line-height: 1.6;
-  min-height: 108px;
+  min-height: 72px;
   resize: vertical;
 }
 .prod-duration-field .input {

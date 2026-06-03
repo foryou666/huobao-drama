@@ -1,5 +1,10 @@
 <template>
-  <div v-if="open" class="video-prompt-overlay" @click.self="close">
+  <div
+    v-if="open"
+    class="video-prompt-overlay"
+    @mousedown="onOverlayMouseDown"
+    @click="onOverlayClick"
+  >
     <div class="video-prompt-dialog card">
       <div class="video-prompt-head">
         <div>
@@ -185,6 +190,7 @@ import { computed, ref, watch } from 'vue'
 import { Loader2 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { storyboardAPI } from '~/composables/useApi'
+import { useOverlayDismiss } from '~/composables/useOverlayDismiss'
 import VideoPromptDiffPanel from '~/components/VideoPromptDiffPanel.vue'
 
 const props = defineProps({
@@ -421,6 +427,8 @@ async function save() {
 function close() {
   emit('close')
 }
+
+const { onOverlayMouseDown, onOverlayClick } = useOverlayDismiss(close)
 
 watch(() => [props.open, props.storyboardId, props.initialPrompt], ([open]) => {
   if (!open) return
