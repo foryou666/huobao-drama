@@ -43,7 +43,7 @@ function formatStartTime(ts: number) {
 }
 
 function slowThresholdMs(kind: GenerationTaskKind) {
-  if (kind === 'video') return 5 * 60 * 1000
+  if (kind === 'video') return 10 * 60 * 1000
   if (kind === 'compose') return 3 * 60 * 1000
   return 2 * 60 * 1000
 }
@@ -68,11 +68,11 @@ export function useGenerationTimer() {
     return tasks.value[key] ?? null
   }
 
-  function startTask(key: string, label: string, kind: GenerationTaskKind = 'image') {
+  function startTask(key: string, label: string, kind: GenerationTaskKind = 'image', startedAt?: number) {
     if (!key) return
     tasks.value = {
       ...tasks.value,
-      [key]: { key, label, kind, startedAt: Date.now() },
+      [key]: { key, label, kind, startedAt: startedAt || Date.now() },
     }
     ensureTick()
   }
@@ -108,7 +108,11 @@ export function useGenerationTimer() {
     const task = tasks.value[key]
     if (!task) return ''
     let text = metaText(key)
-    if (isSlow(key)) text += ' · 耗时较长，可重新生成'
+    if (isSlow(key)) {
+      text += task.kind === 'video'
+        ? ' · 耗时较长，可继续生成；若上一份完成可在历史视频中查看'
+        : ' · 耗时较长，可重新生成'
+    }
     return text
   }
 

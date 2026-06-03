@@ -55,12 +55,14 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
       if (record.lastFrameUrl) values.last_frame = record.lastFrameUrl
     } else {
       const extraImages: string[] = []
-      if (record.referenceMode === 'single' && record.imageUrl) {
-        extraImages.push(record.imageUrl)
-      } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
-        try {
-          extraImages.push(...JSON.parse(record.referenceImageUrls))
-        } catch {}
+      if (!refs.length) {
+        if (record.referenceMode === 'single' && record.imageUrl) {
+          extraImages.push(record.imageUrl)
+        } else if (record.referenceMode === 'multiple' && record.referenceImageUrls) {
+          try {
+            extraImages.push(...JSON.parse(record.referenceImageUrls))
+          } catch {}
+        }
       }
       images = collectChengmengImages(refs, extraImages)
       if (videos.length) values.videos = videos

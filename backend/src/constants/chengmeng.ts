@@ -10,6 +10,9 @@ export const CHENGMENT_DEFAULT_GROUP_ID = '15'
 
 export const CHENGMENT_DURATION_BOUNDS = { min: 5, max: 15, defaultSec: 15 }
 
+/** 视频生成发送上限：2000 字符（含 @图片N 前缀；与 JS 字符串 length 一致） */
+export const CHENGMENT_PROMPT_MAX_LENGTH = 2000
+
 export function isChengmengProvider(provider?: string | null): boolean {
   return String(provider || '').toLowerCase() === 'chengmeng'
 }

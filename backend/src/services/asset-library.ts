@@ -3,6 +3,29 @@ import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import type { AssetCategory } from '../constants/asset-categories.js'
 
+/** 从资产名称解析场景地点与时间，如「养心殿（日）」「王府书房·夜」 */
+export function parseSceneAssetName(name: string): { location: string; time: string } {
+  const raw = String(name || '').trim()
+  const parenMatch = raw.match(/^(.+?)\s*[（(]([^）)]+)[）)]\s*$/)
+  if (parenMatch) {
+    return { location: parenMatch[1].trim(), time: parenMatch[2].trim() }
+  }
+  const dotMatch = raw.match(/^(.+?)[·•](.+)$/)
+  if (dotMatch) {
+    return { location: dotMatch[1].trim(), time: dotMatch[2].trim() }
+  }
+  return { location: raw, time: '' }
+}
+
+/** 场景资产统一命名，与项目内展示一致 */
+export function formatSceneAssetName(location: string, time?: string | null): string {
+  const loc = String(location || '').trim()
+  const t = String(time || '').trim()
+  if (!loc) return ''
+  if (!t) return loc
+  return `${loc}（${t}）`
+}
+
 export interface UpsertAssetInput {
   dramaId?: number | null
   episodeId?: number | null
@@ -101,8 +124,8 @@ export function syncSceneAsset(sceneId: number) {
   return upsertLibraryAsset({
     dramaId: scene.dramaId,
     episodeId: scene.episodeId,
-    name: scene.location,
-    description: scene.prompt || scene.time || null,
+    name: formatSceneAssetName(scene.location, scene.time),
+    description: scene.prompt || null,
     type: 'scene',
     category: scene.time || 'scene',
     url,
@@ -130,6 +153,235 @@ export function syncPropAsset(propId: number) {
   })
 }
 
+/** 将手动/导入资产合并为与项目实体绑定的同步资产，避免两侧各存一份 */
+function finalizeEntityAssetLink(pickedAssetId: number, entityType: 'scene' | 'character', entityId: number) {
+  const syncedId = entityType === 'scene'
+    ? syncSceneAsset(entityId)
+    : syncCharacterAsset(entityId)
+  if (syncedId && syncedId !== pickedAssetId) {
+    db.update(schema.assets)
+      .set({ deletedAt: now(), updatedAt: now() })
+      .where(eq(schema.assets.id, pickedAssetId))
+      .run()
+  }
+  return syncedId
+}
+
+function pushAssetImageToScene(sceneId: number, url: string | null, description?: string | null) {
+  const ts = now()
+  const updates: Record<string, unknown> = { updatedAt: ts }
+  if (url) {
+    updates.imageUrl = url
+    updates.localPath = url
+    updates.status = 'completed'
+  }
+  if (description) updates.prompt = description
+  db.update(schema.scenes).set(updates).where(eq(schema.scenes.id, sceneId)).run()
+}
+
+function pushAssetImageToCharacter(characterId: number, url: string | null, description?: string | null) {
+  const ts = now()
+  const updates: Record<string, unknown> = { updatedAt: ts }
+  if (url) {
+    updates.imageUrl = url
+    updates.localPath = url
+  }
+  if (description) updates.appearance = description
+  db.update(schema.characters).set(updates).where(eq(schema.characters.id, characterId)).run()
+}
+
+/** 手动添加的角色资产同步为项目角色实体 */
+export function ensureCharacterFromManualCharacterAsset(input: {
+  dramaId: number
+  name: string
+  description?: string | null
+  url?: string | null
+  localPath?: string | null
+  assetId?: number
+}) {
+  const dramaId = Number(input.dramaId)
+  if (!Number.isFinite(dramaId) || dramaId <= 0) return null
+
+  const name = String(input.name || '').trim()
+  if (!name) return null
+
+  const ts = now()
+  const url = normalizePath(input.url || input.localPath)
+
+  const existing = db.select().from(schema.characters)
+    .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt)))
+    .all()
+    .find(c => c.name === name)
+
+  let characterId: number
+  if (existing) {
+    characterId = existing.id
+    const updates: Record<string, unknown> = { updatedAt: ts }
+    if (url) {
+      updates.imageUrl = url
+      updates.localPath = url
+    }
+    if (input.description) updates.appearance = input.description
+    db.update(schema.characters).set(updates).where(eq(schema.characters.id, characterId)).run()
+  } else {
+    const res = db.insert(schema.characters).values({
+      dramaId,
+      name,
+      appearance: input.description || null,
+      description: input.description || null,
+      imageUrl: url,
+      localPath: url,
+      createdAt: ts,
+      updatedAt: ts,
+    }).run()
+    characterId = Number(res.lastInsertRowid)
+  }
+
+  if (input.assetId) finalizeEntityAssetLink(input.assetId, 'character', characterId)
+  return characterId
+}
+
+/** 手动添加的场景资产同步为项目场景实体，便于在集内制作页直接使用 */
+export function ensureSceneFromManualSceneAsset(input: {
+  dramaId: number
+  name: string
+  description?: string | null
+  url?: string | null
+  localPath?: string | null
+  assetId?: number
+}) {
+  const dramaId = Number(input.dramaId)
+  if (!Number.isFinite(dramaId) || dramaId <= 0) return null
+
+  const { location, time } = parseSceneAssetName(input.name)
+  if (!location) return null
+
+  const ts = now()
+  const url = normalizePath(input.url || input.localPath)
+
+  const existing = db.select().from(schema.scenes)
+    .where(and(eq(schema.scenes.dramaId, dramaId), isNull(schema.scenes.deletedAt)))
+    .all()
+    .find(s => s.location === location && (s.time || '') === time)
+
+  let sceneId: number
+  if (existing) {
+    sceneId = existing.id
+    const updates: Record<string, unknown> = { updatedAt: ts }
+    if (url) {
+      updates.imageUrl = url
+      updates.localPath = url
+      updates.status = 'completed'
+    }
+    if (input.description) updates.prompt = input.description
+    db.update(schema.scenes).set(updates).where(eq(schema.scenes.id, sceneId)).run()
+  } else {
+    const res = db.insert(schema.scenes).values({
+      dramaId,
+      location,
+      time,
+      prompt: input.description || location,
+      imageUrl: url,
+      localPath: url,
+      status: url ? 'completed' : 'pending',
+      createdAt: ts,
+      updatedAt: ts,
+    }).run()
+    sceneId = Number(res.lastInsertRowid)
+  }
+
+  if (input.assetId) finalizeEntityAssetLink(input.assetId, 'scene', sceneId)
+
+  return sceneId
+}
+
+/** 资产库 → 项目：将未绑定实体的手动/导入资产同步到项目角色/场景 */
+export function reconcileOrphanAssets(dramaId: number) {
+  const assets = db.select().from(schema.assets).where(
+    and(
+      eq(schema.assets.dramaId, dramaId),
+      isNull(schema.assets.deletedAt),
+    ),
+  ).all()
+
+  let reconciled = 0
+  for (const asset of assets) {
+    if (asset.sourceId) continue
+    if (asset.sourceType !== 'manual' && asset.sourceType !== 'import') continue
+    if (asset.type === 'scene') {
+      ensureSceneFromManualSceneAsset({
+        dramaId,
+        name: String(asset.name || '').trim(),
+        description: asset.description,
+        url: asset.url,
+        localPath: asset.localPath,
+        assetId: asset.id,
+      })
+      reconciled += 1
+    } else if (asset.type === 'character') {
+      ensureCharacterFromManualCharacterAsset({
+        dramaId,
+        name: String(asset.name || '').trim(),
+        description: asset.description,
+        url: asset.url,
+        localPath: asset.localPath,
+        assetId: asset.id,
+      })
+      reconciled += 1
+    }
+  }
+  return reconciled
+}
+
+/** 资产库变更后推送到项目实体（双向同步） */
+export function syncEntityFromAsset(assetId: number) {
+  const [asset] = db.select().from(schema.assets).where(eq(schema.assets.id, assetId)).all()
+  if (!asset || asset.deletedAt) return null
+
+  const url = normalizePath(asset.url || asset.localPath)
+  const description = asset.description || null
+
+  if (asset.sourceType === 'scene' && asset.sourceId) {
+    pushAssetImageToScene(asset.sourceId, url, description)
+    syncSceneAsset(asset.sourceId)
+    return { type: 'scene' as const, id: asset.sourceId }
+  }
+
+  if (asset.sourceType === 'character' && asset.sourceId) {
+    pushAssetImageToCharacter(asset.sourceId, url, description)
+    syncCharacterAsset(asset.sourceId)
+    return { type: 'character' as const, id: asset.sourceId }
+  }
+
+  if (!asset.dramaId) return null
+
+  if (asset.type === 'scene') {
+    const sceneId = ensureSceneFromManualSceneAsset({
+      dramaId: asset.dramaId,
+      name: String(asset.name || '').trim(),
+      description,
+      url,
+      localPath: url,
+      assetId: asset.id,
+    })
+    return sceneId ? { type: 'scene' as const, id: sceneId } : null
+  }
+
+  if (asset.type === 'character') {
+    const characterId = ensureCharacterFromManualCharacterAsset({
+      dramaId: asset.dramaId,
+      name: String(asset.name || '').trim(),
+      description,
+      url,
+      localPath: url,
+      assetId: asset.id,
+    })
+    return characterId ? { type: 'character' as const, id: characterId } : null
+  }
+
+  return null
+}
+
 export function syncDramaAssets(dramaId: number) {
   const characters = db.select().from(schema.characters)
     .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt))).all()
@@ -151,6 +403,7 @@ export function syncDramaAssets(dramaId: number) {
     syncPropAsset(prop.id)
     synced += 1
   }
+  reconcileOrphanAssets(dramaId)
   return synced
 }
 
@@ -166,7 +419,7 @@ export function applyAssetToCharacter(characterId: number, assetId: number) {
     .set({ imageUrl: url, localPath: url, updatedAt: ts })
     .where(eq(schema.characters.id, characterId))
     .run()
-  syncCharacterAsset(characterId)
+  finalizeEntityAssetLink(assetId, 'character', characterId)
   return url
 }
 
@@ -182,6 +435,6 @@ export function applyAssetToScene(sceneId: number, assetId: number) {
     .set({ imageUrl: url, localPath: url, status: 'completed', updatedAt: ts })
     .where(eq(schema.scenes.id, sceneId))
     .run()
-  syncSceneAsset(sceneId)
+  finalizeEntityAssetLink(assetId, 'scene', sceneId)
   return url
 }

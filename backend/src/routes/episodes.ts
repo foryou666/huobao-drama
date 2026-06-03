@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
@@ -164,18 +164,23 @@ app.get('/:id/characters', async (c) => {
   return success(c, toSnakeCaseArray(result))
 })
 
-// GET /episodes/:id/scenes — scenes linked to this episode
+// GET /episodes/:id/scenes — 项目内全部场景（场景为项目级资产，各集共享）
 app.get('/:id/scenes', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
-  const links = db.select().from(schema.episodeScenes)
-    .where(eq(schema.episodeScenes.episodeId, episodeId)).all()
-  const sceneIds = links.map(l => l.sceneId)
-  if (!sceneIds.length) return success(c, [])
-  const allScenes = db.select().from(schema.scenes).all()
-  const result = allScenes.filter(sc => sceneIds.includes(sc.id) && !sc.deletedAt)
-  return success(c, toSnakeCaseArray(result))
+  const rows = db.select().from(schema.scenes)
+    .where(and(
+      eq(schema.scenes.dramaId, access.episode!.dramaId),
+      isNull(schema.scenes.deletedAt),
+    ))
+    .all()
+  rows.sort((a, b) => {
+    const byLocation = String(a.location).localeCompare(String(b.location), 'zh-CN')
+    if (byLocation !== 0) return byLocation
+    return String(a.time || '').localeCompare(String(b.time || ''), 'zh-CN')
+  })
+  return success(c, toSnakeCaseArray(rows))
 })
 
 // GET /episodes/:episode_id/storyboards

@@ -2,7 +2,7 @@ import { logTaskWarn } from './task-logger.js'
 import { isOssConfigured, resolveMediaUrlForExternalApi } from './oss-upload.js'
 import type { VideoContentRef } from './seedance-content.js'
 import { parseVideoContentRefs } from './seedance-content.js'
-import { CHENGMENT_DEFAULT_GROUP_ID, CHENGMENT_DEFAULT_MODEL_ID, CHENGMENT_DURATION_BOUNDS } from '../constants/chengmeng.js'
+import { CHENGMENT_DEFAULT_GROUP_ID, CHENGMENT_DEFAULT_MODEL_ID, CHENGMENT_DURATION_BOUNDS, CHENGMENT_PROMPT_MAX_LENGTH } from '../constants/chengmeng.js'
 import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 
 function publicBaseUrl() {
@@ -98,22 +98,114 @@ export function normalizeChengmengAspectRatio(aspectRatio?: string | null, fallb
   return CHENGMENT_ASPECT_RATIOS.has(fallback) ? fallback : '16:9'
 }
 
+export { CHENGMENT_PROMPT_MAX_LENGTH }
+
+function stripChengmengInlineTags(prompt: string) {
+  return String(prompt || '').trim()
+    .replace(/@图片\s*(\d+)/gi, '图片$1')
+    .replace(/@素材\s*(\d+)/gi, '素材$1')
+}
+
+export function buildChengmengTagPrefix(imageCount: number, videoCount: number) {
+  const imageTags = Array.from({ length: Math.max(0, imageCount) }, (_, i) => `@图片${i + 1}`)
+  const videoTags = Array.from({ length: Math.max(0, videoCount) }, (_, i) => `@素材${i + 1}`)
+  const tags = [...imageTags, ...videoTags]
+  return tags.length ? `${tags.join(' ')} ` : ''
+}
+
+export function estimateChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0) {
+  return buildChengmengTagPrefix(imageCount, videoCount).length + stripChengmengInlineTags(prompt).length
+}
+
+export function formatChengmengPromptOverLimitMessage(
+  sendLength: number,
+  limit = CHENGMENT_PROMPT_MAX_LENGTH,
+): string {
+  const over = Math.max(0, sendLength - limit)
+  return `视频提示词约 ${sendLength} 字符，超过上限 ${limit} 字符（含 @图片N 前缀），超出 ${over} 字符。请精简后再生成，否则部分内容不会发送。`
+}
+
+export function assertChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0): void {
+  const sendLength = estimateChengmengPromptLength(prompt, imageCount, videoCount)
+  if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
+    throw new Error(formatChengmengPromptOverLimitMessage(sendLength))
+  }
+}
+
+/** 与橙盟 adapter 一致：估算 @ 标签前缀所需的图片/素材数量 */
+export function resolveChengmengPromptMediaCounts(input: {
+  prompt?: string | null
+  referenceMode?: string | null
+  imageUrl?: string | null
+  firstFrameUrl?: string | null
+  lastFrameUrl?: string | null
+  referenceImageUrls?: string[] | null
+  contentRefs?: VideoContentRef[] | null
+}): { imageCount: number; videoCount: number } {
+  const refs = input.contentRefs || []
+  const videos = collectChengmengVideos(refs)
+  const useFramesMode = input.referenceMode === 'first_last'
+    && !!(input.firstFrameUrl || input.lastFrameUrl)
+  if (useFramesMode) return { imageCount: 0, videoCount: videos.length }
+
+  const extraImages: string[] = []
+  if (!refs.length) {
+    if (input.referenceMode === 'single' && input.imageUrl) {
+      extraImages.push(input.imageUrl)
+    } else if (input.referenceMode === 'multiple' && input.referenceImageUrls?.length) {
+      extraImages.push(...input.referenceImageUrls)
+    }
+  }
+  return {
+    imageCount: collectChengmengImages(refs, extraImages).length,
+    videoCount: videos.length,
+  }
+}
+
+const CHENGMENT_TRUNC_NOTE = `…（已达视频生成 ${CHENGMENT_PROMPT_MAX_LENGTH} 字符上限，后续镜头未发送）`
+
+export function truncateChengmengPromptBody(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text
+  if (maxLen <= CHENGMENT_TRUNC_NOTE.length + 8) {
+    return text.slice(0, Math.max(0, maxLen)).trimEnd()
+  }
+
+  const budget = maxLen - CHENGMENT_TRUNC_NOTE.length
+  const marker = '【镜头'
+  const shots: number[] = []
+  let pos = 0
+  while (pos < text.length) {
+    const idx = text.indexOf(marker, pos)
+    if (idx < 0) break
+    shots.push(idx)
+    pos = idx + marker.length
+  }
+
+  let best = ''
+  for (let i = 0; i < shots.length; i++) {
+    const end = i + 1 < shots.length ? shots[i + 1] : text.length
+    const chunk = text.slice(0, end).trimEnd()
+    if (chunk.length <= budget) best = chunk
+    else break
+  }
+
+  if (best && best.length < text.length) {
+    return `${best}${CHENGMENT_TRUNC_NOTE}`
+  }
+
+  return `${text.slice(0, budget).trimEnd()}${CHENGMENT_TRUNC_NOTE}`
+}
+
 /**
  * 文档要求 prompt 内用 @图片1 / @素材1 关联资源；
  * 工作台仍用「图片1是…」描述，发送前自动补 @ 标签。
+ * 超过 CHENGMENT_PROMPT_MAX_LENGTH 时直接报错，禁止静默截断。
  */
 export function buildChengmengPrompt(prompt: string, imageCount: number, videoCount: number): string {
-  let text = normalizeVideoPromptFraming(String(prompt || '').trim())
-  text = text
-    .replace(/@图片\s*(\d+)/gi, '图片$1')
-    .replace(/@素材\s*(\d+)/gi, '素材$1')
-
-  const imageTags = Array.from({ length: imageCount }, (_, i) => `@图片${i + 1}`)
-  const videoTags = Array.from({ length: videoCount }, (_, i) => `@素材${i + 1}`)
-  const tags = [...imageTags, ...videoTags]
-  const prefix = tags.join(' ')
-  const merged = prefix ? `${prefix} ${text}`.trim() : text
-  return merged.slice(0, 1500)
+  assertChengmengPromptLength(prompt, imageCount, videoCount)
+  const text = normalizeVideoPromptFraming(stripChengmengInlineTags(prompt))
+  const prefix = buildChengmengTagPrefix(imageCount, videoCount)
+  return prefix ? `${prefix}${text}`.trim() : text
 }
 
 export function collectChengmengImages(refs: VideoContentRef[], extraUrls: string[] = []): string[] {
@@ -121,8 +213,9 @@ export function collectChengmengImages(refs: VideoContentRef[], extraUrls: strin
   const seen = new Set<string>()
   const push = (url?: string | null) => {
     const next = String(url || '').trim()
-    if (!next || seen.has(next)) return
-    seen.add(next)
+    const key = next.replace(/^\/+/, '').split('?')[0].toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
     urls.push(next)
   }
 

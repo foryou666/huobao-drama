@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-left">
         <h1 class="page-title">资产库</h1>
-        <p class="page-desc">各项目的角色、场景、服装、道具图片统一归档，做剧时可复用</p>
+        <p class="page-desc">各项目的角色、场景、服装、道具图片统一归档；与项目内制作数据双向同步，任一侧修改都会自动更新</p>
       </div>
       <div class="head-actions">
         <button class="btn btn-sm" :disabled="!selectedDramaId || syncing" @click="syncDrama">

@@ -145,12 +145,18 @@ function getEpisodeCharacterIds(episodeId: number) {
 }
 
 function validateStoryboardBindings(episodeId: number, sceneId: number | null | undefined, characterIds: number[] | undefined) {
-  const episodeSceneIds = getEpisodeSceneIds(episodeId)
-  const episodeCharacterIds = getEpisodeCharacterIds(episodeId)
+  const [ep] = db.select().from(schema.episodes)
+    .where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep) throw new Error('Episode not found')
 
-  if (sceneId != null && !episodeSceneIds.has(sceneId)) {
-    throw new Error(`scene_id ${sceneId} 不属于当前集`)
+  if (sceneId != null) {
+    const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
+    if (!scene || scene.deletedAt || scene.dramaId !== ep.dramaId) {
+      throw new Error(`scene_id ${sceneId} 不属于当前项目`)
+    }
   }
+
+  const episodeCharacterIds = getEpisodeCharacterIds(episodeId)
 
   const invalidCharacterIds = (characterIds || []).filter(id => !episodeCharacterIds.has(id))
   if (invalidCharacterIds.length) {

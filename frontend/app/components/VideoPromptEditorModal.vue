@@ -44,7 +44,13 @@
           placeholder="拆解分镜时生成，可在此完整编辑；支持多段【镜头 NNN】结构"
         />
         <div class="video-prompt-meta">
-          <span class="dim">{{ promptDraft.length }} 字</span>
+          <span class="dim">正文 {{ promptDraft.length }} 字符</span>
+          <span v-if="promptSendLimit" :class="['video-prompt-send-limit', { 'video-prompt-send-limit-over': sendLengthOverLimit }]">
+            发送约 {{ estimatedSendLength }} / {{ promptSendLimit }} 字符（含 @图片N 前缀）
+          </span>
+          <span v-if="sendLengthOverLimit" class="video-prompt-send-limit-over">
+            超出 {{ estimatedSendLength - promptSendLimit }} 字符，请精简后再生成视频
+          </span>
           <span class="dim">当前视频模型：{{ videoModelLabel || '未配置' }}</span>
         </div>
       </div>
@@ -192,6 +198,7 @@ import { toast } from 'vue-sonner'
 import { storyboardAPI } from '~/composables/useApi'
 import { useOverlayDismiss } from '~/composables/useOverlayDismiss'
 import VideoPromptDiffPanel from '~/components/VideoPromptDiffPanel.vue'
+import { estimateChengmengPromptLength } from '~/utils/chengmeng-prompt.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -200,6 +207,8 @@ const props = defineProps({
   initialPrompt: { type: String, default: '' },
   videoModelLabel: { type: String, default: '' },
   contextLines: { type: Array, default: () => [] },
+  promptSendLimit: { type: Number, default: null },
+  promptReferenceImageCount: { type: Number, default: 0 },
 })
 
 const emit = defineEmits(['close', 'saved'])
@@ -252,6 +261,16 @@ const sourceLabels = {
 
 const title = computed(() => `${props.shotLabel} · 视频提示词`)
 const subtitle = computed(() => '支持左右/着色对比、修改历史保存与版本恢复')
+const estimatedSendLength = computed(() => {
+  if (!props.promptSendLimit) return 0
+  return estimateChengmengPromptLength(
+    promptDraft.value,
+    props.promptReferenceImageCount,
+  )
+})
+const sendLengthOverLimit = computed(() =>
+  props.promptSendLimit ? estimatedSendLength.value > props.promptSendLimit : false,
+)
 const selectedHistory = computed(() => historyItems.value.find(item => item.id === selectedHistoryId.value) || null)
 
 function formatTime(raw) {
@@ -525,10 +544,18 @@ watch(() => [props.open, props.storyboardId, props.initialPrompt], ([open]) => {
 }
 .video-prompt-meta {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   margin-top: 8px;
   font-size: 11px;
+}
+.video-prompt-send-limit {
+  color: var(--text-3);
+}
+.video-prompt-send-limit-over {
+  color: var(--warning, #c27803);
+  font-weight: 600;
 }
 .video-prompt-compare-head {
   display: flex;

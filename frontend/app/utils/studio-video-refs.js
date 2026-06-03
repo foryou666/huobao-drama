@@ -38,7 +38,13 @@ export function createStudioHelpers(binding) {
     getRefs: (sb) => {
       const raw = sb?.reference_images || sb?.referenceImages
       if (!raw) return []
-      try { return JSON.parse(raw) } catch { return [] }
+      if (Array.isArray(raw)) return raw.filter(Boolean)
+      try {
+        const parsed = JSON.parse(raw)
+        return Array.isArray(parsed) ? parsed.filter(Boolean) : []
+      } catch {
+        return []
+      }
     },
     getFirstFrame: () => null,
     getLastFrame: () => null,

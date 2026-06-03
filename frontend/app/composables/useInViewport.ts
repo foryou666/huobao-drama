@@ -9,13 +9,26 @@ export function useInViewport(
 ) {
   const inView = ref(false)
   let observer: IntersectionObserver | null = null
+  let hideTimer: ReturnType<typeof setTimeout> | null = null
 
   onMounted(() => {
     if (!target.value) return
     observer = new IntersectionObserver(
       ([entry]) => {
-        inView.value = entry.isIntersecting
-        onChange?.(entry.isIntersecting)
+        if (entry.isIntersecting) {
+          if (hideTimer) {
+            clearTimeout(hideTimer)
+            hideTimer = null
+          }
+          inView.value = true
+          onChange?.(true)
+          return
+        }
+        hideTimer = setTimeout(() => {
+          inView.value = false
+          onChange?.(false)
+          hideTimer = null
+        }, 280)
       },
       { rootMargin, threshold: 0.01 },
     )
@@ -23,6 +36,7 @@ export function useInViewport(
   })
 
   onUnmounted(() => {
+    if (hideTimer) clearTimeout(hideTimer)
     observer?.disconnect()
     observer = null
   })

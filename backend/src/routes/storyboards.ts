@@ -70,20 +70,21 @@ function getStoryboardCharacterIds(storyboardId: number) {
 }
 
 function validateStoryboardBindings(episodeId: number, sceneId: number | null | undefined, characterIds: number[] | undefined) {
-  const episodeSceneIds = new Set(
-    db.select().from(schema.episodeScenes)
-      .where(eq(schema.episodeScenes.episodeId, episodeId)).all()
-      .map(link => link.sceneId),
-  )
+  const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  if (!ep) throw new Error('Episode not found')
+
+  if (sceneId != null) {
+    const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
+    if (!scene || scene.deletedAt || scene.dramaId !== ep.dramaId) {
+      throw new Error('scene_id 必须来自当前项目')
+    }
+  }
+
   const episodeCharacterIds = new Set(
     db.select().from(schema.episodeCharacters)
       .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
       .map(link => link.characterId),
   )
-
-  if (sceneId != null && !episodeSceneIds.has(sceneId)) {
-    throw new Error('scene_id 必须来自当前集已关联场景')
-  }
 
   const invalidCharacterIds = (characterIds || []).filter(id => !episodeCharacterIds.has(id))
   if (invalidCharacterIds.length) {

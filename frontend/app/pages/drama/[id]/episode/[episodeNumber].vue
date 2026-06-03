@@ -1610,36 +1610,35 @@
                 </button>
               </div>
             </div>
-            <div class="prod-grid prod-grid-wide" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
-              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy">
-                <ProdVideoCover
-                  v-if="hasVid(sb)"
-                  :video-url="displayUrl(getVideoUrl(sb))"
-                  :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
-                  :index-label="`#${String(i + 1).padStart(2, '0')}`"
-                  :portrait="isPortraitDramaAspect"
-                  clickable
-                  @play="openVideoHistory(sb, i)"
-                  @cover-click="openVideoHistory(sb, i)"
-                >
-                  <template #badges>
-                    <span v-if="videoGenCount(sb.id) > 1" class="prod-overlay-badge prod-version-badge">{{ videoGenCount(sb.id) }} 个版本</span>
-                    <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
-                  </template>
-                </ProdVideoCover>
-                <div v-else class="prod-cover">
-                  <img
-                    v-if="hasImg(sb)"
-                    :src="displayUrl(getStoryboardCover(sb))"
-                    class="previewable-image"
-                    loading="lazy"
-                    decoding="async"
-                    @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
+            <div class="prod-grid prod-grid-video-shots" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
+              <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy prod-card-video">
+                <div class="prod-video-preview-shell">
+                  <ProdVideoCover
+                    v-if="hasVid(sb)"
+                    :video-url="displayUrl(getVideoUrl(sb))"
+                    :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                    :index-label="`#${String(i + 1).padStart(2, '0')}`"
+                    :portrait="isPortraitDramaAspect"
+                    compact
+                    @expand="openVideoViewer(displayUrl(getVideoUrl(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 视频预览`)"
+                  >
+                    <template #badges>
+                      <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
+                    </template>
+                  </ProdVideoCover>
+                  <ProdVideoEmptyPreview
+                    v-else
+                    :cover-url="hasImg(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                    :index-label="`#${String(i + 1).padStart(2, '0')}`"
+                    :portrait="isPortraitDramaAspect"
+                    compact
+                    @preview-cover="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
                   />
-                  <div v-else class="prod-cover-empty">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                  <div v-if="isPendingVideo(sb.id)" class="prod-video-generating">
+                    <Loader2 :size="22" class="animate-spin prod-video-generating-icon" />
+                    <span class="prod-video-generating-text">视频生成中</span>
+                    <GenerationTimer :task-key="videoTimerKey(sb.id)" />
                   </div>
-                  <span class="prod-idx">#{{ String(i+1).padStart(2,'0') }}</span>
                 </div>
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
@@ -1648,40 +1647,65 @@
                     <label class="prod-prompt-field prod-prompt-field-video">
                       <div class="prod-prompt-head">
                         <span class="prod-prompt-label">视频提示词</span>
-                        <button type="button" class="btn btn-ghost btn-xs prod-prompt-expand" @click="openVideoPromptEditor(sb, i)">
+                        <button type="button" class="prod-prompt-expand" @click="openVideoPromptEditor(sb, i)">
                           展开编辑 / AI 优化
                         </button>
                       </div>
                       <textarea
                         :value="sb.video_prompt || sb.videoPrompt || ''"
                         class="textarea prod-video-prompt"
-                        rows="3"
                         placeholder="拆解分镜时生成，可在此微调后重新生成"
                         @blur="onVideoPromptBlur(sb, $event)"
                         @dblclick.prevent="openVideoPromptEditor(sb, i)"
                       />
                     </label>
-                    <label class="prod-duration-field">
-                      <span class="prod-prompt-label">时长（秒）</span>
-                      <input
-                        :value="sb.duration ?? ''"
-                        class="input"
-                        type="number"
-                        min="1"
-                        max="15"
-                        placeholder="5"
-                        @blur="onVideoDurationBlur(sb, $event)"
-                      />
-                    </label>
+                    <div class="prod-video-settings-row">
+                      <div class="prod-setting-field prod-setting-duration">
+                        <span class="prod-setting-label">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                          时长
+                        </span>
+                        <div class="prod-duration-slider-box">
+                          <div class="prod-duration-slider-wrap">
+                            <input
+                              type="range"
+                              class="prod-duration-slider"
+                              min="1"
+                              max="15"
+                              step="1"
+                              :value="shotDurationValue(sb)"
+                              :style="{ '--slider-progress': shotDurationProgress(sb) }"
+                              @input="onVideoDurationInput(sb, $event)"
+                            />
+                          </div>
+                          <span class="prod-duration-value">{{ shotDurationValue(sb) }}秒</span>
+                        </div>
+                      </div>
+                      <div class="prod-setting-field prod-setting-resolution">
+                        <span class="prod-setting-label">
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                          分辨率
+                        </span>
+                        <div class="prod-resolution-box">
+                          <span class="prod-resolution-value">{{ videoResolutionLabel }}</span>
+                          <span class="prod-resolution-dot" />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                   <button
                     type="button"
-                    class="btn btn-ghost btn-xs prod-card-detail-toggle"
+                    class="prod-card-detail-toggle"
                     @click="toggleProdCardDetail(sb.id)"
                   >
+                    <svg class="prod-card-detail-chevron" :class="{ open: isProdCardDetailOpen(sb.id) }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
                     {{ isProdCardDetailOpen(sb.id) ? '收起角色/参考配置' : '展开角色/参考配置' }}
                   </button>
-                  <div v-if="isProdCardDetailOpen(sb.id)" class="video-bind-panel">
+                  <div
+                    v-if="isProdCardDetailMounted(sb.id)"
+                    v-show="isProdCardDetailOpen(sb.id)"
+                    class="video-bind-panel"
+                  >
                     <div class="video-bind-row">
                       <span class="prod-prompt-label">关联角色</span>
                       <div class="video-bind-pills">
@@ -1700,27 +1724,29 @@
                     <div v-if="getStoryboardCharacterIds(sb).length" class="video-char-image-panel">
                       <div class="video-bind-row">
                         <span class="prod-prompt-label">角色参考图</span>
-                        <span class="dim video-char-image-hint">每个镜头可单独选择用于视频生成的角色图</span>
+                        <span class="dim video-char-image-hint">横向选择各角色造型</span>
                       </div>
-                      <div
-                        v-for="charId in getStoryboardCharacterIds(sb)"
-                        :key="`char-img:${sb.id}:${charId}`"
-                        class="video-char-image-row"
-                      >
-                        <span class="video-char-image-name">{{ getCharacterName(charId) }}</span>
-                        <div class="video-char-image-options">
-                          <button
-                            v-for="img in getCharacterImagesById(charId)"
-                            :key="`${charId}:${img.url}`"
-                            type="button"
-                            class="video-char-image-option"
-                            :class="{ active: isStoryboardCharacterImageSelected(sb, charId, img.url) }"
-                            :title="variantLabel(img)"
-                            @click="setStoryboardCharacterImage(sb, charId, img.url)"
-                          >
-                            <img :src="displayUrl(img.url)" :alt="variantLabel(img)" />
-                            <span>{{ variantLabel(img) }}</span>
-                          </button>
+                      <div class="video-char-image-strip">
+                        <div
+                          v-for="charId in getStoryboardCharacterIds(sb)"
+                          :key="`char-img:${sb.id}:${charId}`"
+                          class="video-char-image-segment"
+                        >
+                          <span class="video-char-image-name">{{ getCharacterName(charId) }}</span>
+                          <div class="video-char-image-options">
+                            <button
+                              v-for="img in getCharacterImagesById(charId)"
+                              :key="`${charId}:${img.url}`"
+                              type="button"
+                              class="video-char-image-option"
+                              :class="{ active: isStoryboardCharacterImageSelected(sb, charId, img.url) }"
+                              :title="variantLabel(img)"
+                              @click="setStoryboardCharacterImage(sb, charId, img.url)"
+                            >
+                              <img :src="displayUrl(img.url)" :alt="variantLabel(img)" loading="lazy" decoding="async" />
+                              <span>{{ variantLabel(img) }}</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1828,6 +1854,9 @@
                           <input type="file" accept="image/*" hidden @change="uploadVideoReference(sb, $event)" />
                         </label>
                       </div>
+                      <div class="video-ref-at-hint">
+                        上传后按卡片「图N」在提示词写 <code>@图片N是参考图</code>；多张上传用 <code>@图片N是参考图2</code>
+                      </div>
                       <div v-if="collectVideoReferencesExceptBlocking(sb).length" class="video-ref-list">
                         <div
                           v-for="ref in collectVideoReferencesExceptBlocking(sb)"
@@ -1835,24 +1864,24 @@
                           class="video-ref-card"
                           :class="{ missing: ref.missing }"
                         >
-                          <button
-                            v-if="ref.url && ref.type === 'image'"
-                            type="button"
-                            class="video-ref-thumb"
-                            @click="openImageViewer(displayUrl(ref.url), ref.label)"
-                          >
-                            <img :src="displayUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
-                          </button>
-                          <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
-                            <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
+                          <div class="video-ref-card-media">
+                            <button
+                              v-if="ref.url && ref.type === 'image'"
+                              type="button"
+                              class="video-ref-thumb"
+                              @click="openImageViewer(displayUrl(ref.url), ref.label)"
+                            >
+                              <img :src="displayUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
+                            </button>
+                            <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
+                              <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
+                            </div>
+                            <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
+                            <span v-if="ref.imageIndex" class="video-ref-index">图{{ ref.imageIndex }}</span>
                           </div>
-                          <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
                           <div class="video-ref-meta">
-                            <span v-if="ref.imageIndex" class="video-ref-index">图片{{ ref.imageIndex }}</span>
                             <span class="video-ref-label">{{ ref.label }}</span>
-                            <span class="video-ref-tag">{{ ref.typeLabel }}{{ ref.promptLabel && ref.promptLabel !== ref.label ? ` · ${ref.promptLabel}` : '' }}</span>
-                            <span v-if="ref.technical" class="video-ref-tag">技术参考</span>
-                            <span v-if="ref.extra" class="video-ref-tag">额外上传</span>
+                            <span class="video-ref-tag">{{ ref.typeLabel }}</span>
                           </div>
                           <div class="video-ref-actions">
                             <template v-if="ref.source === 'first_frame'">
@@ -1864,18 +1893,18 @@
                               <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'last_frame')">删除</button>
                             </template>
                             <template v-else-if="ref.source === 'character'">
-                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成图</button>
+                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成</button>
                               <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, ref.charId)">移除</button>
                             </template>
                             <template v-else-if="ref.source === 'scene'">
-                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成图</button>
+                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成</button>
                               <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
                             </template>
                             <template v-else-if="ref.source === 'reference'">
                               <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref.url)">删除</button>
                             </template>
                             <template v-else-if="ref.source === 'tts'">
-                              <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重新生成</button>
+                              <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重生成</button>
                             </template>
                           </div>
                         </div>
@@ -1890,14 +1919,19 @@
                   </div>
                   <div v-if="videoFailMessage(sb.id)" class="prod-error">{{ videoFailMessage(sb.id) }}</div>
                 </div>
-                <div class="prod-actions">
-                  <button class="btn btn-sm" :disabled="isPendingVideo(sb.id) || assistantRunning" @click="genVid(sb)">
+                <div class="prod-actions prod-actions-video">
+                  <button
+                    class="btn btn-sm prod-generate-btn"
+                    :disabled="assistantRunning || (isPendingVideo(sb.id) && !isVideoGenerationSlow(sb.id))"
+                    @click="genVid(sb)"
+                  >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-                    {{ isPendingVideo(sb.id) ? '生成中' : '生成视频' }}
+                    {{ isPendingVideo(sb.id) && !isVideoGenerationSlow(sb.id) ? '生成中…' : (isPendingVideo(sb.id) ? '继续生成' : '生成视频') }}
                   </button>
                   <button
                     v-if="hasVid(sb) || videoGenCount(sb.id) > 0"
-                    class="btn btn-sm"
+                    type="button"
+                    class="btn btn-sm prod-history-btn"
                     @click="openVideoHistory(sb, i)"
                   >
                     历史视频
@@ -1933,20 +1967,16 @@
                     <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
                   </template>
                 </ProdVideoCover>
-                <div v-else class="prod-cover">
-                  <img
-                    v-if="hasImg(sb)"
-                    :src="displayUrl(getStoryboardCover(sb))"
-                    class="previewable-image"
-                    loading="lazy"
-                    decoding="async"
-                    @click.stop="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
-                  />
-                  <div v-else class="prod-cover-empty">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-                  </div>
-                  <span class="prod-idx">#{{ String(i+1).padStart(2,'0') }}</span>
-                </div>
+                <ProdVideoEmptyPreview
+                  v-else
+                  :cover-url="hasImg(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                  :index-label="`#${String(i + 1).padStart(2, '0')}`"
+                  :portrait="isPortraitDramaAspect"
+                  :compact="false"
+                  empty-title="暂无成片"
+                  empty-hint="请先生成镜头视频"
+                  @preview-cover="openImageViewer(displayUrl(getStoryboardCover(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 参考图`)"
+                />
                 <div class="prod-info">
                   <div class="prod-desc truncate">{{ sb.description || sb.title || '—' }}</div>
                   <div class="prod-meta-line">{{ sb.shot_type || sb.shotType || '未设景别' }} · {{ sb.duration || 10 }}s</div>
@@ -2093,6 +2123,33 @@
           </div>
         </div>
       </div>
+
+      <div
+        v-if="videoViewer.open && videoViewer.src"
+        class="overlay image-viewer-overlay video-viewer-overlay"
+        @mousedown="onVideoViewerOverlayMouseDown"
+        @click="onVideoViewerOverlayClick"
+      >
+        <div class="card image-viewer-dialog video-viewer-dialog">
+          <div class="image-viewer-head">
+            <div class="image-viewer-title">{{ videoViewer.title || '视频预览' }}</div>
+            <button class="btn btn-ghost btn-icon" @click="closeVideoViewer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div class="image-viewer-body video-viewer-body">
+            <video
+              ref="videoViewerEl"
+              :src="videoViewer.src"
+              class="video-viewer-player"
+              controls
+              autoplay
+              playsinline
+              @click.stop
+            />
+          </div>
+        </div>
+      </div>
     </main>
 
     <AssetPickerModal
@@ -2138,6 +2195,8 @@
       :initial-prompt="videoPromptEditor.initialPrompt"
       :video-model-label="lockedVideoConfigLabel"
       :context-lines="videoPromptEditor.contextLines"
+      :prompt-send-limit="isChengmengVideoActive ? CHENGMENT_PROMPT_MAX_LENGTH : null"
+      :prompt-reference-image-count="videoPromptEditorReferenceImageCount"
       @close="closeVideoPromptEditor"
       @saved="onVideoPromptEditorSaved"
     />
@@ -2189,9 +2248,11 @@ import SceneAngleRegenModal from '~/components/SceneAngleRegenModal.vue'
 import VideoHistoryModal from '~/components/VideoHistoryModal.vue'
 import VideoPromptEditorModal from '~/components/VideoPromptEditorModal.vue'
 import ProdVideoCover from '~/components/ProdVideoCover.vue'
+import ProdVideoEmptyPreview from '~/components/ProdVideoEmptyPreview.vue'
 import ManualEntityModal from '~/components/ManualEntityModal.vue'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
-import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues } from '~/utils/video-ref-order.js'
+import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
+import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
 import { mediaDisplayUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
@@ -2273,8 +2334,9 @@ const imageAspectOptions = [
 const imageAspectSaving = ref(false)
 const dramaImageAspect = computed(() => drama.value?.image_aspect_ratio || drama.value?.imageAspectRatio || '9:16')
 const isPortraitDramaAspect = computed(() => dramaImageAspect.value !== '16:9')
-const dramaImageSizeLabel = computed(() => (dramaImageAspect.value === '16:9' ? '1920×1080' : '1080×1920'))
-const dramaImageAspectLabel = computed(() => `${dramaImageAspect.value} · ${dramaImageSizeLabel.value}`)
+const dramaImageSizeLabel = computed(() => (dramaImageAspect.value === '16:9' ? '1280×720' : '720×1280'))
+const videoResolutionLabel = computed(() => '720p')
+const dramaImageAspectLabel = computed(() => `${dramaImageAspect.value} · ${videoResolutionLabel.value}`)
 const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
 const showImageSizeControl = computed(() => panel.value === 'production' && canManageDrama.value)
 const gridLayoutOptions = [
@@ -2297,6 +2359,8 @@ const pendingShotFrameKeys = ref([])
 const pendingBlockingIds = ref([])
 const blockingAssistantMsgIds = ref({})
 const pendingVideoIds = ref([])
+const activeVideoGenerationByStoryboard = ref({})
+const videoPollInFlight = ref({})
 const pendingComposeIds = ref([])
 const genTimer = useGenerationTimer()
 const GRID_TIMER_KEY = 'grid:main'
@@ -2319,8 +2383,12 @@ function charTransformTimerKeyFor(charId, transformId, source = 'primary') {
 
 const failedVideoMessages = ref({})
 const prodCardDetailOpen = ref({})
+const prodCardDetailMounted = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
+const videoViewer = ref({ open: false, src: '', title: '' })
+const videoViewerEl = ref(null)
+const videoViewerOverlayMouseDown = ref(false)
 const videoHistory = ref({ open: false, storyboardId: null, title: '', currentVideoUrl: '' })
 const videoPromptEditor = ref({
   open: false,
@@ -2405,6 +2473,27 @@ function openImageViewer(src, title = '') {
 
 function closeImageViewer() {
   imageViewer.value = { open: false, src: '', title: '' }
+}
+
+function openVideoViewer(src, title = '') {
+  if (!src) return
+  videoViewer.value = { open: true, src, title }
+}
+
+function closeVideoViewer() {
+  if (videoViewerEl.value) videoViewerEl.value.pause()
+  videoViewer.value = { open: false, src: '', title: '' }
+}
+
+function onVideoViewerOverlayMouseDown(event) {
+  videoViewerOverlayMouseDown.value = event.target === event.currentTarget
+}
+
+function onVideoViewerOverlayClick(event) {
+  if (videoViewerOverlayMouseDown.value && event.target === event.currentTarget) {
+    closeVideoViewer()
+  }
+  videoViewerOverlayMouseDown.value = false
 }
 
 function videoGenCount(storyboardId) {
@@ -2553,6 +2642,7 @@ async function applyPickedAsset(payload) {
 }
 
 function handleImageViewerKeydown(event) {
+  if (event.key === 'Escape' && videoViewer.value.open) closeVideoViewer()
   if (event.key === 'Escape' && imageViewer.value.open) closeImageViewer()
 }
 
@@ -2852,6 +2942,22 @@ function isPendingVideo(id) {
   return pendingVideoIds.value.includes(id)
 }
 
+function isVideoGenerationSlow(storyboardId) {
+  return genTimer.isSlow(videoTimerKey(storyboardId))
+}
+
+function isActiveVideoGeneration(storyboardId, generationId) {
+  if (!generationId) return true
+  return activeVideoGenerationByStoryboard.value[storyboardId] === generationId
+}
+
+function clearActiveVideoGeneration(storyboardId, generationId) {
+  if (!isActiveVideoGeneration(storyboardId, generationId)) return
+  const next = { ...activeVideoGenerationByStoryboard.value }
+  delete next[storyboardId]
+  activeVideoGenerationByStoryboard.value = next
+}
+
 function videoFailMessage(id) {
   return failedVideoMessages.value[id] || ''
 }
@@ -2860,10 +2966,21 @@ function isProdCardDetailOpen(id) {
   return !!prodCardDetailOpen.value[id]
 }
 
+function isProdCardDetailMounted(id) {
+  return !!prodCardDetailMounted.value[id]
+}
+
 function toggleProdCardDetail(id) {
+  const next = !prodCardDetailOpen.value[id]
   prodCardDetailOpen.value = {
     ...prodCardDetailOpen.value,
-    [id]: !prodCardDetailOpen.value[id],
+    [id]: next,
+  }
+  if (next) {
+    prodCardDetailMounted.value = {
+      ...prodCardDetailMounted.value,
+      [id]: true,
+    }
   }
 }
 
@@ -2916,6 +3033,12 @@ const lockedVideoConfigLabel = computed(() => {
   return prefix + configLabel(cfg)
 })
 const isChengmengVideoActive = computed(() => resolvedVideoConfig.value?.provider === 'chengmeng')
+
+const videoPromptEditorReferenceImageCount = computed(() => {
+  const sb = sbs.value.find(item => item.id === videoPromptEditor.value.storyboardId)
+  if (!sb) return 0
+  return countChengmengReferenceImages(buildVideoContentRefs(sb))
+})
 const isSeedance2VideoActive = computed(() => {
   const cfg = resolvedVideoConfig.value
   if (!cfg) return false
@@ -3883,6 +4006,20 @@ function onVideoDurationBlur(sb, event) {
   updateField(sb, 'duration', n)
 }
 
+function onVideoDurationInput(sb, event) {
+  onVideoDurationBlur(sb, event)
+}
+
+function shotDurationValue(sb) {
+  const n = Number(sb?.duration)
+  return Number.isFinite(n) && n > 0 ? n : 5
+}
+
+function shotDurationProgress(sb) {
+  const val = shotDurationValue(sb)
+  return `${((val - 1) / 14) * 100}%`
+}
+
 function toCamel(field) {
   return field.replace(/_([a-z])/g, (_, c) => c.toUpperCase())
 }
@@ -3942,7 +4079,8 @@ const scriptSteps = computed(() => {
 watch(rawContent, v => { localRaw.value = v }, { immediate: true })
 watch(scriptContent, v => { localScript.value = v }, { immediate: true })
 
-async function refresh() {
+async function refresh(options = {}) {
+  const { restoreVideoPending = false } = options
   if (!drama.value) pageLoading.value = true
   pageError.value = ''
   const preservedPanel = panel.value
@@ -3960,12 +4098,10 @@ async function refresh() {
     try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
     try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
     sbs.value = await episodeAPI.storyboards(ep.id)
-    pendingVideoIds.value = pendingVideoIds.value.filter(id => {
-      const sb = sbs.value.find(s => s.id === id)
-      return sb && !hasVid(sb)
-    })
+    pendingVideoIds.value = pendingVideoIds.value.filter(id => sbs.value.some(s => s.id === id))
     await prefetchMediaUrls(collectDisplayMediaPaths(), { force: true })
     await loadVideoGenCounts()
+    if (restoreVideoPending) await restorePendingVideoGenerations()
     if (sbs.value.length) {
       if (selectedSb.value?.id) {
         selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
@@ -4681,7 +4817,16 @@ function genShotFrame(sb, frameType) {
 function getRefs(sb) {
   const raw = sb.reference_images || sb.referenceImages
   if (!raw) return []
-  try { return JSON.parse(raw) } catch { return [] }
+  if (Array.isArray(raw)) return raw.filter(Boolean)
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : []
+    } catch {
+      return []
+    }
+  }
+  return []
 }
 
 function collectDisplayMediaPaths() {
@@ -4735,7 +4880,9 @@ function collectVideoReferences(sb) {
 }
 
 function collectVideoReferencesExceptBlocking(sb) {
-  return collectVideoReferences(sb).filter(ref => ref.source !== 'blocking')
+  return assignDisplayImageIndices(
+    collectVideoReferences(sb).filter(ref => ref.source !== 'blocking'),
+  )
 }
 
 function getBlockingColorLegend(sb) {
@@ -4790,7 +4937,60 @@ function removeVideoRefScene(sb) {
 function removeExtraReference(sb, url) {
   const normalized = normalizeMediaPath(url)
   const next = getRefs(sb).filter(item => normalizeMediaPath(item) !== normalized)
+  sb.reference_images = next
+  sb.referenceImages = JSON.stringify(next)
   updateField(sb, 'reference_images', next)
+}
+
+function parseGenerationStartedAt(row) {
+  const raw = row?.created_at || row?.createdAt
+  if (!raw) return Date.now()
+  const ts = new Date(raw).getTime()
+  return Number.isFinite(ts) ? ts : Date.now()
+}
+
+async function restorePendingVideoGenerations() {
+  try {
+    const rows = await videoAPI.list({ drama_id: dramaId })
+    const latestByStoryboard = new Map()
+    for (const row of rows || []) {
+      const storyboardId = row?.storyboard_id ?? row?.storyboardId
+      const status = row?.status
+      if (!storyboardId || !['processing', 'pending'].includes(status)) continue
+      const existing = latestByStoryboard.get(storyboardId)
+      if (!existing || row.id > existing.id) latestByStoryboard.set(storyboardId, row)
+    }
+
+    for (const [storyboardId, row] of latestByStoryboard.entries()) {
+      if (!sbs.value.some(sb => sb.id === storyboardId)) continue
+      const generationId = row.id
+      const pollKey = `${storyboardId}:${generationId}`
+      if (videoPollInFlight.value[pollKey]) continue
+
+      if (!pendingVideoIds.value.includes(storyboardId)) {
+        pendingVideoIds.value = [...pendingVideoIds.value, storyboardId]
+      }
+      activeVideoGenerationByStoryboard.value = {
+        ...activeVideoGenerationByStoryboard.value,
+        [storyboardId]: generationId,
+      }
+
+      const sb = sbs.value.find(item => item.id === storyboardId)
+      const timerKey = videoTimerKey(storyboardId)
+      if (!genTimer.hasTask(timerKey)) {
+        genTimer.startTask(
+          timerKey,
+          `镜头 #${shotIndex(sb)} 视频`,
+          'video',
+          parseGenerationStartedAt(row),
+        )
+      }
+
+      pollVideoGeneration(generationId, storyboardId, getVideoUrl(sb) || '')
+    }
+  } catch {
+    // ignore restore errors
+  }
 }
 
 async function clearVideoFrame(sb, frameType) {
@@ -4814,7 +5014,10 @@ async function uploadVideoReference(sb, event) {
     const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
     if (!path) throw new Error('上传失败')
     const next = [...getRefs(sb), path]
-    updateField(sb, 'reference_images', next)
+    sb.reference_images = next
+    sb.referenceImages = JSON.stringify(next)
+    await storyboardAPI.update(sb.id, { reference_images: next })
+    await prefetchMediaUrls([path])
     toast.success('参考图已添加')
   } catch (e) {
     toast.error(e?.message || '上传失败')
@@ -4835,6 +5038,14 @@ async function genVid(sb) {
     return
   }
   const contentRefs = buildVideoContentRefs(sb)
+  if (isChengmengVideoActive.value) {
+    const imageCount = countChengmengReferenceImages(contentRefs)
+    const sendLength = estimateChengmengPromptLength(prompt, imageCount)
+    if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
+      toast.error(formatVideoPromptOverLimitMessage(sendLength))
+      return
+    }
+  }
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
@@ -4844,42 +5055,69 @@ async function genVid(sb) {
       ? 'adaptive'
       : dramaImageAspect.value,
   }
-  if (contentRefs.length) params.content_refs = contentRefs
-
-  const first = getFirstFrame(sb)
-  const last = getLastFrame(sb)
-  const refs = getRefs(sb)
-  if (first && last) {
-    Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
-  } else if (refs.length || first) {
-    Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) })
-  } else if (first) {
-    Object.assign(params, { reference_mode: 'single', image_url: first })
+  if (contentRefs.length) {
+    params.content_refs = contentRefs
+  } else {
+    const first = getFirstFrame(sb)
+    const last = getLastFrame(sb)
+    const refs = getRefs(sb)
+    if (first && last) {
+      Object.assign(params, { reference_mode: 'first_last', first_frame_url: first, last_frame_url: last })
+    } else if (refs.length || first) {
+      Object.assign(params, { reference_mode: 'multiple', reference_image_urls: [first, ...refs].filter(Boolean) })
+    } else if (first) {
+      Object.assign(params, { reference_mode: 'single', image_url: first })
+    }
   }
 
   try {
     delete failedVideoMessages.value[sb.id]
+    const isRetry = isPendingVideo(sb.id) && isVideoGenerationSlow(sb.id)
     if (!isPendingVideo(sb.id)) pendingVideoIds.value.push(sb.id)
     genTimer.startTask(videoTimerKey(sb.id), `镜头 #${shotIndex(sb)} 视频`, 'video')
     const generation = await videoAPI.generate(params)
-    toast.success('视频生成中')
+    const generationId = generation?.id ?? generation?.generation_id
+    const baselineVideoUrl = getVideoUrl(sb) || ''
+    if (generationId) {
+      activeVideoGenerationByStoryboard.value = {
+        ...activeVideoGenerationByStoryboard.value,
+        [sb.id]: generationId,
+      }
+    }
+    toast.success(isRetry ? '已重新提交视频生成' : '视频生成中')
     await refresh()
-    pollVideoGeneration(generation?.id, sb.id)
+    pollVideoGeneration(generationId, sb.id, baselineVideoUrl)
   } catch (e) {
     pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== sb.id)
+    clearActiveVideoGeneration(sb.id, activeVideoGenerationByStoryboard.value[sb.id])
     genTimer.endTask(videoTimerKey(sb.id))
     toast.error(e.message)
   }
 }
 
-async function pollVideoGeneration(generationId, storyboardId) {
+async function finishStaleVideoGeneration(storyboardId) {
+  await loadVideoGenCounts()
+  toast.info('上一份视频已生成完成，可在「历史视频」中查看')
+}
+
+async function pollVideoGeneration(generationId, storyboardId, baselineVideoUrl = '') {
+  const pollKey = `${storyboardId}:${generationId || 'none'}`
+  if (videoPollInFlight.value[pollKey]) return
+  videoPollInFlight.value = { ...videoPollInFlight.value, [pollKey]: true }
+  try {
   if (!generationId) {
     watchAsyncResult(() => {
       const target = sbs.value.find(s => s.id === storyboardId)
-      const done = !!hasVid(target)
-      if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+      const currentUrl = getVideoUrl(target) || ''
+      const done = !!currentUrl && currentUrl !== baselineVideoUrl
+      if (done && isActiveVideoGeneration(storyboardId, generationId)) {
+        pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        clearActiveVideoGeneration(storyboardId, generationId)
+      }
       return done
-    }, 60, 4000, () => genTimer.endTask(videoTimerKey(storyboardId)))
+    }, 60, 4000, () => {
+      if (isActiveVideoGeneration(storyboardId, generationId)) genTimer.endTask(videoTimerKey(storyboardId))
+    })
     return
   }
   for (let i = 0; i < 300; i++) {
@@ -4887,8 +5125,13 @@ async function pollVideoGeneration(generationId, storyboardId) {
     try {
       const res = await videoAPI.get(generationId)
       await refresh()
-      if (res?.status === 'completed' || hasVid(sbs.value.find(s => s.id === storyboardId))) {
+      if (res?.status === 'completed') {
+        if (!isActiveVideoGeneration(storyboardId, generationId)) {
+          await finishStaleVideoGeneration(storyboardId)
+          return
+        }
         pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        clearActiveVideoGeneration(storyboardId, generationId)
         genTimer.endTask(videoTimerKey(storyboardId))
         delete failedVideoMessages.value[storyboardId]
         await loadVideoGenCounts()
@@ -4896,7 +5139,9 @@ async function pollVideoGeneration(generationId, storyboardId) {
         return
       }
       if (res?.status === 'failed') {
+        if (!isActiveVideoGeneration(storyboardId, generationId)) return
         pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+        clearActiveVideoGeneration(storyboardId, generationId)
         genTimer.endTask(videoTimerKey(storyboardId))
         failedVideoMessages.value = {
           ...failedVideoMessages.value,
@@ -4907,9 +5152,16 @@ async function pollVideoGeneration(generationId, storyboardId) {
       }
     } catch {}
   }
+  if (!isActiveVideoGeneration(storyboardId, generationId)) return
   pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== storyboardId)
+  clearActiveVideoGeneration(storyboardId, generationId)
   genTimer.endTask(videoTimerKey(storyboardId))
-  toast.warning('视频生成超时，请稍后刷新查看')
+  toast.warning('视频生成超时，可继续生成；若上一份完成可在历史视频中查看')
+  } finally {
+    const next = { ...videoPollInFlight.value }
+    delete next[pollKey]
+    videoPollInFlight.value = next
+  }
 }
 function doCompose(sb) {
   delete failedComposeMessages.value[sb.id]
@@ -5039,7 +5291,7 @@ async function loadVoices() {
 }
 
 watch([lockedAudioConfigId, audioConfigs], () => { loadVoices() }, { deep: true })
-onMounted(() => { refresh(); loadConfigs(); loadVoices() })
+onMounted(() => { refresh({ restoreVideoPending: true }); loadConfigs(); loadVoices() })
 
 watch(() => route.params.episodeNumber, () => {
   panel.value = 'script'
@@ -6186,24 +6438,74 @@ watch(() => route.params.episodeNumber, () => {
   border-top: 1px dashed var(--border);
 }
 .video-char-image-hint { font-size: 10px; }
-.video-char-image-row { display: flex; flex-direction: column; gap: 6px; }
-.video-char-image-name { font-size: 11px; font-weight: 600; }
-.video-char-image-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.video-char-image-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 14px;
+}
+.video-char-image-segment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.video-char-image-name {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(76, 125, 255, 0.08);
+  border: 1px solid rgba(76, 125, 255, 0.14);
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.video-char-image-options {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  min-width: 0;
+  padding-bottom: 2px;
+}
 .video-char-image-option {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  width: 56px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
+  width: 52px;
+  flex-shrink: 0;
+  padding: 3px;
+  border: 1.5px solid rgba(27, 41, 64, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.88);
   cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-.video-char-image-option.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.video-char-image-option img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
-.video-char-image-option span { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.video-char-image-option:hover {
+  border-color: rgba(76, 125, 255, 0.35);
+  transform: translateY(-1px);
+}
+.video-char-image-option.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14);
+}
+.video-char-image-option img { width: 44px; height: 44px; object-fit: cover; border-radius: 7px; }
+.video-char-image-option span {
+  font-size: 9px;
+  color: var(--text-3);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tag-warn { color: #b45309; border-color: rgba(180, 83, 9, 0.35); background: rgba(251, 191, 36, 0.08); }
 
 /* Frame grid */
@@ -6295,19 +6597,27 @@ watch(() => route.params.episodeNumber, () => {
 .prod-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
 .prod-grid-wide { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
 .prod-grid-portrait { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+.prod-grid-video-shots {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.prod-card-video {
+  border: 1px solid rgba(27, 41, 64, 0.08);
+  box-shadow: 0 8px 24px rgba(20, 32, 54, 0.05);
+}
 .prod-card {
   display: flex; flex-direction: column; overflow: hidden;
   transition: box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
   border-radius: 20px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58));
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(248,251,255,0.82));
 }
 .prod-card-lazy {
   content-visibility: auto;
   contain-intrinsic-size: auto 560px;
   contain: layout style paint;
 }
-.prod-grid-wide .prod-card-lazy {
-  contain-intrinsic-size: auto 720px;
+.prod-grid-video-shots .prod-card-lazy {
+  contain-intrinsic-size: auto 760px;
 }
 @media (hover: hover) and (pointer: fine) {
   .prod-card:hover {
@@ -6317,15 +6627,69 @@ watch(() => route.params.episodeNumber, () => {
   }
 }
 .prod-cover { position: relative; aspect-ratio: 16/9; background: var(--bg-2); overflow: hidden; }
+.prod-video-preview-shell {
+  position: relative;
+}
+.prod-video-generating {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.82), rgba(191, 219, 254, 0.92));
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+.prod-video-generating-icon {
+  color: var(--accent-dark);
+}
+.prod-video-generating-text {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-dark);
+}
+.prod-video-generating :deep(.gen-timer) {
+  margin-top: 0;
+  color: rgba(37, 99, 235, 0.82);
+}
 .prod-cover img { width: 100%; height: 100%; object-fit: cover; }
 .prod-video { width: 100%; height: 100%; object-fit: cover; background: #000; display: block; }
 .video-aspect-portrait .prod-cover { aspect-ratio: 9 / 16; }
 .video-aspect-portrait .prod-video,
 .video-aspect-portrait .prod-cover img { object-fit: contain; }
 .prod-card-detail-toggle {
-  margin-top: 8px;
+  margin-top: 10px;
   width: 100%;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid rgba(27, 41, 64, 0.1);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.prod-card-detail-toggle:hover {
+  border-color: rgba(76, 125, 255, 0.28);
+  background: rgba(76, 125, 255, 0.06);
+  color: var(--accent-dark);
+}
+.prod-card-detail-chevron {
+  flex-shrink: 0;
+  transition: transform 0.18s var(--ease-out);
+}
+.prod-card-detail-chevron.open {
+  transform: rotate(180deg);
 }
 .prod-grid-wide.prod-grid-portrait { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .video-aspect-portrait .video-blocking-slot { width: 88px; aspect-ratio: 9 / 16; }
@@ -6377,15 +6741,144 @@ watch(() => route.params.episodeNumber, () => {
 }
 .prod-prompt-expand {
   flex-shrink: 0;
+  border: 0;
+  background: rgba(76, 125, 255, 0.08);
+  color: var(--accent-dark);
   font-size: 11px;
-  padding: 2px 8px;
-  height: auto;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.prod-prompt-expand:hover {
+  background: rgba(76, 125, 255, 0.14);
+  transform: translateY(-1px);
 }
 .prod-video-prompt {
   font-size: 13px;
   line-height: 1.6;
-  min-height: 72px;
+  min-height: 230px;
+  height: 230px;
   resize: vertical;
+  border-radius: 12px;
+  border-color: rgba(27, 41, 64, 0.1);
+  background: rgba(255, 255, 255, 0.9);
+}
+.prod-video-settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 10px;
+}
+.prod-setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.prod-setting-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.prod-duration-slider-box,
+.prod-resolution-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 41, 64, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+}
+.prod-duration-slider-box {
+  background: rgba(76, 125, 255, 0.05);
+  border-color: rgba(76, 125, 255, 0.12);
+}
+.prod-duration-slider-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 20px;
+}
+.prod-duration-slider {
+  width: 100%;
+  height: 20px;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  --slider-progress: 0%;
+}
+.prod-duration-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #4c7dff 0%,
+    #4c7dff var(--slider-progress),
+    rgba(76, 125, 255, 0.16) var(--slider-progress),
+    rgba(76, 125, 255, 0.16) 100%
+  );
+}
+.prod-duration-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  border: 2px solid #4c7dff;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(76, 125, 255, 0.25);
+  cursor: grab;
+}
+.prod-duration-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  transform: scale(1.06);
+}
+.prod-duration-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(76, 125, 255, 0.16);
+}
+.prod-duration-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: #4c7dff;
+}
+.prod-duration-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #4c7dff;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(76, 125, 255, 0.25);
+  cursor: grab;
+}
+.prod-duration-value {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--accent-dark);
+  font-family: var(--font-mono);
+}
+.prod-resolution-value {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 800;
+  color: #7c3aed;
+  font-family: var(--font-mono);
+}
+.prod-resolution-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7c3aed;
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.14);
 }
 .prod-duration-field .input {
   width: 88px;
@@ -6527,32 +7020,65 @@ watch(() => route.params.episodeNumber, () => {
   position: relative;
   cursor: pointer;
 }
+.video-ref-at-hint {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.video-ref-at-hint code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(27, 41, 64, 0.06);
+  color: var(--text-2);
+}
 .video-ref-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scroll-snap-type: x proximity;
 }
 .video-ref-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px;
-  border-radius: 10px;
+  gap: 6px;
+  flex: 0 0 128px;
+  padding: 8px;
+  border-radius: 14px;
   border: 1px solid rgba(27, 41, 64, 0.1);
-  background: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.82);
+  scroll-snap-align: start;
 }
 .video-ref-card.missing {
   border-style: dashed;
+}
+.video-ref-card-media {
+  position: relative;
+}
+.video-ref-card-media .video-ref-index {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 1;
 }
 .video-ref-thumb {
   width: 100%;
   aspect-ratio: 16 / 9;
   border: 0;
   padding: 0;
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
   background: var(--bg-2);
   cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.video-ref-thumb:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(20, 32, 54, 0.12);
 }
 .video-ref-thumb img {
   width: 100%;
@@ -6596,9 +7122,12 @@ watch(() => route.params.episodeNumber, () => {
 }
 .video-ref-label {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-1);
   line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .video-ref-tag {
   font-size: 10px;
@@ -6610,17 +7139,31 @@ watch(() => route.params.episodeNumber, () => {
   gap: 4px;
 }
 .video-ref-action {
-  border: 0;
-  background: rgba(27, 41, 64, 0.06);
+  border: 1px solid rgba(27, 41, 64, 0.12);
+  background: #fff;
   color: var(--text-2);
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 8px;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+}
+.video-ref-action:hover {
+  border-color: rgba(76, 125, 255, 0.35);
+  background: rgba(76, 125, 255, 0.08);
+  color: var(--accent-dark);
+  transform: translateY(-1px);
 }
 .video-ref-action.danger {
-  color: var(--error);
-  background: rgba(239, 68, 68, 0.08);
+  color: #dc2626;
+  background: rgba(254, 242, 242, 0.95);
+  border-color: rgba(239, 68, 68, 0.18);
+}
+.video-ref-action.danger:hover {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(254, 226, 226, 0.95);
+  color: #b91c1c;
 }
 .video-ref-empty-hint {
   font-size: 11px;
@@ -6628,14 +7171,50 @@ watch(() => route.params.episodeNumber, () => {
 }
 .prod-actions { display: flex; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid rgba(27, 41, 64, 0.08); }
 .prod-actions .btn { flex: 1; justify-content: center; }
+.prod-actions-video {
+  padding: 10px 12px 12px;
+  background: rgba(248, 251, 255, 0.72);
+  display: flex;
+  gap: 8px;
+}
+.prod-generate-btn {
+  flex: 1;
+  min-height: 38px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ff8a4c, #ffb347);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 8px 20px rgba(255, 138, 76, 0.28);
+  transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+.prod-history-btn {
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 41, 64, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-2);
+  font-weight: 600;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s;
+}
+.prod-history-btn:hover {
+  border-color: rgba(76, 125, 255, 0.28);
+  background: rgba(76, 125, 255, 0.06);
+  color: var(--accent-dark);
+  transform: translateY(-1px);
+}
+.prod-generate-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(255, 138, 76, 0.34);
+}
+.prod-generate-btn:disabled {
+  opacity: 0.55;
+  box-shadow: none;
+}
 .prod-cover-clickable { cursor: pointer; }
 .prod-cover-clickable:hover .prod-video { opacity: 0.92; }
-.prod-version-badge {
-  top: auto;
-  bottom: 8px;
-  right: 8px;
-  left: auto;
-}
 
 /* Image viewer */
 .image-viewer-overlay {
@@ -6656,6 +7235,7 @@ watch(() => route.params.episodeNumber, () => {
 .image-viewer-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 16px 18px;
   border-bottom: 1px solid rgba(27, 41, 64, 0.08);
@@ -6681,6 +7261,24 @@ watch(() => route.params.episodeNumber, () => {
   border-radius: 18px;
   box-shadow: 0 18px 48px rgba(8, 14, 24, 0.22);
   background: rgba(255,255,255,0.9);
+}
+.video-viewer-overlay {
+  z-index: 121;
+}
+.video-viewer-dialog {
+  width: min(920px, calc(100vw - 56px));
+}
+.video-viewer-body {
+  background: #0f141c;
+  padding: 16px;
+}
+.video-viewer-player {
+  display: block;
+  width: 100%;
+  max-height: calc(100vh - 160px);
+  border-radius: 14px;
+  background: #000;
+  object-fit: contain;
 }
 
 /* Grid tool dialog */
@@ -7137,7 +7735,12 @@ watch(() => route.params.episodeNumber, () => {
   .extract-grid,
   .voice-grid,
   .asset-grid,
-  .prod-grid {
+  .prod-grid,
+  .prod-grid-video-shots {
+    grid-template-columns: 1fr;
+  }
+
+  .prod-video-settings-row {
     grid-template-columns: 1fr;
   }
 

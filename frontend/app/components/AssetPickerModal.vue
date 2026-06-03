@@ -110,7 +110,10 @@ function normalizePath(raw) {
 async function load() {
   loading.value = true
   try {
-    items.value = await assetAPI.list({ type: props.type }) || []
+    const params = { type: props.type }
+    if (props.dramaId) params.drama_id = props.dramaId
+    const res = await assetAPI.list(params)
+    items.value = Array.isArray(res) ? res : []
   } catch {
     items.value = []
   } finally {

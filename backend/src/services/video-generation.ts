@@ -16,6 +16,8 @@ import {
   normalizeChengmengReferenceUrls,
   normalizeChengmengAspectRatio,
   resolveChengmengMediaUrl,
+  assertChengmengPromptLength,
+  resolveChengmengPromptMediaCounts,
 } from '../utils/chengmeng-content.js'
 import { failVideoGeneration } from '../utils/generation-failure.js'
 import { normalizeSeedanceRatio } from '../utils/video-aspect-ratio.js'
@@ -70,6 +72,19 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const aspectRatio = useChengmeng
     ? normalizeChengmengAspectRatio(rawAspect, defaultAspect)
     : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
+
+  if (useChengmeng) {
+    const { imageCount, videoCount } = resolveChengmengPromptMediaCounts({
+      prompt: params.prompt,
+      referenceMode: params.referenceMode,
+      imageUrl: params.imageUrl,
+      firstFrameUrl: params.firstFrameUrl,
+      lastFrameUrl: params.lastFrameUrl,
+      referenceImageUrls: params.referenceImageUrls,
+      contentRefs: params.contentRefs,
+    })
+    assertChengmengPromptLength(params.prompt, imageCount, videoCount)
+  }
 
   const res = db.insert(schema.videoGenerations).values({
     storyboardId: params.storyboardId,
@@ -202,7 +217,7 @@ async function processVideoGeneration(id: number, config: AIConfig) {
     if (!isAsync && videoUrl) {
       logTaskProgress('VideoTask', 'sync-complete', { id, videoUrl })
       // 同步模式
-      await handleVideoComplete(id, videoUrl, record.duration)
+      await handleVideoComplete(id, videoUrl, record.duration, record.storyboardId)
       return
     }
 
@@ -364,20 +379,45 @@ async function pollVideoTask(id: number, config: AIConfig, taskId: string, story
   }
 }
 
-async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
+function shouldApplyVideoToStoryboard(storyboardId: number, generationId: number): boolean {
+  const rows = db.select({ id: schema.videoGenerations.id })
+    .from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.storyboardId, storyboardId))
+    .all()
+  if (!rows.length) return true
+  const latestId = Math.max(...rows.map(r => r.id))
+  return generationId >= latestId
+}
+
+export async function handleVideoComplete(id: number, videoUrl: string, duration: number | null | undefined, storyboardId?: number | null) {
   const ts = now()
+  let sbId = storyboardId ?? null
+  if (!sbId) {
+    const [record] = db.select({ storyboardId: schema.videoGenerations.storyboardId })
+      .from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.id, id))
+      .all()
+    sbId = record?.storyboardId ?? null
+  }
+  const applyToStoryboard = sbId ? shouldApplyVideoToStoryboard(sbId, id) : false
+
   // 先写入远程 URL 并标记完成，避免下载耗时导致前端轮询超时仍显示「生成中」
   db.update(schema.videoGenerations)
     .set({ videoUrl, status: 'completed', completedAt: ts, updatedAt: ts })
     .where(eq(schema.videoGenerations.id, id))
     .run()
-  if (storyboardId) {
+  if (sbId && applyToStoryboard) {
     db.update(schema.storyboards)
       .set({ videoUrl, duration: duration || undefined, updatedAt: ts })
-      .where(eq(schema.storyboards.id, storyboardId))
+      .where(eq(schema.storyboards.id, sbId))
       .run()
   }
-  logTaskProgress('VideoTask', 'remote-ready', { id, videoUrl: redactUrl(videoUrl), storyboardId })
+  logTaskProgress('VideoTask', 'remote-ready', {
+    id,
+    videoUrl: redactUrl(videoUrl),
+    storyboardId: sbId,
+    applyToStoryboard,
+  })
 
   try {
     const localPath = await downloadFile(videoUrl, 'videos')
@@ -385,17 +425,17 @@ async function handleVideoComplete(id: number, videoUrl: string, duration: numbe
       .set({ localPath, updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
-    if (storyboardId) {
+    if (sbId && applyToStoryboard) {
       db.update(schema.storyboards)
         .set({ videoUrl: localPath, updatedAt: now() })
-        .where(eq(schema.storyboards.id, storyboardId))
+        .where(eq(schema.storyboards.id, sbId))
         .run()
     }
-    logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId, duration })
+    logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId: sbId, applyToStoryboard, duration })
   } catch (err: any) {
     logTaskWarn('VideoTask', 'download-failed', {
       id,
-      storyboardId,
+      storyboardId: sbId,
       error: err?.message || String(err),
       hint: '已保留远程 videoUrl，页面可播放外链',
     })
