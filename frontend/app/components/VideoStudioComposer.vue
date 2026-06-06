@@ -1,81 +1,119 @@
 <template>
   <div class="studio-composer">
     <div class="composer-shell card">
-      <div v-if="dramaLinked" class="composer-project-panel">
-        <div class="composer-project-head">
+      <div v-if="dramaLinked" class="composer-top-bar">
+        <div class="composer-top-main">
           <span class="composer-project-title">项目素材</span>
-          <span class="dim composer-project-hint">点击选择角色/场景，或在提示词输入 <kbd>@</kbd> 关联</span>
+          <div class="composer-bind-actions">
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="openCharacterPicker">
+              选择角色
+              <span v-if="boundCharacterCount" class="composer-pick-count">{{ boundCharacterCount }}</span>
+            </button>
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="openScenePicker">
+              选择场景
+              <span v-if="boundSceneCount" class="composer-pick-count">{{ boundSceneCount }}</span>
+            </button>
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
+              选择音色
+              <span v-if="boundVoiceCount" class="composer-pick-count">{{ boundVoiceCount }}</span>
+            </button>
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="voiceLibraryOpen = true">
+              音色库
+            </button>
+          </div>
+          <div v-if="boundCharacterCount || boundSceneCount || boundVoiceCount" class="composer-bound-summary">
+            <button
+              v-for="char in boundCharacters"
+              :key="char.id"
+              type="button"
+              class="composer-bound-chip"
+              @click="unbindCharacterById(char.id, char.name)"
+            >
+              {{ char.name }} ×
+            </button>
+            <button
+              v-for="scene in boundScenes"
+              :key="scene.id"
+              type="button"
+              class="composer-bound-chip"
+              @click="unbindSceneById(scene.id)"
+            >
+              {{ sceneDisplayLabel(scene) }} ×
+            </button>
+            <button
+              v-for="(voice, vIdx) in boundVoices"
+              :key="voice.path || vIdx"
+              type="button"
+              class="composer-bound-chip composer-bound-chip-voice"
+              @click="unbindVoiceByIndex(vIdx)"
+            >
+              {{ voice.name }} ×
+            </button>
+          </div>
         </div>
-
-        <div class="composer-bind-actions">
-          <button type="button" class="btn btn-sm composer-pick-btn" @click="openCharacterPicker">
-            选择角色
-            <span v-if="boundCharacterCount" class="composer-pick-count">{{ boundCharacterCount }}</span>
-          </button>
-          <button type="button" class="btn btn-sm composer-pick-btn" @click="openScenePicker">
-            选择场景
-            <span v-if="binding.scene_id" class="composer-pick-count">1</span>
-          </button>
-        </div>
-
-        <div v-if="boundCharacterCount || binding.scene_id" class="composer-bound-summary">
-          <button
-            v-for="char in boundCharacters"
-            :key="char.id"
-            type="button"
-            class="composer-bound-chip"
-            @click="unbindCharacterById(char.id, char.name)"
-          >
-            {{ char.name }} ×
-          </button>
-          <button
-            v-if="boundScene"
-            type="button"
-            class="composer-bound-chip"
-            @click="clearSceneBinding"
-          >
-            {{ boundScene.location }} ×
-          </button>
-        </div>
-      </div>
-
-      <div v-if="showRefStrip" class="composer-refs">
-        <div
-          v-for="item in visualRefItems"
-          :key="item.key"
-          class="composer-ref"
-          :class="{
-            missing: item.missing,
-            'is-first': refMode === 'first_last' && item.uploadIndex === 0,
-            'is-last': refMode === 'first_last' && item.uploadIndex === 1,
-          }"
-        >
-          <button
-            type="button"
-            class="composer-ref-thumb"
-            :disabled="!item.preview && item.missing"
-            @click="openVisualRefPreview(item)"
-          >
-            <img v-if="item.preview" :src="item.preview" alt="" />
-            <div v-else class="composer-ref-empty">缺图</div>
-          </button>
-          <button type="button" class="composer-ref-remove" @click.stop="removeVisualRef(item)">×</button>
-          <span class="composer-ref-tag">{{ item.tagLabel }}</span>
-        </div>
-        <label v-if="uploadedRefs.length < maxImages" class="composer-ref-add">
-          <input type="file" accept="image/*" multiple hidden @change="onUpload" />
-          <span>+</span>
-        </label>
+        <span class="dim composer-project-hint">选择角色/场景/音色或上传图片；参考图栏出现图片后可在提示词输入 <kbd>@</kbd> 关联</span>
       </div>
 
       <div class="composer-main">
         <div class="composer-input-wrap">
+          <div
+            v-if="showRefStrip"
+            class="composer-ref-stack"
+            :class="{ 'is-expanded': refStackExpanded }"
+            @mouseenter="refStackExpanded = true"
+            @mouseleave="refStackExpanded = false"
+            @click.self="refStackExpanded = !refStackExpanded"
+          >
+            <div
+              v-for="(item, index) in visualRefItems"
+              :key="item.key"
+              class="composer-ref-card"
+              :class="{
+                missing: item.missing,
+                'is-first': refMode === 'first_last' && item.uploadIndex === 0,
+                'is-last': refMode === 'first_last' && item.uploadIndex === 1,
+              }"
+              :style="{ '--ref-index': index }"
+            >
+              <button
+                type="button"
+                class="composer-ref-card-thumb"
+                :disabled="!item.preview && item.missing"
+                :title="item.tagLabel"
+                @click.stop="openVisualRefPreview(item)"
+              >
+                <img v-if="item.preview" :src="item.preview" alt="" />
+                <div v-else class="composer-ref-card-empty">缺图</div>
+              </button>
+              <button
+                type="button"
+                class="composer-ref-card-remove"
+                title="移除"
+                @click.stop="removeVisualRef(item)"
+              >
+                ×
+              </button>
+              <span class="composer-ref-card-tag">{{ item.tagLabel }}</span>
+            </div>
+            <label
+              v-if="uploadedRefs.length < maxImages"
+              class="composer-ref-add-card"
+              title="上传参考图"
+              @click.stop
+            >
+              <input type="file" accept="image/*" multiple hidden @change="onUpload" />
+              <span class="composer-ref-add-icon">+</span>
+              <span class="composer-ref-add-label">参考内容</span>
+            </label>
+          </div>
+
           <textarea
             ref="promptEl"
             v-model="prompt"
             class="composer-input"
-            rows="3"
-            :placeholder="dramaLinked ? '描述视频内容；输入 @ 可关联角色、场景或上传图…' : '描述你想生成的视频画面、动作与镜头…'"
+            :class="{ 'composer-input--with-refs': showRefStrip }"
+            rows="6"
+            :placeholder="mentionableRefItems.length ? '描述视频内容；输入 @ 可关联参考图…' : (dramaLinked ? '描述视频内容…' : '描述你想生成的视频画面、动作与镜头…')"
             @input="onPromptInput"
             @keydown="onPromptKeydown"
             @click="onPromptInput"
@@ -88,7 +126,7 @@
           >
             <button
               v-for="option in mentionOptions"
-              :key="`${option.type}:${option.id || option.path}`"
+              :key="option.key || option.path"
               type="button"
               class="composer-mention-item"
               @mousedown.prevent="pickMention(option)"
@@ -171,7 +209,7 @@
             </button>
 
             <button
-              v-if="dramaLinked"
+              v-if="mentionableRefItems.length"
               type="button"
               class="composer-upload-btn"
               @click="openMentionMenu"
@@ -198,10 +236,29 @@
       :characters="projectChars"
       :scenes="projectScenes"
       :selected-character-ids="binding.character_ids"
-      :selected-scene-id="binding.scene_id"
+      :selected-scene-ids="getBindingSceneIds(binding)"
       @close="entityPickerOpen = false"
       @confirm="onEntityPickerConfirm"
     />
+
+    <VoiceAssetPickerModal
+      :open="voicePickerOpen"
+      :voices="voiceAssets"
+      :selected="binding.voice_refs"
+      @close="voicePickerOpen = false"
+      @confirm="onVoicePickerConfirm"
+    />
+
+    <div v-if="voiceLibraryOpen" class="composer-voice-library-overlay" @click.self="voiceLibraryOpen = false">
+      <div class="composer-voice-library-dialog card">
+        <div class="composer-voice-library-head">
+          <h3>项目音色库</h3>
+          <button type="button" class="btn btn-ghost btn-sm" @click="voiceLibraryOpen = false">关闭</button>
+        </div>
+        <VoiceLibraryPanel v-if="dramaId" :drama-id="dramaId" @change="voiceAssets = $event" />
+        <p v-else class="dim">请先选择项目</p>
+      </div>
+    </div>
 
     <AssetPickerModal
       :key="referencePickerKey"
@@ -234,25 +291,30 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, uploadAPI } from '~/composables/useApi'
+import { dramaAPI, uploadAPI, assetAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
 import {
   bindCharacter,
   bindScene,
   buildMentionOptions,
   buildStudioContentRefs,
-  buildStudioDisplayItems,
+  buildStudioRefStripItems,
   canUnlinkStudioRef,
   createStudioBindingState,
   formatPromptImageRefIssues,
-  insertPromptImageLabel,
+  getBindingSceneIds,
   nextPromptImageIndex,
   removePromptImageLabel,
   replaceMentionWithImageLabel,
+  sceneDisplayLabel,
   toggleCharacterBinding,
   unbindCharacter,
+  unbindScene,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
+import { parseVoiceRefs, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
+import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
+import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
 
 const props = defineProps({
   generating: { type: Boolean, default: false },
@@ -271,6 +333,9 @@ const uploadedRefs = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
+const voiceAssets = ref([])
+const voicePickerOpen = ref(false)
+const voiceLibraryOpen = ref(false)
 const refMode = ref('reference')
 const aspectRatio = ref('9:16')
 const duration = ref(15)
@@ -285,6 +350,7 @@ const entityPickerMode = ref('character')
 const referencePickerOpen = ref(false)
 const referencePickerKey = ref(0)
 const sessionReferenceAssets = ref([])
+const refStackExpanded = ref(false)
 
 const dramaLinked = computed(() => !!dramaId.value)
 
@@ -294,61 +360,37 @@ const boundCharacters = computed(() =>
 
 const boundCharacterCount = computed(() => boundCharacters.value.length)
 
-const boundScene = computed(() =>
-  projectScenes.value.find(scene => scene.id === binding.scene_id) || null,
-)
-
-const linkedDisplayItems = computed(() => {
-  if (!dramaLinked.value) return []
-  return buildStudioDisplayItems(binding, prompt.value, projectChars.value, projectScenes.value)
+const boundScenes = computed(() => {
+  const ids = getBindingSceneIds(binding)
+  return projectScenes.value.filter(scene => ids.includes(scene.id))
 })
+
+const boundSceneCount = computed(() => boundScenes.value.length)
+
+const boundVoices = computed(() => parseVoiceRefs(binding.voice_refs))
+
+const boundVoiceCount = computed(() => boundVoices.value.length)
+
+const visualRefItems = computed(() =>
+  buildStudioRefStripItems(
+    binding,
+    projectChars.value,
+    projectScenes.value,
+    uploadedRefs.value,
+    gridUrl,
+  ),
+)
 
 const showRefStrip = computed(() =>
-  dramaLinked.value || uploadedRefs.value.length > 0 || linkedDisplayItems.value.length > 0,
+  dramaLinked.value || visualRefItems.value.length > 0,
 )
 
-const visualRefItems = computed(() => {
-  const items = []
-  const seenPaths = new Set()
-
-  for (const ref of linkedDisplayItems.value) {
-    const path = ref.url ? normalizeMediaPath(ref.url) : ''
-    if (path) seenPaths.add(path)
-    items.push({
-      key: ref.key,
-      kind: 'linked',
-      ref,
-      path,
-      preview: path ? gridUrl(path) : '',
-      missing: ref.missing,
-      tagLabel: ref.imageIndex ? `图${ref.imageIndex}` : ref.label,
-    })
-  }
-
-  uploadedRefs.value.forEach((img, uploadIndex) => {
-    const path = normalizeMediaPath(img.path)
-    if (!path || seenPaths.has(path)) return
-    seenPaths.add(path)
-    items.push({
-      key: `upload:${path}:${uploadIndex}`,
-      kind: 'upload',
-      uploadIndex,
-      path,
-      preview: img.preview || gridUrl(path),
-      ossUrl: img.ossUrl || null,
-      label: img.label,
-      missing: false,
-      tagLabel: img.label || `参考${uploadIndex + 1}`,
-    })
-  })
-
-  return items
-})
+const mentionableRefItems = computed(() =>
+  visualRefItems.value.filter(item => item.path && !item.missing),
+)
 
 const mentionOptions = computed(() => buildMentionOptions(
-  projectChars.value,
-  projectScenes.value,
-  uploadedRefs.value.map((item, index) => ({ ...item, index: index + 1, label: `参考图${index + 1}` })),
+  mentionableRefItems.value,
   mentionQuery.value,
 ))
 
@@ -439,6 +481,20 @@ function resetBinding() {
   Object.assign(binding, createStudioBindingState())
 }
 
+async function loadVoiceAssets() {
+  const parsed = Number(dramaId.value)
+  if (!Number.isFinite(parsed)) {
+    voiceAssets.value = []
+    return
+  }
+  try {
+    const rows = await assetAPI.list({ drama_id: parsed, type: 'voice' })
+    voiceAssets.value = Array.isArray(rows) ? rows : []
+  } catch {
+    voiceAssets.value = []
+  }
+}
+
 async function loadProjectAssets(id) {
   const parsed = Number(id)
   if (!Number.isFinite(parsed)) {
@@ -451,9 +507,11 @@ async function loadProjectAssets(id) {
     const drama = await dramaAPI.get(parsed)
     projectChars.value = drama?.characters || []
     projectScenes.value = drama?.scenes || []
+    await loadVoiceAssets()
   } catch (err) {
     projectChars.value = []
     projectScenes.value = []
+    voiceAssets.value = []
     toast.error(err?.message || '加载项目素材失败')
   }
 }
@@ -477,6 +535,29 @@ function openCharacterPicker() {
   entityPickerOpen.value = true
 }
 
+function openVoicePicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  if (!voiceAssets.value.length) {
+    toast.warning('该项目暂无音色，请先打开音色库上传')
+    voiceLibraryOpen.value = true
+    return
+  }
+  voicePickerOpen.value = true
+}
+
+function onVoicePickerConfirm(refs) {
+  binding.voice_refs = (refs || []).slice(0, MAX_VOICE_REFS)
+}
+
+function unbindVoiceByIndex(index) {
+  const next = [...boundVoices.value]
+  next.splice(index, 1)
+  binding.voice_refs = next
+}
+
 function openScenePicker() {
   if (!projectScenes.value.length) {
     toast.warning('该项目暂无场景')
@@ -495,7 +576,6 @@ function onEntityPickerConfirm(result) {
       const isBound = nextIds.has(char.id)
       if (isBound && !wasBound) {
         bindCharacter(binding, char.id, projectChars.value)
-        appendImageLabel(nextPromptImageIndex(prompt.value), char.name)
       } else if (!isBound && wasBound) {
         unbindCharacter(binding, char.id)
         prompt.value = removePromptImageLabel(prompt.value, null, char.name)
@@ -505,16 +585,20 @@ function onEntityPickerConfirm(result) {
   }
 
   if (result.mode === 'scene') {
-    if (binding.scene_id && !result.sceneId) {
-      clearSceneBinding()
-      return
-    }
-    if (!result.sceneId) return
-    binding.scene_id = Number(result.sceneId)
-    bindScene(binding, binding.scene_id)
-    const scene = result.scene || boundScene.value
-    if (scene?.location) {
-      appendImageLabel(nextPromptImageIndex(prompt.value), scene.location)
+    const prevIds = new Set(getBindingSceneIds(binding))
+    const nextIds = new Set(result.sceneIds || [])
+    for (const scene of projectScenes.value) {
+      const wasBound = prevIds.has(scene.id)
+      const isBound = nextIds.has(scene.id)
+      if (isBound && !wasBound) {
+        bindScene(binding, scene.id)
+      } else if (!isBound && wasBound) {
+        unbindScene(binding, scene.id)
+        prompt.value = removePromptImageLabel(prompt.value, null, sceneDisplayLabel(scene))
+        if (scene.location) {
+          prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
+        }
+      }
     }
   }
 }
@@ -531,19 +615,19 @@ function isCharacterBound(charId) {
 function onToggleCharacter(char) {
   const wasBound = isCharacterBound(char.id)
   const added = toggleCharacterBinding(binding, char.id, projectChars.value)
-  if (added) {
-    appendImageLabel(nextPromptImageIndex(prompt.value), char.name)
-  } else if (wasBound) {
+  if (!added && wasBound) {
     prompt.value = removePromptImageLabel(prompt.value, null, char.name)
   }
 }
 
-function clearSceneBinding() {
-  const scene = projectScenes.value.find(item => item.id === binding.scene_id)
-  binding.scene_id = null
-  bindScene(binding, null)
-  if (scene?.location) {
-    prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
+function unbindSceneById(sceneId) {
+  const scene = projectScenes.value.find(item => item.id === sceneId)
+  unbindScene(binding, sceneId)
+  if (scene) {
+    prompt.value = removePromptImageLabel(prompt.value, null, sceneDisplayLabel(scene))
+    if (scene.location) {
+      prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
+    }
   }
   prompt.value = removePromptImageLabel(prompt.value, null, '场景')
 }
@@ -557,26 +641,13 @@ function unlinkRef(ref) {
   if (ref.source === 'character' && ref.charId) {
     unbindCharacter(binding, ref.charId)
   } else if (ref.source === 'scene' || ref.sceneId) {
-    binding.scene_id = null
-    bindScene(binding, null)
+    unbindScene(binding, ref.sceneId)
   } else if (ref.source === 'reference' && ref.url) {
     const path = normalizeMediaPath(ref.url)
     uploadedRefs.value = uploadedRefs.value.filter(item => normalizeMediaPath(item.path) !== path)
     syncUploadPaths()
   }
   prompt.value = removePromptImageLabel(prompt.value, ref.imageIndex, label)
-}
-
-function appendImageLabel(index, label) {
-  const el = promptEl.value
-  const cursor = el?.selectionStart ?? prompt.value.length
-  const result = insertPromptImageLabel(prompt.value, cursor, cursor, index, label)
-  prompt.value = result.text
-  nextTick(() => {
-    if (!el) return
-    el.focus()
-    el.setSelectionRange(result.cursor, result.cursor)
-  })
 }
 
 function syncUploadPaths() {
@@ -602,11 +673,6 @@ function addReferencePath(path, meta = {}) {
   })
   syncUploadPaths()
   return true
-}
-
-function appendReferenceLabel(label) {
-  if (!label) return
-  appendImageLabel(nextPromptImageIndex(prompt.value), label)
 }
 
 async function onUpload(event) {
@@ -669,7 +735,6 @@ function onReferencePicked(item) {
   }
   const label = asset?.name || '参考图'
   if (!addReferencePath(path, { label, assetId: asset?.id || null })) return
-  appendReferenceLabel(label)
   referencePickerOpen.value = false
   prefetchMediaUrls([path]).catch(() => {})
 }
@@ -685,7 +750,7 @@ function removeUpload(index) {
 
 function detectMention() {
   const el = promptEl.value
-  if (!el || !dramaLinked.value) {
+  if (!el || !mentionableRefItems.value.length) {
     mentionOpen.value = false
     return
   }
@@ -717,7 +782,10 @@ function onPromptKeydown(event) {
 }
 
 function openMentionMenu() {
-  if (!dramaLinked.value) return
+  if (!mentionableRefItems.value.length) {
+    toast.warning('请先在上方参考图栏添加图片')
+    return
+  }
   const el = promptEl.value
   if (!el) return
   const cursor = el.selectionStart ?? prompt.value.length
@@ -730,25 +798,18 @@ function openMentionMenu() {
 }
 
 function pickMention(option) {
+  if (!option.path) return
   const el = promptEl.value
   const cursor = el?.selectionEnd ?? prompt.value.length
   const index = nextPromptImageIndex(prompt.value)
-
-  if (option.type === 'character') {
-    bindCharacter(binding, option.id, projectChars.value)
-  } else if (option.type === 'scene') {
-    binding.scene_id = option.id
-    bindScene(binding, option.id)
-  } else if (option.type === 'upload') {
-    addReferencePath(option.path, { label: option.label, preview: option.thumb })
-  }
+  const label = option.promptLabel || option.label
 
   const result = replaceMentionWithImageLabel(
     prompt.value,
     mentionStart.value,
     cursor,
     index,
-    option.label,
+    label,
   )
   prompt.value = result.text
   mentionOpen.value = false
@@ -884,7 +945,7 @@ defineExpose({ loadFromItem, clearPrompt })
 }
 
 .composer-shell {
-  max-width: 920px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: 14px 16px;
   border-radius: 18px;
@@ -894,31 +955,238 @@ defineExpose({ loadFromItem, clearPrompt })
   box-shadow: var(--shadow-card);
 }
 
+.composer-top-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.composer-top-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .composer-input-wrap {
   position: relative;
-  border-radius: 12px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 310px;
+  border-radius: 14px;
   border: 1px solid var(--border);
   background: var(--bg-input);
-  padding: 10px 12px;
+  padding: 0;
+  overflow: visible;
+}
+
+.composer-ref-stack {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 12px 14px 0;
+  min-height: 78px;
+  overflow: visible;
+  cursor: default;
+}
+
+.composer-ref-card {
+  --ref-overlap: -34px;
+  position: relative;
+  flex-shrink: 0;
+  width: 58px;
+  height: 58px;
+  margin-left: var(--ref-overlap);
+  border-radius: 12px;
+  border: 2px solid var(--bg-surface);
+  background: var(--bg-2);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  transition:
+    margin-left 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 0.28s ease,
+    z-index 0s;
+  z-index: calc(var(--ref-index, 0) + 1);
+}
+
+.composer-ref-card:first-child {
+  margin-left: 0;
+}
+
+.composer-ref-stack.is-expanded .composer-ref-card,
+.composer-ref-stack:hover .composer-ref-card {
+  margin-left: 8px;
+}
+
+.composer-ref-stack.is-expanded .composer-ref-card:first-child,
+.composer-ref-stack:hover .composer-ref-card:first-child {
+  margin-left: 0;
+}
+
+.composer-ref-card:hover {
+  z-index: 30;
+  transform: translateY(-6px) scale(1.06);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.2);
+}
+
+.composer-ref-card-thumb {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  overflow: hidden;
+  background: transparent;
+  cursor: zoom-in;
+  display: block;
+}
+
+.composer-ref-card-thumb:disabled {
+  cursor: not-allowed;
+}
+
+.composer-ref-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.composer-ref-card-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--bg-3);
+}
+
+.composer-ref-card.missing {
+  border-color: rgba(239, 83, 80, 0.55);
+}
+
+.composer-ref-card.is-first {
+  box-shadow: 0 0 0 2px #4c7dff, 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.composer-ref-card.is-last {
+  box-shadow: 0 0 0 2px #7c4dff, 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.composer-ref-card-tag {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  max-width: calc(100% - 8px);
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(0, 0, 0, 0.68);
+  color: #fff;
+  pointer-events: none;
+}
+
+.composer-ref-card-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.82);
+  color: #fff;
+  cursor: pointer;
+  line-height: 1;
+  font-size: 13px;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.composer-ref-stack.is-expanded .composer-ref-card-remove,
+.composer-ref-stack:hover .composer-ref-card-remove,
+.composer-ref-card:hover .composer-ref-card-remove {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.composer-ref-add-card {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 58px;
+  height: 58px;
+  margin-left: 8px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: var(--bg-2);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.composer-ref-add-card:hover {
+  border-color: rgba(76, 125, 255, 0.55);
+  color: var(--accent-text);
+  background: var(--accent-bg);
+}
+
+.composer-ref-add-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.composer-ref-add-label {
+  font-size: 9px;
+  line-height: 1.1;
+  text-align: center;
+  padding: 0 4px;
 }
 
 .composer-input {
   width: 100%;
-  min-height: 72px;
-  max-height: 180px;
+  flex: 1;
+  min-height: 220px;
+  max-height: 480px;
   resize: vertical;
   border: none;
   outline: none;
   background: transparent;
   color: var(--text-0);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.6;
+  padding: 12px 14px 14px;
 }
 
-.composer-project-panel {
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+.composer-input--with-refs {
+  padding-top: 8px;
+}
+
+.composer-input-wrap:focus-within {
+  border-color: rgba(76, 125, 255, 0.45);
+  box-shadow: 0 0 0 3px rgba(76, 125, 255, 0.12);
 }
 
 .composer-project-head {
@@ -933,10 +1201,12 @@ defineExpose({ loadFromItem, clearPrompt })
   font-size: 12px;
   font-weight: 700;
   color: var(--text-1);
+  white-space: nowrap;
 }
 
 .composer-project-hint {
   font-size: 11px;
+  line-height: 1.4;
 }
 
 .composer-project-hint kbd {
@@ -951,7 +1221,7 @@ defineExpose({ loadFromItem, clearPrompt })
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .composer-pick-btn {
@@ -976,7 +1246,7 @@ defineExpose({ loadFromItem, clearPrompt })
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .composer-bound-chip {
@@ -1111,100 +1381,6 @@ defineExpose({ loadFromItem, clearPrompt })
   cursor: pointer;
   line-height: 1;
   font-size: 14px;
-}
-
-.composer-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.composer-ref,
-.composer-ref-add {
-  position: relative;
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
-}
-
-.composer-ref img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.composer-ref-thumb {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: zoom-in;
-  display: block;
-}
-
-.composer-ref.is-first { box-shadow: 0 0 0 2px #4c7dff; }
-.composer-ref.is-last { box-shadow: 0 0 0 2px #7c4dff; }
-
-.composer-ref.missing {
-  border-color: rgba(239, 83, 80, 0.45);
-}
-
-.composer-ref-empty {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  color: var(--text-3);
-  background: var(--bg-3);
-}
-
-.composer-ref-tag {
-  position: absolute;
-  left: 4px;
-  bottom: 4px;
-  padding: 1px 5px;
-  border-radius: 999px;
-  font-size: 9px;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-}
-
-.composer-ref-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
-  border: none;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.composer-ref-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  color: var(--text-3);
-  font-size: 22px;
-}
-
-.composer-main { display: flex; flex-direction: column; gap: 10px; }
-
-.composer-input-wrap:focus-within {
-  border-color: rgba(76, 125, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(76, 125, 255, 0.12);
 }
 
 .composer-input::placeholder { color: var(--text-3); }
@@ -1369,8 +1545,23 @@ defineExpose({ loadFromItem, clearPrompt })
 
 @media (max-width: 760px) {
   .studio-composer { padding: 0 12px 12px; }
+  .composer-ref-stack {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
+  }
+  .composer-ref-card {
+    --ref-overlap: -28px;
+  }
+  .composer-ref-stack.is-expanded .composer-ref-card,
+  .composer-ref-stack:hover .composer-ref-card {
+    margin-left: 6px;
+  }
   .composer-toolbar { flex-direction: column; align-items: stretch; }
   .composer-submit { width: 100%; }
+  .composer-input {
+    min-height: 220px;
+  }
 }
 
 .composer-image-preview {
@@ -1421,5 +1612,43 @@ defineExpose({ loadFromItem, clearPrompt })
   max-height: calc(100vh - 160px);
   object-fit: contain;
   border-radius: 8px;
+}
+
+.composer-voice-library-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.composer-voice-library-dialog {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+  overflow: auto;
+  padding: 16px;
+}
+
+.composer-voice-library-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.composer-voice-library-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.composer-bound-chip-voice {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

@@ -9,6 +9,7 @@ import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { repairEpisodeSceneLinks, resolveActiveSceneId } from '../../utils/scene-redirect.js'
+import { ensureEpisodeCharacterLinks } from '../../utils/episode-entity-links.js'
 import { isSeedance2Model } from '../../constants/seedance.js'
 import { isChengmengProvider } from '../../constants/chengmeng.js'
 
@@ -157,7 +158,7 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
     }
   }
 
-  const episodeCharacterIds = getEpisodeCharacterIds(episodeId)
+  const episodeCharacterIds = ensureEpisodeCharacterLinks(episodeId, ep.dramaId, characterIds)
 
   const invalidCharacterIds = (characterIds || []).filter(id => !episodeCharacterIds.has(id))
   if (invalidCharacterIds.length) {

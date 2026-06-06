@@ -134,6 +134,7 @@ export const storyboards = sqliteTable('storyboards', {
   sceneAngleId: text('scene_angle_id'),
   referenceImages: text('reference_images'),
   characterImageRefs: text('character_image_refs'),
+  voiceRefs: text('voice_refs'),
   videoUrl: text('video_url'),
   ttsAudioUrl: text('tts_audio_url'),
   subtitleUrl: text('subtitle_url'),

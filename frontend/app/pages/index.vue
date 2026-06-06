@@ -87,7 +87,10 @@
               <div class="progress-mini-fill" :style="{ width: getProgress(d) + '%' }"></div>
             </div>
           </div>
-          <span class="card-date">{{ fmtDate(d.updated_at || d.updatedAt) }}</span>
+          <div class="card-footer-actions">
+            <button type="button" class="card-link-btn" @click.stop="navigateTo(`/assets?drama_id=${d.id}&type=voice`)">音色库</button>
+            <span class="card-date">{{ fmtDate(d.updated_at || d.updatedAt) }}</span>
+          </div>
         </div>
       </div>
 
@@ -412,6 +415,21 @@ onMounted(() => {
   transition: width 0.6s var(--ease-out);
 }
 .card-date { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.card-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.card-link-btn {
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.card-link-btn:hover { text-decoration: underline; }
 
 /* Loading Skeleton */
 .loading-grid {

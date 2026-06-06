@@ -4,6 +4,7 @@ export const ASSET_CATEGORIES = [
   { id: 'costume', label: '服装资产' },
   { id: 'prop', label: '道具资产' },
   { id: 'reference', label: '参考图' },
+  { id: 'voice', label: '音色库' },
 ] as const
 
 export type AssetCategory = typeof ASSET_CATEGORIES[number]['id']

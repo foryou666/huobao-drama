@@ -40,6 +40,9 @@ export interface UpsertAssetInput {
   sourceType?: string | null
   sourceId?: number | null
   imageGenId?: number | null
+  mimeType?: string | null
+  duration?: number | null
+  fileSize?: number | null
 }
 
 function normalizePath(raw?: string | null): string | null {
@@ -79,10 +82,13 @@ export function upsertLibraryAsset(input: UpsertAssetInput) {
     category: input.category ?? input.type,
     url,
     localPath,
-    thumbnailUrl: normalizePath(input.thumbnailUrl) || (url ? thumbPathForSource(url) : null),
+    thumbnailUrl: normalizePath(input.thumbnailUrl) || (url && input.type !== 'voice' ? thumbPathForSource(url) : null),
     sourceType: input.sourceType ?? 'manual',
     sourceId: input.sourceId ?? null,
     imageGenId: input.imageGenId ?? null,
+    mimeType: input.mimeType ?? null,
+    duration: input.duration != null ? Math.round(Number(input.duration)) : null,
+    fileSize: input.fileSize ?? null,
     updatedAt: ts,
   }
 

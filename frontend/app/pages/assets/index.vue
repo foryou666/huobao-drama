@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-left">
         <h1 class="page-title">资产库</h1>
-        <p class="page-desc">角色、场景、服装、道具与参考图统一归档；结构化资产与项目双向同步，参考图默认入库可复用</p>
+        <p class="page-desc">角色、场景、服装、道具、参考图与音色库统一归档；结构化资产与项目双向同步</p>
       </div>
       <div class="head-actions">
         <button class="btn btn-sm" :disabled="!selectedDramaId || syncing" @click="syncDrama">
@@ -44,11 +44,19 @@
     <div v-if="loading" class="dim library-empty">加载中…</div>
     <div v-else-if="!filteredAssets.length" class="library-empty card">
       <p class="dim">暂无{{ assetCategoryLabel(activeType) }}</p>
-      <p class="dim" style="font-size:12px;margin-top:8px">各剧角色/场景会自动同步；也可手动添加或上传图片</p>
+      <p class="dim" style="font-size:12px;margin-top:8px">{{ activeType === 'voice' ? '上传 MP3 音色参考（3~10 秒），绑定项目后可在视频生成中使用' : '各剧角色/场景会自动同步；也可手动添加或上传图片' }}</p>
     </div>
     <div v-else class="asset-grid">
       <div v-for="item in visibleAssets" :key="item.id" class="card asset-card">
-        <div class="asset-cover" :class="{ wide: activeType === 'scene' }">
+        <div class="asset-cover" :class="{ wide: activeType === 'scene', voice: activeType === 'voice' }">
+          <template v-if="activeType === 'voice'">
+            <div v-if="item.url || item.local_path || item.localPath" class="asset-voice-preview">
+              <audio :src="'/' + normalizePath(item.url || item.local_path || item.localPath)" controls preload="none" />
+              <span v-if="item.duration" class="asset-voice-duration">{{ item.duration }}s</span>
+            </div>
+            <div v-else class="asset-cover-empty">待上传</div>
+          </template>
+          <template v-else>
           <button
             v-if="item.url || item.local_path || item.localPath"
             type="button"
@@ -62,6 +70,7 @@
             />
           </button>
           <div v-else class="asset-cover-empty">待上传</div>
+          </template>
           <span class="asset-cover-badge" :class="(item.url || item.local_path) ? 'is-ready' : ''">
             {{ item.source_type === 'manual' ? '手动' : item.source_type === 'import' ? '导入' : '同步' }}
           </span>
@@ -72,7 +81,7 @@
           <div v-if="item.description" class="asset-meta dim truncate">{{ item.description }}</div>
         </div>
         <div class="asset-foot">
-          <button type="button" class="btn btn-sm" @click="openAssetPreview(item)">预览</button>
+          <button v-if="activeType !== 'voice'" type="button" class="btn btn-sm" @click="openAssetPreview(item)">预览</button>
           <button type="button" class="btn btn-sm danger ml-auto" @click="removeAsset(item)">删除</button>
         </div>
       </div>
@@ -114,8 +123,9 @@
           <textarea v-model="createForm.description" class="textarea" rows="2" />
         </label>
         <label class="modal-field">
-          <span>图片</span>
-          <input type="file" accept="image/*" @change="onCreateFile" />
+          <span>{{ createForm.type === 'voice' ? 'MP3 文件' : '图片' }}</span>
+          <input type="file" :accept="createForm.type === 'voice' ? '.mp3,audio/mpeg,audio/mp3' : 'image/*'" @change="onCreateFile" />
+          <span v-if="createForm.type === 'voice'" class="dim" style="font-size:11px;margin-top:4px;display:block">时长须 3~10 秒</span>
         </label>
         <div class="modal-actions">
           <button type="button" class="btn btn-sm" @click="openCreate = false">取消</button>
@@ -270,6 +280,10 @@ async function submitCreate() {
     toast.warning('请填写资产名称')
     return
   }
+  if (createForm.value.type === 'voice' && !createForm.value.file) {
+    toast.warning('请上传 MP3 文件')
+    return
+  }
   creating.value = true
   try {
     if (createForm.value.file) {
@@ -326,7 +340,11 @@ watch(() => route.path, (path) => {
 })
 
 onMounted(async () => {
-  selectedDramaId.value = ''
+  const query = useRoute().query
+  if (query.drama_id) selectedDramaId.value = String(query.drama_id)
+  if (query.type && ASSET_CATEGORIES.some(item => item.id === query.type)) {
+    activeType.value = String(query.type)
+  }
   keyword.value = ''
   await loadDramas()
   await loadAssets()
@@ -457,4 +475,16 @@ onMounted(async () => {
 }
 .image-viewer-overlay img { max-width: min(92vw, 960px); max-height: 80vh; object-fit: contain; }
 .image-viewer-title { color: #fff; margin-top: 12px; font-size: 13px; }
+.asset-voice-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  width: 100%;
+  min-height: 88px;
+  justify-content: center;
+}
+.asset-voice-preview audio { width: 100%; height: 32px; }
+.asset-voice-duration { font-size: 11px; color: var(--text-3); text-align: center; }
+.asset-cover.voice { aspect-ratio: auto; min-height: 108px; }
 </style>

@@ -1173,6 +1173,11 @@
             </div>
           </div>
 
+          <!-- Sub: Voice library -->
+          <div v-else-if="prodTab === 'voices'" class="prod-content">
+            <VoiceLibraryPanel :drama-id="dramaId" @change="voiceAssets = $event" />
+          </div>
+
           <!-- Sub: Scenes -->
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
@@ -2018,6 +2023,27 @@
                         </div>
                       </div>
                     </div>
+                    <div class="video-voice-panel">
+                      <div class="video-ref-head">
+                        <span class="prod-prompt-label">音色参考</span>
+                        <span class="dim video-voice-hint">最多 3 个 · 3~10 秒 MP3</span>
+                        <button type="button" class="btn btn-sm" @click="openVoiceRefPicker(sb)">从音色库选择</button>
+                        <button type="button" class="btn btn-sm" @click="goSubStep('prod:voices')">管理音色库</button>
+                      </div>
+                      <div v-if="getStoryboardVoiceRefs(sb).length" class="video-voice-list">
+                        <div
+                          v-for="(ref, vIdx) in getStoryboardVoiceRefs(sb)"
+                          :key="ref.path || vIdx"
+                          class="video-voice-chip"
+                        >
+                          <span>{{ ref.name }}</span>
+                          <span v-if="ref.duration" class="dim">{{ formatVoiceDuration(ref.duration) }}</span>
+                          <audio :src="'/' + normalizeMediaPath(ref.path)" controls preload="none" />
+                          <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, ref)">移除</button>
+                        </div>
+                      </div>
+                      <div v-else class="dim video-ref-empty-hint">未选择音色参考，可在音色库上传后在生成视频时使用</div>
+                    </div>
                     <div class="video-ref-panel">
                       <div class="video-ref-head">
                         <span class="prod-prompt-label">
@@ -2083,6 +2109,9 @@
                             </template>
                             <template v-else-if="ref.source === 'tts'">
                               <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重生成</button>
+                            </template>
+                            <template v-else-if="ref.source === 'voice'">
+                              <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, { path: ref.url, asset_id: ref.assetId })">移除</button>
                             </template>
                           </div>
                         </div>
@@ -2374,6 +2403,14 @@
       @select="applyVideoReferencePick"
     />
 
+    <VoiceAssetPickerModal
+      :open="voiceRefPicker.open"
+      :voices="voiceAssets"
+      :selected="voiceRefPicker.storyboard ? getStoryboardVoiceRefs(voiceRefPicker.storyboard) : []"
+      @close="voiceRefPicker.open = false"
+      @confirm="applyStoryboardVoiceRefs"
+    />
+
     <SceneAngleRegenModal
       :open="sceneAngleRegen.open"
       :scene-location="sceneAngleRegen.sceneLocation"
@@ -2448,7 +2485,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import {
-  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2, Sparkles,
+  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2, Sparkles, Music,
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, assetAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, uploadAPI } from '~/composables/useApi'
 import { useEpisodeAssistant } from '~/composables/useEpisodeAssistant'
@@ -2462,6 +2499,9 @@ import ProdVideoEmptyPreview from '~/components/ProdVideoEmptyPreview.vue'
 import ManualEntityModal from '~/components/ManualEntityModal.vue'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
 import FusionImagePanel from '~/components/FusionImagePanel.vue'
+import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
+import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
+import { parseVoiceRefs, formatVoiceDuration, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
 import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
 import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
@@ -2577,6 +2617,8 @@ const fallbackVoiceProfiles = [
   { id: 'shimmer', label: 'Shimmer', gender: '女声', traits: '明亮、活泼、年轻', suitable: '少女、轻快角色、跳脱配角' },
 ]
 const voiceProfiles = ref(fallbackVoiceProfiles)
+const voiceAssets = ref([])
+const voiceRefPicker = ref({ open: false, storyboard: null })
 const voiceSelectOptions = computed(() => voiceProfiles.value.map(v => ({ label: `${v.label} · ${v.traits}`, value: v.id })))
 const frameModeOptions = [{ label: '仅首帧', value: 'first' }, { label: '首尾帧', value: 'first_last' }]
 const imageAspectOptions = [
@@ -3816,6 +3858,7 @@ const dramaProps = computed(() => drama.value?.props || [])
 
 const prodTabDefs = computed(() => [
   { id: 'chars', label: '角色形象', icon: Users, badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
+  { id: 'voices', label: '音色库', icon: Music, badge: voiceAssets.value.length ? String(voiceAssets.value.length) : '' },
   { id: 'scenes', label: '场景图片', icon: MapPin, badge: sceneImgCount.value ? `${sceneImgCount.value}/${scenes.value.length}` : '' },
   { id: 'fusion', label: '融合生图', icon: Sparkles, badge: '' },
   { id: 'dubbing', label: '配音生成', icon: Mic2, badge: '' },
@@ -3848,6 +3891,7 @@ const sidebarSections = computed(() => ([
     label: '制作',
     items: [
       { key: 'prod:chars', label: '角色形象', desc: '', icon: Users, done: prodStepDone('chars') },
+      { key: 'prod:voices', label: '音色库', desc: '', icon: Music, done: voiceAssets.value.length > 0 },
       { key: 'prod:scenes', label: '场景图片', desc: '', icon: MapPin, done: prodStepDone('scenes') },
       { key: 'prod:fusion', label: '融合生图', desc: '', icon: Sparkles, done: false },
       { key: 'prod:dubbing', label: '配音生成', desc: '', icon: Mic2, done: prodStepDone('dubbing') },
@@ -3868,7 +3912,7 @@ const sidebarSections = computed(() => ([
 const activeMainStage = computed(() => {
   if (panel.value === 'export') return 'export'
   if (panel.value === 'production') {
-    return ['chars', 'scenes', 'fusion'].includes(prodTab.value) ? 'assets' : 'storyboard'
+    return ['chars', 'scenes', 'fusion', 'voices'].includes(prodTab.value) ? 'assets' : 'storyboard'
   }
   if (scriptStep.value <= 1) return 'script'
   if (scriptStep.value <= 3) return 'assets'
@@ -3938,6 +3982,7 @@ const activeSubSteps = computed(() => {
       { key: 'script:extract', label: '提取角色场景', done: !!chars.value.length },
       { key: 'script:voice', label: '分配音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
       { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
+      { key: 'prod:voices', label: '音色库', done: voiceAssets.value.length > 0 },
       { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
       { key: 'prod:fusion', label: '融合生图', done: false },
     ]
@@ -3946,6 +3991,7 @@ const activeSubSteps = computed(() => {
     const assetSteps = chars.value.length
       ? [
           { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
+          { key: 'prod:voices', label: '音色库', done: voiceAssets.value.length > 0 },
           { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
           { key: 'prod:fusion', label: '融合生图', done: false },
         ]
@@ -4369,6 +4415,7 @@ async function refresh(options = {}) {
     pendingVideoIds.value = pendingVideoIds.value.filter(id => sbs.value.some(s => s.id === id))
     await prefetchMediaUrls(collectDisplayMediaPaths(), { force: true })
     await loadVideoGenCounts()
+    await loadVoiceAssets()
     if (restoreVideoPending) await restorePendingVideoGenerations()
     if (sbs.value.length) {
       if (selectedSb.value?.id) {
@@ -5286,6 +5333,7 @@ function videoRefHelpers() {
     getCharacterImageRefs: getStoryboardCharacterImageRefs,
     resolveSceneImage: (scene, sb) => resolveSceneImageForStoryboard(scene, sb),
     getTTSUrl,
+    getVoiceRefs: getStoryboardVoiceRefs,
     frameMode: frameMode.value,
   }
 }
@@ -5328,6 +5376,50 @@ async function copyBlockingVideoSnippet(sb) {
 
 function getBlockingVideoImageIndex(sb) {
   return getBlockingImageIndexFromPromptItems(collectVideoReferences(sb))
+}
+
+function getStoryboardVoiceRefs(sb) {
+  return parseVoiceRefs(sb?.voice_refs ?? sb?.voiceRefs)
+}
+
+async function loadVoiceAssets() {
+  try {
+    const rows = await assetAPI.list({ drama_id: dramaId, type: 'voice' })
+    voiceAssets.value = Array.isArray(rows) ? rows : []
+  } catch {
+    voiceAssets.value = []
+  }
+}
+
+function openVoiceRefPicker(sb) {
+  voiceRefPicker.value = { open: true, storyboard: sb }
+}
+
+async function applyStoryboardVoiceRefs(refs) {
+  const sb = voiceRefPicker.value.storyboard
+  if (!sb) return
+  const next = (refs || []).slice(0, MAX_VOICE_REFS)
+  sb.voice_refs = next
+  sb.voiceRefs = next
+  try {
+    await storyboardAPI.update(sb.id, { voice_refs: next })
+    toast.success(next.length ? `已绑定 ${next.length} 个音色参考` : '已清空音色参考')
+  } catch (e) {
+    toast.error(e?.message || '保存音色参考失败')
+  }
+}
+
+async function removeStoryboardVoiceRef(sb, ref) {
+  const path = normalizeMediaPath(ref?.path || ref?.url)
+  const next = getStoryboardVoiceRefs(sb).filter(item => normalizeMediaPath(item.path) !== path)
+  sb.voice_refs = next
+  sb.voiceRefs = next
+  try {
+    await storyboardAPI.update(sb.id, { voice_refs: next })
+    toast.success('已移除音色参考')
+  } catch (e) {
+    toast.error(e?.message || '移除失败')
+  }
 }
 
 function buildVideoContentRefs(sb) {
@@ -7544,6 +7636,36 @@ watch(() => route.params.episodeNumber, () => {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px dashed rgba(27, 41, 64, 0.12);
+}
+.video-voice-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(27, 41, 64, 0.12);
+}
+.video-voice-hint {
+  font-size: 11px;
+}
+.video-voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.video-voice-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-2);
+  font-size: 12px;
+}
+.video-voice-chip audio {
+  flex: 1 1 180px;
+  min-width: 160px;
+  height: 28px;
 }
 .video-ref-head {
   display: flex;

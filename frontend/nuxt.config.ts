@@ -1,3 +1,5 @@
+const devApiTarget = process.env.NUXT_DEV_API_TARGET || 'http://localhost:5679'
+
 export default defineNuxtConfig({
   srcDir: 'app/',
   ssr: false,
@@ -23,13 +25,13 @@ export default defineNuxtConfig({
     server: {
       proxy: {
         '/api': {
-          target: 'http://localhost:5679',
+          target: devApiTarget,
           changeOrigin: true,
           // Agent 分镜拆解等长任务可能超过默认代理超时
           timeout: 600_000,
           proxyTimeout: 600_000,
         },
-        '/static': { target: 'http://localhost:5679', changeOrigin: true },
+        '/static': { target: devApiTarget, changeOrigin: true },
       },
     },
   },

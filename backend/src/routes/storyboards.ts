@@ -21,6 +21,7 @@ import {
   selectBlockingCharacterImages,
 } from '../utils/blocking-image-prompts.js'
 import { resolveSceneImageForStoryboard } from '../utils/scene-image-variants.js'
+import { ensureEpisodeCharacterLinks } from '../utils/episode-entity-links.js'
 import {
   parseStoryboardCharacterImageRefs,
   resolveCharacterImageForStoryboard,
@@ -80,11 +81,7 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
     }
   }
 
-  const episodeCharacterIds = new Set(
-    db.select().from(schema.episodeCharacters)
-      .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
-      .map(link => link.characterId),
-  )
+  const episodeCharacterIds = ensureEpisodeCharacterLinks(episodeId, ep.dramaId, characterIds)
 
   const invalidCharacterIds = (characterIds || []).filter(id => !episodeCharacterIds.has(id))
   if (invalidCharacterIds.length) {
@@ -152,6 +149,7 @@ app.put('/:id', async (c) => {
     bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect',
     reference_images: 'referenceImages',
     character_image_refs: 'characterImageRefs',
+    voice_refs: 'voiceRefs',
     blocking_image: 'blockingImage',
     blocking_layout: 'blockingLayout',
     scene_angle_id: 'sceneAngleId',
@@ -167,6 +165,8 @@ app.put('/:id', async (c) => {
         updates.referenceImages = JSON.stringify(body.reference_images)
       } else if (snakeKey === 'character_image_refs' && body.character_image_refs && typeof body.character_image_refs === 'object') {
         updates.characterImageRefs = JSON.stringify(body.character_image_refs)
+      } else if (snakeKey === 'voice_refs' && Array.isArray(body.voice_refs)) {
+        updates.voiceRefs = JSON.stringify(body.voice_refs.slice(0, 3))
       } else if (snakeKey === 'blocking_layout' && body.blocking_layout && typeof body.blocking_layout === 'object') {
         updates.blockingLayout = JSON.stringify(body.blocking_layout)
       } else {

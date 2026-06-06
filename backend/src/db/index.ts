@@ -386,6 +386,7 @@ ensureColumn('storyboards', 'blocking_layout', 'TEXT')
 ensureColumn('storyboards', 'scene_angle_id', 'TEXT')
 ensureColumn('storyboards', 'prompt_status', "TEXT DEFAULT 'empty'")
 ensureColumn('storyboards', 'clip_source', 'TEXT')
+ensureColumn('storyboards', 'voice_refs', 'TEXT')
 ensureColumn('scenes', 'reference_images', 'TEXT')
 
 sqlite.exec(`

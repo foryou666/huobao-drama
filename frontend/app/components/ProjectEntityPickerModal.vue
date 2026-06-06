@@ -57,6 +57,7 @@ const props = defineProps({
   characters: { type: Array, default: () => [] },
   scenes: { type: Array, default: () => [] },
   selectedCharacterIds: { type: Array, default: () => [] },
+  selectedSceneIds: { type: Array, default: () => [] },
   selectedSceneId: { type: [Number, String, null], default: null },
 })
 
@@ -64,12 +65,12 @@ const emit = defineEmits(['close', 'confirm'])
 
 const keyword = ref('')
 const pendingCharIds = ref([])
-const pendingSceneId = ref(null)
+const pendingSceneIds = ref([])
 
 const title = computed(() => (props.mode === 'scene' ? '选择场景' : '选择角色'))
 const subtitle = computed(() => (
   props.mode === 'scene'
-    ? '选中后写入提示词「图片N是场景名」，可用 @ 继续关联'
+    ? '可多选；确认后绑定场景，可用 @ 关联参考图'
     : '可多选；确认后写入提示词并绑定角色'
 ))
 const searchPlaceholder = computed(() => (props.mode === 'scene' ? '搜索场景地点…' : '搜索角色名…'))
@@ -102,8 +103,9 @@ const filteredItems = computed(() => {
 
 const selectedSummary = computed(() => {
   if (props.mode === 'scene') {
-    const scene = items.value.find(item => item.id === pendingSceneId.value)
-    return scene ? `已选：${scene.label}` : '未选择场景'
+    return pendingSceneIds.value.length
+      ? `已选 ${pendingSceneIds.value.length} 个场景`
+      : '未选择场景'
   }
   return pendingCharIds.value.length
     ? `已选 ${pendingCharIds.value.length} 个角色`
@@ -116,18 +118,22 @@ watch(
     if (!open) return
     keyword.value = ''
     pendingCharIds.value = [...(props.selectedCharacterIds || [])]
-    pendingSceneId.value = props.selectedSceneId ? Number(props.selectedSceneId) : null
+    pendingSceneIds.value = props.selectedSceneIds?.length
+      ? [...props.selectedSceneIds]
+      : (props.selectedSceneId ? [Number(props.selectedSceneId)] : [])
   },
 )
 
 function isSelected(id) {
-  if (props.mode === 'scene') return pendingSceneId.value === id
+  if (props.mode === 'scene') return pendingSceneIds.value.includes(id)
   return pendingCharIds.value.includes(id)
 }
 
 function onItemClick(item) {
   if (props.mode === 'scene') {
-    pendingSceneId.value = pendingSceneId.value === item.id ? null : item.id
+    const idx = pendingSceneIds.value.indexOf(item.id)
+    if (idx >= 0) pendingSceneIds.value.splice(idx, 1)
+    else pendingSceneIds.value.push(item.id)
     return
   }
   const idx = pendingCharIds.value.indexOf(item.id)
@@ -141,8 +147,8 @@ function close() {
 
 function confirm() {
   if (props.mode === 'scene') {
-    const scene = items.value.find(item => item.id === pendingSceneId.value) || null
-    emit('confirm', { mode: 'scene', scene, sceneId: pendingSceneId.value })
+    const picked = items.value.filter(item => pendingSceneIds.value.includes(item.id))
+    emit('confirm', { mode: 'scene', scenes: picked, sceneIds: [...pendingSceneIds.value] })
   } else {
     const picked = items.value.filter(item => pendingCharIds.value.includes(item.id))
     emit('confirm', { mode: 'character', characters: picked, characterIds: [...pendingCharIds.value] })

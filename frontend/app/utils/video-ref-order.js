@@ -28,6 +28,23 @@ function labelsMatch(promptLabel, candidateLabel) {
   return keywords.some(kw => a.includes(kw) && b.includes(kw))
 }
 
+function sceneCandidateLabel(scene) {
+  if (!scene) return '场景'
+  const time = String(scene.time || '').trim()
+  return time ? `${scene.location} · ${time}` : String(scene.location || '场景')
+}
+
+function getStoryboardSceneIds(sb) {
+  if (Array.isArray(sb?.scene_ids) && sb.scene_ids.length) {
+    return sb.scene_ids.map(id => Number(id)).filter(Number.isFinite)
+  }
+  if (Array.isArray(sb?.sceneIds) && sb.sceneIds.length) {
+    return sb.sceneIds.map(id => Number(id)).filter(Number.isFinite)
+  }
+  const legacy = Number(sb?.scene_id ?? sb?.sceneId)
+  return Number.isFinite(legacy) ? [legacy] : []
+}
+
 export function findCandidateForPromptLabel(promptLabel, candidates) {
   const normalized = normalizeLabel(promptLabel)
   if (normalized.startsWith('参考图')) {
@@ -115,14 +132,15 @@ export function buildReferenceCandidates(
   const blocking = getBlockingImage?.(sb)
   if (blocking) items.push({ key: `blocking:${sb.id}`, source: 'blocking', label: '站位图', url: blocking })
 
-  const sceneId = sb.scene_id || sb.sceneId
-  const scene = scenes.find(item => item.id === sceneId)
-  if (scene) {
+  const sceneIds = getStoryboardSceneIds(sb)
+  for (const sceneId of sceneIds) {
+    const scene = scenes.find(item => item.id === sceneId)
+    if (!scene) continue
     const url = resolveSceneImage?.(scene, sb) || scene.image_url || scene.imageUrl || null
     items.push({
       key: `scene:${scene.id}`,
       source: 'scene',
-      label: scene.location || '场景',
+      label: sceneCandidateLabel(scene),
       url,
       sceneId: scene.id,
     })
@@ -278,6 +296,20 @@ export function buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helper
     })
   }
 
+  const voiceRefs = helpers.getVoiceRefs?.(sb) || []
+  voiceRefs.forEach((ref, index) => {
+    if (!ref?.path) return
+    items.push({
+      key: `voice:${ref.asset_id || ref.path}:${index}`,
+      source: 'voice',
+      type: 'audio',
+      url: ref.path,
+      label: ref.name || `音色${index + 1}`,
+      typeLabel: '音色',
+      assetId: ref.asset_id,
+    })
+  })
+
   return items
 }
 
@@ -352,6 +384,13 @@ export function buildOrderedVideoContentRefs(sb, prompt, chars, scenes, helpers)
 
   const tts = getTTSUrl(sb)
   if (tts) items.push({ type: 'audio', url: String(tts).replace(/^\/+/, ''), label: '配音' })
+
+  const voiceRefs = helpers.getVoiceRefs?.(sb) || []
+  for (const ref of voiceRefs.slice(0, 3)) {
+    const url = String(ref?.path || '').trim().replace(/^\/+/, '')
+    if (!url) continue
+    items.push({ type: 'audio', url, label: ref.name || '音色参考', role: 'voice_reference' })
+  }
 
   return items
 }

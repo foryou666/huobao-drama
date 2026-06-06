@@ -17,6 +17,12 @@ import { saveUploadedFile } from '../utils/storage.js'
 import { syncCharacterPrimaryImage, syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
+import {
+  getAudioDurationSeconds,
+  validateVoiceRefDuration,
+  resolveMediaFilePath,
+} from '../utils/audio-duration.js'
+import fs from 'fs'
 
 const app = new Hono()
 
@@ -114,8 +120,41 @@ app.post('/upload', async (c) => {
   if (!isAssetCategory(type)) return badRequest(c, '无效的资产分类')
   if (!name) return badRequest(c, 'name is required')
 
+  const mime = String(file.type || '').toLowerCase()
+  const lowerName = String(file.name || '').toLowerCase()
+  if (type === 'voice') {
+    const isMp3 = mime.includes('mpeg') || mime.includes('mp3') || lowerName.endsWith('.mp3')
+    if (!isMp3) return badRequest(c, '音色库仅支持 MP3 文件')
+  }
+
   const buffer = await file.arrayBuffer()
   const path = await saveUploadedFile(buffer, 'assets', file.name)
+
+  if (type === 'voice') {
+    const duration = await getAudioDurationSeconds(path)
+    const durationError = validateVoiceRefDuration(duration)
+    if (durationError) {
+      const abs = resolveMediaFilePath(path)
+      if (abs && fs.existsSync(abs)) fs.unlinkSync(abs)
+      return badRequest(c, durationError)
+    }
+    const id = upsertLibraryAsset({
+      dramaId,
+      name,
+      description,
+      type,
+      category: type,
+      url: path,
+      localPath: path,
+      sourceType: 'manual',
+      mimeType: mime || 'audio/mpeg',
+      duration: Math.round(duration),
+      fileSize: buffer.byteLength,
+    })
+    const [row] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()
+    return created(c, toSnakeCase(row))
+  }
+
   const id = upsertLibraryAsset({
     dramaId,
     name,
