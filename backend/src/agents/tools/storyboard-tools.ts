@@ -8,6 +8,7 @@ import { db, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import { repairEpisodeSceneLinks, resolveActiveSceneId } from '../../utils/scene-redirect.js'
 import { isSeedance2Model } from '../../constants/seedance.js'
 import { isChengmengProvider } from '../../constants/chengmeng.js'
 
@@ -173,6 +174,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       const [ep] = db.select().from(schema.episodes)
         .where(eq(schema.episodes.id, episodeId)).all()
       if (!ep) return { error: 'Episode not found' }
+      repairEpisodeSceneLinks(episodeId, dramaId)
       const script = ep.scriptContent || ep.content
       if (!script) return { error: 'Episode has no script' }
 
@@ -288,6 +290,12 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       })),
     }),
     execute: async ({ storyboards }) => {
+      if (!storyboards.length) {
+        throw new Error('storyboards 不能为空，已拒绝清空本集分镜')
+      }
+
+      repairEpisodeSceneLinks(episodeId, dramaId)
+
       const ts = now()
       logTaskProgress('StoryboardTool', 'save-begin', {
         episodeId,
@@ -295,49 +303,62 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
         count: storyboards.length,
         shotNumbers: storyboards.map(sb => sb.shot_number).join(','),
       })
-      const existingStoryboardIds = db.select().from(schema.storyboards)
-        .where(eq(schema.storyboards.episodeId, episodeId)).all()
-        .map(sb => sb.id)
-      for (const storyboardId of existingStoryboardIds) {
-        db.delete(schema.storyboardCharacters)
-          .where(eq(schema.storyboardCharacters.storyboardId, storyboardId))
-          .run()
-      }
-      db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
 
       const videoModel = getEpisodeVideoModel(episodeId)
-      let totalDuration = 0
-      for (const sb of storyboards) {
-        validateStoryboardBindings(episodeId, sb.scene_id, sb.character_ids)
-        const duration = normalizeStoryboardDuration(sb.duration, videoModel, sb.video_prompt, episodeId)
-        const res = db.insert(schema.storyboards).values({
-          episodeId,
-          storyboardNumber: sb.shot_number,
-          title: sb.title, shotType: sb.shot_type,
-          angle: sb.angle, movement: sb.movement,
-          location: sb.location, time: sb.time,
-          action: sb.action, dialogue: sb.dialogue,
-          description: sb.description, result: sb.result,
-          atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
-          videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
-          soundEffect: sb.sound_effect,
-          sceneId: sb.scene_id, duration,
-          createdAt: ts, updatedAt: ts,
-        }).run()
-        syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])
-        totalDuration += duration
-      }
+      const prepared = storyboards.map(sb => {
+        const resolvedSceneId = sb.scene_id != null
+          ? resolveActiveSceneId(dramaId, sb.scene_id)
+          : sb.scene_id
+        validateStoryboardBindings(episodeId, resolvedSceneId, sb.character_ids)
+        return {
+          ...sb,
+          scene_id: resolvedSceneId,
+          duration: normalizeStoryboardDuration(sb.duration, videoModel, sb.video_prompt, episodeId),
+        }
+      })
 
-      db.update(schema.episodes)
-        .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
-        .where(eq(schema.episodes.id, episodeId)).run()
+      const totalDuration = prepared.reduce((sum, sb) => sum + sb.duration, 0)
+
+      db.transaction(() => {
+        const existingStoryboardIds = db.select().from(schema.storyboards)
+          .where(eq(schema.storyboards.episodeId, episodeId)).all()
+          .map(sb => sb.id)
+        for (const storyboardId of existingStoryboardIds) {
+          db.delete(schema.storyboardCharacters)
+            .where(eq(schema.storyboardCharacters.storyboardId, storyboardId))
+            .run()
+        }
+        db.delete(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId)).run()
+
+        for (const sb of prepared) {
+          const res = db.insert(schema.storyboards).values({
+            episodeId,
+            storyboardNumber: sb.shot_number,
+            title: sb.title, shotType: sb.shot_type,
+            angle: sb.angle, movement: sb.movement,
+            location: sb.location, time: sb.time,
+            action: sb.action, dialogue: sb.dialogue,
+            description: sb.description, result: sb.result,
+            atmosphere: sb.atmosphere, imagePrompt: sb.image_prompt,
+            videoPrompt: sb.video_prompt, bgmPrompt: sb.bgm_prompt,
+            soundEffect: sb.sound_effect,
+            sceneId: sb.scene_id, duration: sb.duration,
+            createdAt: ts, updatedAt: ts,
+          }).run()
+          syncStoryboardCharacters(Number(res.lastInsertRowid), sb.character_ids || [])
+        }
+
+        db.update(schema.episodes)
+          .set({ duration: Math.ceil(totalDuration / 60), updatedAt: ts })
+          .where(eq(schema.episodes.id, episodeId)).run()
+      })
 
       logTaskSuccess('StoryboardTool', 'save-complete', {
         episodeId,
-        count: storyboards.length,
+        count: prepared.length,
         totalDuration,
       })
-      return { message: `Saved ${storyboards.length} storyboards`, count: storyboards.length, total_duration: totalDuration }
+      return { message: `Saved ${prepared.length} storyboards`, count: prepared.length, total_duration: totalDuration }
     },
   })
 
@@ -376,7 +397,9 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
 
       validateStoryboardBindings(
         episodeId,
-        'scene_id' in fields ? fields.scene_id : storyboard.sceneId,
+        'scene_id' in fields
+          ? resolveActiveSceneId(dramaId, fields.scene_id)
+          : storyboard.sceneId,
         'character_ids' in fields
           ? fields.character_ids
           : db.select().from(schema.storyboardCharacters)
@@ -400,7 +423,7 @@ export function createStoryboardTools(episodeId: number, dramaId: number) {
       if ('sound_effect' in fields) updates.soundEffect = fields.sound_effect
       if ('description' in fields) updates.description = fields.description
       if ('dialogue' in fields) updates.dialogue = fields.dialogue
-      if ('scene_id' in fields) updates.sceneId = fields.scene_id
+      if ('scene_id' in fields) updates.sceneId = resolveActiveSceneId(dramaId, fields.scene_id)
       if ('duration' in fields) {
         updates.duration = normalizeStoryboardDuration(
           fields.duration,

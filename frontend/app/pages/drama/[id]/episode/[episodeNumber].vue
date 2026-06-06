@@ -455,33 +455,183 @@
           </div>
         </div>
 
-        <!-- Step 4: Storyboard -->
+        <!-- Step 4: Storyboard / Shot Plans -->
         <div v-else-if="scriptStep === 4" class="step-editor">
           <div class="step-toolbar">
             <div class="toolbar-left">
               <div class="step-indicator">
                 <span class="step-num">05</span>
-                <span class="step-name">分镜列表</span>
+                <span class="step-name">{{ useShotPlanWorkflow ? '镜头列表' : '分镜列表' }}</span>
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="sbs.length" class="char-count">{{ sbs.length }} 镜头 · {{ totalDuration }}s</span>
-              <button v-if="sbs.length" class="btn btn-sm" @click="addShot">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                添加
-              </button>
-              <template v-if="!sbs.length">
-                <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
+              <template v-if="useShotPlanWorkflow">
+                <span v-if="shotPlans.length" class="char-count">{{ shotPlans.length }} 镜头 · {{ planTotalDuration.toFixed(1) }}s</span>
+                <span v-if="newWorkflowClips.length" class="tag mono">{{ newWorkflowClips.length }} 片段</span>
+                <button class="btn btn-sm" @click="importModalOpen = true">粘贴导入</button>
+                <button
+                  class="btn btn-sm btn-primary"
+                  :disabled="generateLoading || assistantRunning"
+                  @click="doGenerateShotPlansInternal"
+                >
+                  <Loader2 v-if="generateLoading || (assistantRunning && assistantAgentType === 'shot_plan_generator')" :size="11" class="animate-spin" />
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  {{ shotPlans.length ? '重新生成' : '内部分镜生成' }}
+                </button>
+                <button class="btn btn-sm" :disabled="!shotPlans.length" @click="doConfirmPlans">确认列表</button>
+                <button class="btn btn-sm" :disabled="!shotPlans.length" @click="doAutoGroupClips">自动分组</button>
+                <button class="btn btn-sm btn-primary" :disabled="!hasProductionClips" @click="goToProductionFromPlans">生成视频</button>
               </template>
-              <button class="btn btn-sm" :disabled="assistantRunning" @click="doBreakdown">
-                <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="11" class="animate-spin" />
-                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
-              </button>
+              <template v-else>
+                <span v-if="sbs.length" class="char-count">{{ sbs.length }} 镜头 · {{ totalDuration }}s</span>
+                <button v-if="sbs.length" class="btn btn-sm" @click="addShot">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                  添加
+                </button>
+                <template v-if="!sbs.length">
+                  <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
+                </template>
+                <button class="btn btn-sm" @click="importModalOpen = true">粘贴导入</button>
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="doBreakdown">
+                  <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="11" class="animate-spin" />
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
+                </button>
+              </template>
             </div>
           </div>
 
-          <div v-if="sbs.length" class="split-layout">
+          <!-- New workflow: shot plans + clips -->
+          <div v-if="useShotPlanWorkflow && (generateLoading || (assistantRunning && assistantAgentType === 'shot_plan_generator'))" class="step-loading">
+            <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
+            <div class="loading-text">正在生成工业镜头列表...</div>
+          </div>
+
+          <div v-else-if="useShotPlanWorkflow && !shotPlans.length" class="step-empty">
+            <div class="empty-visual">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+                <rect x="2" y="2" width="20" height="20" rx="2.5"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="13" y1="8" x2="13" y2="16"/>
+              </svg>
+            </div>
+            <div class="empty-title">准备镜头列表</div>
+            <div class="empty-desc">使用 AI 内部分镜生成，或粘贴 DeepSeek 输出的工业分镜脚本</div>
+            <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
+            <div class="step-empty-actions">
+              <button class="btn btn-primary" :disabled="generateLoading" @click="doGenerateShotPlansInternal">
+                <Loader2 v-if="generateLoading" :size="13" class="animate-spin" />
+                内部分镜生成
+              </button>
+              <button class="btn" @click="importModalOpen = true">粘贴工业脚本</button>
+            </div>
+          </div>
+
+          <div v-else-if="useShotPlanWorkflow" class="split-layout">
+            <div class="shot-list">
+              <div class="shot-list-head">
+                <div>
+                  <div class="shot-list-title">镜头序列</div>
+                  <div class="shot-list-sub">审阅微镜头，确认后自动分组为视频片段</div>
+                </div>
+                <span class="tag mono">{{ planTotalDuration.toFixed(1) }}s</span>
+              </div>
+              <div class="shot-list-body">
+                <div
+                  v-for="plan in shotPlans"
+                  :key="plan.id"
+                  :class="['shot-item', { active: selectedPlan?.id === plan.id }]"
+                  @click="selectedPlan = plan"
+                >
+                  <div class="shot-item-header">
+                    <div class="shot-num">#{{ String(plan.shot_number || plan.shotNumber).padStart(3, '0') }}</div>
+                    <span class="tag" style="font-size:10px">{{ planStatusLabel(plan) }}</span>
+                    <span v-if="getPlanCharacterNames(plan).length" class="tag" style="font-size:10px">{{ getPlanCharacterNames(plan).join(' / ') }}</span>
+                  </div>
+                  <div class="shot-body">
+                    <div class="shot-desc">{{ plan.title || plan.description || '无描述' }}</div>
+                  </div>
+                  <div class="shot-meta">
+                    <span class="mono dim" style="font-size:10px">{{ plan.duration || 2 }}s</span>
+                    <span class="shot-location">{{ getPlanSceneName(plan) }}</span>
+                    <span v-if="plan.dialogue" class="shot-dialogue">{{ plan.dialogue }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="detail-panel">
+              <div v-if="selectedPlan" class="detail-body">
+                <div class="detail-head">
+                  <div class="detail-head-copy">
+                    <span class="detail-head-title">镜头 #{{ String(selectedPlan.shot_number || selectedPlan.shotNumber).padStart(3, '0') }}</span>
+                    <span class="detail-head-sub">{{ selectedPlan.title || '未命名' }} · {{ selectedPlan.duration || 2 }}s</span>
+                  </div>
+                </div>
+                <div class="detail-hero-text" style="margin-bottom:12px">{{ selectedPlan.description || selectedPlan.action || '暂无描述' }}</div>
+                <div class="detail-status-row">
+                  <span class="tag">{{ getPlanSceneName(selectedPlan) }}</span>
+                  <span v-for="name in getPlanCharacterNames(selectedPlan)" :key="name" class="tag">{{ name }}</span>
+                </div>
+                <div v-if="selectedPlan.dialogue" class="voice-player" style="margin-top:12px">
+                  <div class="dim" style="font-size:11px;margin-bottom:4px">台词 / 音效</div>
+                  <div style="font-size:13px;line-height:1.5">{{ selectedPlan.dialogue }}</div>
+                </div>
+
+                <div v-if="newWorkflowClips.length" class="plan-clip-move-panel">
+                  <div class="dim" style="font-size:11px;margin-bottom:8px">
+                    当前片段：{{ getPlanClipLabel(selectedPlan) }} · 可移入其他片段（跨场景合并）
+                  </div>
+                  <div class="plan-clip-move-actions">
+                    <button
+                      v-for="(clip, i) in newWorkflowClips"
+                      :key="clip.id"
+                      class="btn btn-sm"
+                      :class="{ 'btn-primary': isPlanInClip(selectedPlan, clip) }"
+                      :disabled="clipMoveLoading || isPlanInClip(selectedPlan, clip)"
+                      @click="movePlanToClip(selectedPlan, clip)"
+                    >
+                      {{ isPlanInClip(selectedPlan, clip) ? `已在 Clip ${i + 1}` : `移入 Clip ${i + 1}` }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="shot-clips-panel">
+                <div class="shot-list-head">
+                  <div>
+                    <div class="shot-list-title">视频片段</div>
+                    <div class="shot-list-sub">每个片段对应一次视频生成（12–15 秒）；选中镜头后可移入其他片段</div>
+                  </div>
+                </div>
+                <div v-if="newWorkflowClips.length" class="shot-clips-list">
+                  <div v-for="(clip, i) in newWorkflowClips" :key="clip.id" class="shot-clip-card card">
+                    <div class="shot-clip-head">
+                      <span class="mono">Clip {{ i + 1 }}</span>
+                      <span class="tag">{{ clipDurationSum(clip).toFixed(1) }}s</span>
+                      <span v-if="clipDurationSum(clip) > 15" class="tag tag-warn">超 15s</span>
+                      <span class="tag" :class="(clip.prompt_status || clip.promptStatus) === 'expanded' ? 'tag-success' : ''">
+                        {{ { expanded: '已展开', stale: '需更新', empty: '待展开' }[clip.prompt_status || clip.promptStatus] || '待展开' }}
+                      </span>
+                      <button
+                        v-if="selectedPlan && !isPlanInClip(selectedPlan, clip)"
+                        class="btn btn-sm ml-auto"
+                        :disabled="clipMoveLoading"
+                        @click="movePlanToClip(selectedPlan, clip)"
+                      >
+                        移入选中镜头
+                      </button>
+                    </div>
+                    <div class="shot-desc">{{ clip.title || clip.description || '未命名片段' }}</div>
+                    <div v-if="clip.shot_plans?.length" class="dim" style="font-size:11px;margin-top:6px">
+                      含镜头 {{ clip.shot_plans.map(p => String(p.shot_number || p.shotNumber).padStart(3, '0')).join('、') }}
+                    </div>
+                  </div>
+                </div>
+                <div v-else class="dim" style="padding:16px;font-size:12px">暂无片段，点击「自动分组」按场景切分</div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="sbs.length" class="split-layout">
             <!-- Shot List -->
             <div class="shot-list">
               <div class="shot-list-head">
@@ -784,9 +934,9 @@
             </div>
           </div>
 
-          <div v-else-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" class="step-loading">
+          <div v-else-if="assistantRunning && (assistantAgentType === 'storyboard_breaker' || assistantAgentType === 'shot_plan_generator')" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
-            <div class="loading-text">正在拆解分镜并生成提示词...</div>
+            <div class="loading-text">{{ assistantAgentType === 'shot_plan_generator' ? '正在生成工业镜头列表...' : '正在拆解分镜并生成提示词...' }}</div>
           </div>
 
           <div v-else class="step-empty">
@@ -795,14 +945,20 @@
                 <rect x="2" y="2" width="20" height="20" rx="2.5"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="13" y1="8" x2="13" y2="16"/>
               </svg>
             </div>
-            <div class="empty-title">将剧本拆解为分镜序列</div>
-            <div class="empty-desc">AI 自动分析剧本，生成镜头列表和视频提示词</div>
+            <div class="empty-title">准备镜头列表</div>
+            <div class="empty-desc">粘贴外部工业分镜脚本，或使用 AI 生成镜头列表；确认后分组生成视频</div>
             <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
-            <button class="btn btn-primary" @click="doBreakdown">
-              <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="13" class="animate-spin" />
-              <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              AI 拆解分镜
-            </button>
+            <div class="step-empty-actions">
+              <button class="btn btn-primary" @click="importModalOpen = true">粘贴工业脚本</button>
+              <button class="btn" :disabled="generateLoading || assistantRunning" @click="doGenerateShotPlansInternal">
+                <Loader2 v-if="generateLoading" :size="13" class="animate-spin" />
+                内部分镜生成
+              </button>
+              <button v-if="hasLegacyStoryboards" class="btn" :disabled="assistantRunning" @click="doBreakdown">
+                <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="13" class="animate-spin" />
+                AI 拆解分镜（旧流程）
+              </button>
+            </div>
           </div>
         </div>
 
@@ -987,6 +1143,7 @@
                         {{ isPendingCharUpload(c.id) ? '上传中' : '上传' }}
                       </label>
                       <button class="btn btn-sm btn-primary" :disabled="isPendingCharImage(c.id) || assistantRunning" @click="genCharImg(c.id)">{{ isPendingCharImage(c.id) ? '生成中' : 'AI 生成' }}</button>
+                      <button type="button" class="btn btn-sm danger" @click="deleteCharacter(c)">删除</button>
                     </div>
                   </div>
                   <div class="char-transform-row">
@@ -1081,6 +1238,7 @@
                         {{ isPendingSceneUpload(s.id) ? '上传中' : '上传' }}
                       </label>
                       <button class="btn btn-sm btn-primary" :disabled="isPendingSceneImage(s.id) || assistantRunning" @click="genSceneImg(s.id)">{{ isPendingSceneImage(s.id) ? '生成中' : 'AI 生成' }}</button>
+                      <button type="button" class="btn btn-sm danger" @click="deleteScene(s)">删除</button>
                     </div>
                   </div>
                   <GenerationTimer v-if="isPendingSceneImage(s.id)" :task-key="sceneTimerKey(s.id)" />
@@ -1157,6 +1315,21 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Sub: Fusion -->
+          <div v-else-if="prodTab === 'fusion'" class="prod-content">
+            <FusionImagePanel
+              :drama-id="dramaId"
+              :episode-id="epId"
+              :image-config-id="lockedImageConfigId"
+              :image-config-label="lockedImageConfigLabel"
+              :image-reference-supported="imageReferenceSupported"
+              :chars="chars"
+              :scenes="scenes"
+              :drama-props="dramaProps"
+              @preview="(item) => openImageViewer(displayUrl(item.path), item.label || '融合生图')"
+            />
           </div>
 
           <!-- Sub: Dubbing -->
@@ -1616,7 +1789,7 @@
                   <ProdVideoCover
                     v-if="hasVid(sb)"
                     :video-url="displayUrl(getVideoUrl(sb))"
-                    :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                    :poster-url="getStoryboardCover(sb) ? gridUrl(getStoryboardCover(sb)) : ''"
                     :index-label="`#${String(i + 1).padStart(2, '0')}`"
                     :portrait="isPortraitDramaAspect"
                     compact
@@ -1628,7 +1801,7 @@
                   </ProdVideoCover>
                   <ProdVideoEmptyPreview
                     v-else
-                    :cover-url="hasImg(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                    :cover-url="hasImg(sb) ? gridUrl(getStoryboardCover(sb)) : ''"
                     :index-label="`#${String(i + 1).padStart(2, '0')}`"
                     :portrait="isPortraitDramaAspect"
                     compact
@@ -1743,7 +1916,7 @@
                               :title="variantLabel(img)"
                               @click="setStoryboardCharacterImage(sb, charId, img.url)"
                             >
-                              <img :src="displayUrl(img.url)" :alt="variantLabel(img)" loading="lazy" decoding="async" />
+                              <img :src="gridUrl(img.url)" :alt="variantLabel(img)" loading="lazy" decoding="async" />
                               <span>{{ variantLabel(img) }}</span>
                             </button>
                           </div>
@@ -1777,8 +1950,10 @@
                         >
                           <img
                             v-if="getBlockingImage(sb)"
-                            :src="displayUrl(getBlockingImage(sb))"
+                            :src="gridUrl(getBlockingImage(sb))"
                             alt="站位图"
+                            loading="lazy"
+                            decoding="async"
                           />
                           <div v-else-if="isPendingBlocking(sb.id)" class="video-blocking-slot-empty">
                             <Loader2 :size="16" class="animate-spin" />
@@ -1853,6 +2028,9 @@
                           上传参考图
                           <input type="file" accept="image/*" hidden @change="uploadVideoReference(sb, $event)" />
                         </label>
+                        <button type="button" class="btn btn-sm" @click="openVideoReferencePicker(sb)">
+                          参考图库
+                        </button>
                       </div>
                       <div class="video-ref-at-hint">
                         上传后按卡片「图N」在提示词写 <code>@图片N是参考图</code>；多张上传用 <code>@图片N是参考图2</code>
@@ -1871,13 +2049,13 @@
                               class="video-ref-thumb"
                               @click="openImageViewer(displayUrl(ref.url), ref.label)"
                             >
-                              <img :src="displayUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
+                              <img :src="gridUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
                             </button>
                             <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
                               <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
                             </div>
                             <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
-                            <span v-if="ref.imageIndex" class="video-ref-index">图{{ ref.imageIndex }}</span>
+                            <span v-if="ref.displayImageIndex" class="video-ref-index">图{{ ref.displayImageIndex }}</span>
                           </div>
                           <div class="video-ref-meta">
                             <span class="video-ref-label">{{ ref.label }}</span>
@@ -1901,7 +2079,7 @@
                               <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
                             </template>
                             <template v-else-if="ref.source === 'reference'">
-                              <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref.url)">删除</button>
+                              <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref)">删除</button>
                             </template>
                             <template v-else-if="ref.source === 'tts'">
                               <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重生成</button>
@@ -1958,7 +2136,7 @@
                 <ProdVideoCover
                   v-if="hasComposed(sb) || hasVid(sb)"
                   :video-url="hasComposed(sb) ? '/' + getComposedVideoUrl(sb) : displayUrl(getVideoUrl(sb))"
-                  :poster-url="getStoryboardCover(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                  :poster-url="getStoryboardCover(sb) ? gridUrl(getStoryboardCover(sb)) : ''"
                   :index-label="`#${String(i + 1).padStart(2, '0')}`"
                   :portrait="isPortraitDramaAspect"
                   :show-play="false"
@@ -1969,7 +2147,7 @@
                 </ProdVideoCover>
                 <ProdVideoEmptyPreview
                   v-else
-                  :cover-url="hasImg(sb) ? displayUrl(getStoryboardCover(sb)) : ''"
+                  :cover-url="hasImg(sb) ? gridUrl(getStoryboardCover(sb)) : ''"
                   :index-label="`#${String(i + 1).padStart(2, '0')}`"
                   :portrait="isPortraitDramaAspect"
                   :compact="false"
@@ -2152,6 +2330,29 @@
       </div>
     </main>
 
+    <div v-if="importModalOpen" class="overlay" @click.self="importModalOpen = false">
+      <div class="card import-script-dialog">
+        <div class="image-viewer-head">
+          <div class="image-viewer-title">粘贴工业分镜脚本</div>
+          <button class="btn btn-ghost btn-icon" @click="importModalOpen = false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <p class="dim" style="font-size:12px;margin:0 0 10px">
+          请粘贴 <strong>DeepSeek 生成的完整工业分镜</strong>（镜头标题如「户部尚书跪地/为难」），
+          <strong>不要</strong>粘贴「红果竖屏导演脚本提示词.txt」里的模板示例（「动作描述/角色标签」）。
+        </p>
+        <textarea v-model="importText" class="import-script-textarea" rows="16" placeholder="粘贴 模型结果.txt 或 DeepSeek 输出的工业分镜..." />
+        <div class="import-script-actions">
+          <button class="btn" @click="importModalOpen = false">取消</button>
+          <button class="btn btn-primary" :disabled="importLoading" @click="doImportShotPlans">
+            <Loader2 v-if="importLoading" :size="13" class="animate-spin" />
+            导入
+          </button>
+        </div>
+      </div>
+    </div>
+
     <AssetPickerModal
       :open="assetPicker.open"
       :type="assetPicker.type"
@@ -2162,6 +2363,15 @@
       confirm-hint="将基于当前角色基准图与所选服装，重新生成一张换装图"
       @close="closeAssetPicker"
       @select="applyPickedAsset"
+    />
+
+    <AssetPickerModal
+      :key="videoRefPicker.key"
+      :open="videoRefPicker.open"
+      type="reference"
+      title="从参考图库选择"
+      @close="videoRefPicker.open = false"
+      @select="applyVideoReferencePick"
     />
 
     <SceneAngleRegenModal
@@ -2238,7 +2448,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import {
-  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2,
+  Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2, Sparkles,
 } from 'lucide-vue-next'
 import { dramaAPI, episodeAPI, storyboardAPI, characterAPI, sceneAPI, assetAPI, imageAPI, videoAPI, composeAPI, mergeAPI, gridAPI, aiConfigAPI, voicesAPI, uploadAPI } from '~/composables/useApi'
 import { useEpisodeAssistant } from '~/composables/useEpisodeAssistant'
@@ -2251,9 +2461,11 @@ import ProdVideoCover from '~/components/ProdVideoCover.vue'
 import ProdVideoEmptyPreview from '~/components/ProdVideoEmptyPreview.vue'
 import ManualEntityModal from '~/components/ManualEntityModal.vue'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
+import FusionImagePanel from '~/components/FusionImagePanel.vue'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
+import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
 import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
-import { mediaDisplayUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
+import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
 import {
@@ -2288,6 +2500,14 @@ const dramaId = Number(route.params.id)
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
 
 const drama = ref(null), episode = ref(null), chars = ref([]), scenes = ref([]), sbs = ref([]), mergeData = ref(null)
+const shotPlans = ref([])
+const clips = ref([])
+const selectedPlan = ref(null)
+const importModalOpen = ref(false)
+const importText = ref('')
+const importLoading = ref(false)
+const generateLoading = ref(false)
+const clipMoveLoading = ref(false)
 const panel = ref('script')
 const pageLoading = ref(true)
 const pageError = ref('')
@@ -2306,10 +2526,42 @@ const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.
 const scriptStep = ref(0)
 const prodTab = ref('chars')
 const productionPanelBlocked = computed(() => {
-  if (['chars', 'scenes'].includes(prodTab.value)) return false
+  if (['chars', 'scenes', 'fusion'].includes(prodTab.value)) return false
   if (!scriptContent.value) return true
+  if (useShotPlanWorkflow.value) return !hasProductionClips.value
   return !sbs.value.length
 })
+
+const hasLegacyStoryboards = computed(() =>
+  sbs.value.some(sb => {
+    const src = sb.clip_source || sb.clipSource
+    return !src || src === 'legacy'
+  }),
+)
+const useShotPlanWorkflow = computed(() => shotPlans.value.length > 0 || !hasLegacyStoryboards.value)
+const hasProductionClips = computed(() => {
+  if (useShotPlanWorkflow.value) {
+    return sbs.value.some(sb => {
+      const src = sb.clip_source || sb.clipSource
+      return src && src !== 'legacy'
+    })
+  }
+  return sbs.value.length > 0
+})
+const planTotalDuration = computed(() =>
+  shotPlans.value.reduce((s, p) => s + (Number(p.duration) || 2), 0),
+)
+const newWorkflowClips = computed(() =>
+  clips.value.length
+    ? clips.value.filter(c => {
+        const src = c.clip_source || c.clipSource
+        return src && src !== 'legacy'
+      })
+    : sbs.value.filter(sb => {
+        const src = sb.clip_source || sb.clipSource
+        return src && src !== 'legacy'
+      }),
+)
 
 const prodTabIdx = computed({
   get: () => prodTabDefs.value.findIndex(t => t.id === prodTab.value),
@@ -2337,8 +2589,8 @@ const isPortraitDramaAspect = computed(() => dramaImageAspect.value !== '16:9')
 const dramaImageSizeLabel = computed(() => (dramaImageAspect.value === '16:9' ? '1280×720' : '720×1280'))
 const videoResolutionLabel = computed(() => '720p')
 const dramaImageAspectLabel = computed(() => `${dramaImageAspect.value} · ${videoResolutionLabel.value}`)
-const canManageDrama = computed(() => Boolean(drama.value?.can_manage_drama))
-const showImageSizeControl = computed(() => panel.value === 'production' && canManageDrama.value)
+// 画面比例影响图片/视频生成，团队普通成员也需可改（不限于管理员）
+const showImageSizeControl = computed(() => panel.value === 'production')
 const gridLayoutOptions = [
   { label: '2x2', value: '2x2' },
   { label: '3x3', value: '3x3' },
@@ -2400,6 +2652,7 @@ const videoPromptEditor = ref({
 const manualEntity = ref({ open: false, type: 'character' })
 const videoGenCounts = ref({})
 const assetPicker = ref({ open: false, type: 'character', targetId: null })
+const videoRefPicker = ref({ open: false, sbId: null, key: 0 })
 const sceneAnglePromptDrafts = ref({})
 const blockingPromptDrafts = ref({})
 const sceneAngleRegen = ref({
@@ -3559,9 +3812,12 @@ const blockingCount = computed(() => sbs.value.filter(s => getBlockingImage(s)).
 const shotVidCount = computed(() => sbs.value.filter(s => s.video_url || s.videoUrl).length)
 const visualCharTotal = computed(() => visualChars.value.length)
 
+const dramaProps = computed(() => drama.value?.props || [])
+
 const prodTabDefs = computed(() => [
   { id: 'chars', label: '角色形象', icon: Users, badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
   { id: 'scenes', label: '场景图片', icon: MapPin, badge: sceneImgCount.value ? `${sceneImgCount.value}/${scenes.value.length}` : '' },
+  { id: 'fusion', label: '融合生图', icon: Sparkles, badge: '' },
   { id: 'dubbing', label: '配音生成', icon: Mic2, badge: '' },
   { id: 'shots', label: '镜头图片', icon: ImageIcon, badge: shotImgCount.value ? `${shotImgCount.value}/${sbs.value.length}` : '' },
   { id: 'videos', label: '视频生成', icon: Video, badge: shotVidCount.value ? `${shotVidCount.value}/${sbs.value.length}` : '' },
@@ -3593,6 +3849,7 @@ const sidebarSections = computed(() => ([
     items: [
       { key: 'prod:chars', label: '角色形象', desc: '', icon: Users, done: prodStepDone('chars') },
       { key: 'prod:scenes', label: '场景图片', desc: '', icon: MapPin, done: prodStepDone('scenes') },
+      { key: 'prod:fusion', label: '融合生图', desc: '', icon: Sparkles, done: false },
       { key: 'prod:dubbing', label: '配音生成', desc: '', icon: Mic2, done: prodStepDone('dubbing') },
       { key: 'prod:shots', label: '镜头图片', desc: '', icon: ImageIcon, done: prodStepDone('shots') },
       { key: 'prod:videos', label: '视频生成', desc: '', icon: Video, done: prodStepDone('videos') },
@@ -3611,7 +3868,7 @@ const sidebarSections = computed(() => ([
 const activeMainStage = computed(() => {
   if (panel.value === 'export') return 'export'
   if (panel.value === 'production') {
-    return ['chars', 'scenes'].includes(prodTab.value) ? 'assets' : 'storyboard'
+    return ['chars', 'scenes', 'fusion'].includes(prodTab.value) ? 'assets' : 'storyboard'
   }
   if (scriptStep.value <= 1) return 'script'
   if (scriptStep.value <= 3) return 'assets'
@@ -3650,7 +3907,7 @@ function goMainStage(stageId) {
       || (scenes.value.length && sceneImgCount.value < scenes.value.length)
     if (panel.value === 'production' || hasPendingAssetGeneration || hasAssetWorkspace) {
       panel.value = 'production'
-      prodTab.value = ['chars', 'scenes'].includes(prodTab.value) ? prodTab.value : 'chars'
+      prodTab.value = ['chars', 'scenes', 'fusion'].includes(prodTab.value) ? prodTab.value : 'chars'
       return
     }
     panel.value = 'script'
@@ -3682,6 +3939,7 @@ const activeSubSteps = computed(() => {
       { key: 'script:voice', label: '分配音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
       { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
       { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
+      { key: 'prod:fusion', label: '融合生图', done: false },
     ]
   }
   if (activeMainStage.value === 'storyboard') {
@@ -3689,6 +3947,7 @@ const activeSubSteps = computed(() => {
       ? [
           { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
           { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
+          { key: 'prod:fusion', label: '融合生图', done: false },
         ]
       : []
     return [
@@ -4066,13 +4325,13 @@ const scriptSteps = computed(() => {
   const hasScript = !!scriptContent.value
   const hasChars = chars.value.length > 0 && hasScript
   const hasVoice = charsVoiced.value > 0 && hasChars
-  const hasSbs = sbs.value.length > 0
+  const hasPlans = shotPlans.value.length > 0 || sbs.value.length > 0
   return [
     { label: '原始内容', state: rawContent.value ? 'done' : 'active', spinning: false },
     { label: 'AI 改写', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'script_rewriter' },
     { label: '提取', state: hasChars ? 'done' : (hasScript ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'extractor' },
     { label: '音色', state: hasVoice ? 'done' : (hasChars ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'voice_assigner' },
-    { label: '分镜', state: hasSbs ? 'done' : (hasVoice ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'storyboard_breaker' },
+    { label: '分镜', state: hasPlans ? 'done' : (hasVoice ? 'active' : ''), spinning: (assistantRunning.value && (assistantAgentType.value === 'storyboard_breaker' || assistantAgentType.value === 'shot_plan_generator')) || generateLoading.value },
   ]
 })
 
@@ -4098,6 +4357,15 @@ async function refresh(options = {}) {
     try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
     try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
     sbs.value = await episodeAPI.storyboards(ep.id)
+    try { shotPlans.value = await episodeAPI.shotPlans(ep.id) } catch { shotPlans.value = [] }
+    try { clips.value = await episodeAPI.clips(ep.id) } catch { clips.value = [] }
+    if (shotPlans.value.length) {
+      selectedPlan.value = selectedPlan.value?.id
+        ? (shotPlans.value.find(p => p.id === selectedPlan.value.id) || shotPlans.value[0])
+        : shotPlans.value[0]
+    } else {
+      selectedPlan.value = null
+    }
     pendingVideoIds.value = pendingVideoIds.value.filter(id => sbs.value.some(s => s.id === id))
     await prefetchMediaUrls(collectDisplayMediaPaths(), { force: true })
     await loadVideoGenCounts()
@@ -4176,6 +4444,126 @@ function doBreakdown() {
     `请拆解分镜并生成 video_prompt。必须输出工业级 video_prompt（首行「图片1是…，图片2是…」自然语言引用，禁止 @图片 + 多个【镜头 NNN】子块，每块约 2 秒，含景别/运镜/打光/表演/台词口型细则/AI 补充提示词），默认 MS/MCU 面部完整入镜，ECU 仅末块钩子，禁止连续特写裁脸。禁止简写为 0-3秒 时间轴。本集视频模型为 ${label}，单条 storyboard 最长 15 秒，duration 等于子块时长之和。`,
     refresh,
   )
+}
+
+function getPlanCharacterNames(plan) {
+  const ids = plan?.character_ids || []
+  return ids.map(id => chars.value.find(c => c.id === id)?.name).filter(Boolean)
+}
+
+function getPlanSceneName(plan) {
+  const sceneId = plan?.scene_id
+  if (!sceneId) return plan?.location ? `${plan.location}${plan.time ? ` · ${plan.time}` : ''}` : '未绑定场景'
+  const scene = scenes.value.find(s => s.id === sceneId)
+  return scene ? `${scene.location} · ${scene.time || '未设时间'}` : `场景 #${sceneId}`
+}
+
+function planStatusLabel(plan) {
+  return plan?.status === 'confirmed' ? '已确认' : '草稿'
+}
+
+async function doGenerateShotPlansInternal() {
+  if (!scriptContent.value) {
+    toast.warning('请先完成剧本编写')
+    return
+  }
+  generateLoading.value = true
+  try {
+    const res = await episodeAPI.generateShotPlans(epId.value)
+    shotPlans.value = res.shot_plans || []
+    clips.value = res.clips || []
+    await refresh()
+    toast.success(`已生成 ${res.plan_count} 个镜头${res.clip_count ? `，${res.clip_count} 个视频片段` : ''}`)
+    if (res.warning) toast.warning(res.warning)
+  } catch (e) {
+    toast.error(e.message || '生成失败')
+  } finally {
+    generateLoading.value = false
+  }
+}
+
+async function doImportShotPlans() {
+  const text = importText.value.trim()
+  if (!text) {
+    toast.warning('请粘贴工业分镜脚本')
+    return
+  }
+  importLoading.value = true
+  try {
+    const res = await episodeAPI.importShotPlans(epId.value, text)
+    shotPlans.value = res.shot_plans || []
+    clips.value = res.clips || []
+    await refresh()
+    importModalOpen.value = false
+    importText.value = ''
+    toast.success(`已导入 ${res.plan_count} 个镜头${res.clip_count ? `，${res.clip_count} 个视频片段` : ''}`)
+    if (res.warning) toast.warning(res.warning)
+  } catch (e) {
+    toast.error(e.message || '导入失败')
+  } finally {
+    importLoading.value = false
+  }
+}
+
+async function doConfirmPlans() {
+  try {
+    await episodeAPI.confirmShotPlans(epId.value)
+    await refresh()
+    toast.success('镜头列表已确认')
+  } catch (e) {
+    toast.error(e.message || '确认失败')
+  }
+}
+
+async function doAutoGroupClips() {
+  try {
+    const res = await episodeAPI.autoGroupClips(epId.value)
+    clips.value = res.clips || []
+    await refresh()
+    toast.success(`已生成 ${res.clip_count} 个视频片段`)
+  } catch (e) {
+    toast.error(e.message || '分组失败')
+  }
+}
+
+function isPlanInClip(plan, clip) {
+  if (!plan || !clip?.shot_plans?.length) return false
+  return clip.shot_plans.some(p => p.id === plan.id)
+}
+
+function getPlanClipLabel(plan) {
+  if (!plan) return '未分组'
+  const idx = newWorkflowClips.value.findIndex(c => isPlanInClip(plan, c))
+  return idx >= 0 ? `Clip ${idx + 1}` : '未分组'
+}
+
+function clipDurationSum(clip) {
+  if (!clip?.shot_plans?.length) return Number(clip?.duration) || 0
+  return clip.shot_plans.reduce((s, p) => s + (Number(p.duration) || 2), 0)
+}
+
+async function movePlanToClip(plan, clip) {
+  if (!plan?.id || !clip?.id || isPlanInClip(plan, clip)) return
+  clipMoveLoading.value = true
+  try {
+    const res = await episodeAPI.movePlanToClip(epId.value, plan.id, clip.id)
+    clips.value = res.clips || []
+    await refresh()
+    toast.success(`镜头 #${String(plan.shot_number || plan.shotNumber).padStart(3, '0')} 已移入 ${clip.title || '目标片段'}`)
+  } catch (e) {
+    toast.error(e.message || '移动失败')
+  } finally {
+    clipMoveLoading.value = false
+  }
+}
+
+function goToProductionFromPlans() {
+  if (!hasProductionClips.value) {
+    toast.warning('请先自动分组生成视频片段')
+    return
+  }
+  panel.value = 'production'
+  prodTab.value = 'videos'
 }
 function genSample(id) {
   const char = chars.value.find(c => c.id === id)
@@ -4403,6 +4791,30 @@ function genSceneImg(id) {
       return done
     }, 36, () => genTimer.endTask(timerKey))
   })
+}
+
+async function deleteCharacter(char) {
+  const name = char?.name || `角色#${char?.id}`
+  if (!confirm(`确定删除角色「${name}」？\n将从项目中移除，资产库中对应条目也会隐藏。`)) return
+  try {
+    await characterAPI.del(char.id)
+    chars.value = chars.value.filter(c => c.id !== char.id)
+    toast.success(`已删除角色「${name}」`)
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
+}
+
+async function deleteScene(scene) {
+  const label = scene?.location || `场景#${scene?.id}`
+  if (!confirm(`确定删除场景「${label}」？\n将从项目中移除，资产库中对应条目也会隐藏。`)) return
+  try {
+    await sceneAPI.del(scene.id)
+    scenes.value = scenes.value.filter(s => s.id !== scene.id)
+    toast.success(`已删除场景「${label}」`)
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
 }
 
 async function uploadSceneImage(sceneId, event) {
@@ -4860,6 +5272,10 @@ function displayUrl(raw) {
   return mediaDisplayUrl(raw)
 }
 
+function gridUrl(raw) {
+  return mediaGridUrl(raw)
+}
+
 function videoRefHelpers() {
   return {
     getRefs,
@@ -4919,27 +5335,93 @@ function buildVideoContentRefs(sb) {
   return buildOrderedVideoContentRefs(sb, prompt, chars.value, scenes.value, videoRefHelpers())
 }
 
-function removeVideoRefCharacter(sb, charId) {
+async function removeVideoRefCharacter(sb, charId) {
+  const char = chars.value.find(item => item.id === charId)
   const nextIds = getStoryboardCharacterIds(sb).filter(id => id !== charId)
   const refs = { ...getStoryboardCharacterImageRefs(sb) }
   delete refs[charId]
+  let prompt = sb.video_prompt || sb.videoPrompt || ''
+  if (char?.name) prompt = removePromptImageLabel(prompt, null, char.name)
+
   sb.character_ids = nextIds
   sb.characterIds = nextIds
   sb.character_image_refs = refs
   sb.characterImageRefs = refs
-  storyboardAPI.update(sb.id, { character_ids: nextIds, character_image_refs: refs })
+  const promptChanged = prompt !== (sb.video_prompt || sb.videoPrompt || '')
+  if (promptChanged) {
+    sb.video_prompt = prompt
+    sb.videoPrompt = prompt
+  }
+
+  try {
+    const payload = { character_ids: nextIds, character_image_refs: refs }
+    if (promptChanged) payload.video_prompt = prompt
+    await storyboardAPI.update(sb.id, payload)
+    toast.success('已移除角色绑定')
+  } catch (e) {
+    toast.error(e?.message || '移除失败')
+  }
 }
 
-function removeVideoRefScene(sb) {
-  updateField(sb, 'scene_id', null)
+async function removeVideoRefScene(sb) {
+  const sceneId = sb.scene_id || sb.sceneId
+  const scene = scenes.value.find(item => item.id === sceneId)
+  let prompt = sb.video_prompt || sb.videoPrompt || ''
+  if (scene?.location) prompt = removePromptImageLabel(prompt, null, scene.location)
+  prompt = removePromptImageLabel(prompt, null, '场景')
+
+  sb.scene_id = null
+  sb.sceneId = null
+  const promptChanged = prompt !== (sb.video_prompt || sb.videoPrompt || '')
+  if (promptChanged) {
+    sb.video_prompt = prompt
+    sb.videoPrompt = prompt
+  }
+
+  try {
+    const payload = { scene_id: null }
+    if (promptChanged) payload.video_prompt = prompt
+    await storyboardAPI.update(sb.id, payload)
+    toast.success('已解除场景绑定')
+  } catch (e) {
+    toast.error(e?.message || '解除失败')
+  }
 }
 
-function removeExtraReference(sb, url) {
+async function removeExtraReference(sb, ref) {
+  const url = ref?.url ?? ref
   const normalized = normalizeMediaPath(url)
-  const next = getRefs(sb).filter(item => normalizeMediaPath(item) !== normalized)
+  const prevRefs = getRefs(sb)
+  const next = prevRefs.filter(item => normalizeMediaPath(item) !== normalized)
+  if (next.length === prevRefs.length) return
+
+  let prompt = sb.video_prompt || sb.videoPrompt || ''
+  const label = ref?.promptLabel || ref?.label
+  if (ref?.imageIndex || label) {
+    prompt = removePromptImageLabel(prompt, ref?.imageIndex || null, label)
+  }
+  const refIdx = prevRefs.findIndex(item => normalizeMediaPath(item) === normalized)
+  if (refIdx >= 0) {
+    const refLabel = prevRefs.length > 1 ? `参考图${refIdx + 1}` : '参考图'
+    prompt = removePromptImageLabel(prompt, null, refLabel)
+  }
+
   sb.reference_images = next
   sb.referenceImages = JSON.stringify(next)
-  updateField(sb, 'reference_images', next)
+  const promptChanged = prompt !== (sb.video_prompt || sb.videoPrompt || '')
+  if (promptChanged) {
+    sb.video_prompt = prompt
+    sb.videoPrompt = prompt
+  }
+
+  try {
+    const payload = { reference_images: next }
+    if (promptChanged) payload.video_prompt = prompt
+    await storyboardAPI.update(sb.id, payload)
+    toast.success('已删除参考图')
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
 }
 
 function parseGenerationStartedAt(row) {
@@ -5010,19 +5492,50 @@ async function uploadVideoReference(sb, event) {
   const file = event?.target?.files?.[0]
   if (!file) return
   try {
-    const res = await uploadAPI.image(file)
+    const res = await uploadAPI.image(file, dramaId)
     const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
     if (!path) throw new Error('上传失败')
     const next = [...getRefs(sb), path]
     sb.reference_images = next
     sb.referenceImages = JSON.stringify(next)
     await storyboardAPI.update(sb.id, { reference_images: next })
-    await prefetchMediaUrls([path])
-    toast.success('参考图已添加')
+    if (!res?.oss_url && !res?.ossUrl) await prefetchMediaUrls([path])
+    toast.success('参考图已添加并入库')
   } catch (e) {
     toast.error(e?.message || '上传失败')
   } finally {
     if (event?.target) event.target.value = ''
+  }
+}
+
+function openVideoReferencePicker(sb) {
+  videoRefPicker.value = { open: true, sbId: sb.id, key: videoRefPicker.value.key + 1 }
+}
+
+async function applyVideoReferencePick(item) {
+  const sb = sbs.value.find(row => row.id === videoRefPicker.value.sbId)
+  videoRefPicker.value.open = false
+  if (!sb) return
+  const asset = item?.asset || item
+  const path = normalizeMediaPath(asset?.url || asset?.local_path || asset?.localPath)
+  if (!path) {
+    toast.error('参考图无效')
+    return
+  }
+  const refs = getRefs(sb)
+  if (refs.some(ref => normalizeMediaPath(ref) === path)) {
+    toast.info('该参考图已在列表中')
+    return
+  }
+  try {
+    const next = [...refs, path]
+    sb.reference_images = next
+    sb.referenceImages = JSON.stringify(next)
+    await storyboardAPI.update(sb.id, { reference_images: next })
+    await prefetchMediaUrls([path])
+    toast.success('已添加参考图')
+  } catch (e) {
+    toast.error(e?.message || '添加失败')
   }
 }
 
@@ -5962,6 +6475,34 @@ watch(() => route.params.episodeNumber, () => {
 .shot-list-title { font-size: 13px; font-weight: 700; color: var(--text-0); }
 .shot-list-sub { margin-top: 3px; font-size: 11px; color: var(--text-3); line-height: 1.45; }
 .shot-list-body { padding: 6px; }
+.shot-clips-panel { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.shot-clips-list { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+.shot-clip-card { padding: 10px 12px; }
+.shot-clip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.plan-clip-move-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.plan-clip-move-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.import-script-dialog {
+  width: min(720px, 92vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+}
+.import-script-textarea {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+.import-script-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .shot-item {
   position: relative; padding: 10px 11px; cursor: pointer;
   border: 1px solid transparent; border-left: 3px solid transparent;

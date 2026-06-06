@@ -86,11 +86,11 @@ export function findCatalogEntryByPromptRef(index, label, catalog) {
 }
 
 export function assignDisplayImageIndices(items) {
-  let imageIndex = 0
+  let displayIndex = 0
   return items.map((item) => {
     if (item.type !== 'image') return item
-    imageIndex += 1
-    return { ...item, imageIndex }
+    displayIndex += 1
+    return { ...item, displayImageIndex: displayIndex }
   })
 }
 

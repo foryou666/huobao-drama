@@ -13,7 +13,7 @@ import {
   putLocalFileToOss,
   signOssObjectKey,
 } from './oss-upload.js'
-import { projectAssetObjectKey } from './oss-path.js'
+import { projectAssetObjectKey, referenceUploadObjectKey } from './oss-path.js'
 
 function normalizeStaticPath(raw: string): string {
   return String(raw || '').trim().replace(/^\/+/, '')
@@ -248,4 +248,34 @@ export async function trySyncStoryboardImageAfterGeneration(
       error: err?.message || String(err),
     })
   }
+}
+
+/** 视频参考图同步 OSS（reference/ 目录，不进项目 asset/） */
+export async function syncReferenceUploadToOss(localPath: string): Promise<string | null> {
+  if (!isOssConfigured()) return null
+  const normalized = normalizeStaticPath(localPath)
+  if (!normalized.startsWith('static/')) {
+    throw new Error(`仅支持 static/ 路径上传 OSS: ${localPath}`)
+  }
+
+  const absPath = getAbsolutePath(normalized)
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`本地文件不存在: ${normalized}`)
+  }
+
+  const objectKey = referenceUploadObjectKey(normalized)
+  await putLocalFileToOss(absPath, objectKey)
+  upsertMapping(normalized, objectKey)
+  logTaskProgress('OSS', 'reference-upload-synced', { path: normalized, objectKey })
+  return objectKey
+}
+
+/** 通用图片上传（视频参考图）同步 OSS，返回签名 URL */
+export async function trySyncUploadImageToOss(
+  localPath: string,
+  _dramaId?: number | null,
+): Promise<string | null> {
+  const objectKey = await syncReferenceUploadToOss(localPath)
+  if (!objectKey) return null
+  return signOssObjectKey(objectKey)
 }

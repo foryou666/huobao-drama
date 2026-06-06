@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest, now } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
@@ -10,6 +10,7 @@ import { resolveSceneImagePrompt } from '../utils/scene-image-prompt.js'
 import { saveUploadedFile } from '../utils/storage.js'
 import { syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncSceneAsset } from '../services/asset-library.js'
+import { findActiveSceneByLocationTime, findActiveSceneByLocation, redirectSceneReferences } from '../utils/scene-redirect.js'
 import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 import { getUserBalance } from '../services/credits.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
@@ -438,10 +439,29 @@ app.post('/:id/generate-image', async (c) => {
   }
 })
 
-// DELETE /scenes/:id
+// DELETE /scenes/:id — 软删除，同步隐藏资产库条目
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  db.delete(schema.scenes).where(eq(schema.scenes.id, id)).run()
+  const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, id)).all()
+  if (!scene) return badRequest(c, '场景不存在')
+  const replacement = findActiveSceneByLocationTime(scene.dramaId, scene.location, scene.time || '')
+    ?? findActiveSceneByLocation(scene.dramaId, scene.location)
+  const ts = now()
+  db.update(schema.scenes)
+    .set({ deletedAt: ts, updatedAt: ts })
+    .where(eq(schema.scenes.id, id))
+    .run()
+  db.update(schema.assets)
+    .set({ deletedAt: ts, updatedAt: ts })
+    .where(and(
+      eq(schema.assets.sourceType, 'scene'),
+      eq(schema.assets.sourceId, id),
+      isNull(schema.assets.deletedAt),
+    ))
+    .run()
+  if (replacement && replacement.id !== id) {
+    redirectSceneReferences(scene.dramaId, id, replacement.id)
+  }
   return success(c)
 })
 

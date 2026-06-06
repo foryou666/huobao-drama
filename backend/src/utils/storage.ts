@@ -6,6 +6,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 import { v4 as uuid } from 'uuid'
+import { ensureThumbnail, isImageStaticPath } from './thumbnail.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -27,8 +28,11 @@ export async function downloadFile(url: string, subDir: string): Promise<string>
   const buffer = Buffer.from(await resp.arrayBuffer())
   fs.writeFileSync(filePath, buffer)
 
-  // 返回相对路径（供 API 返回给前端）
-  return `static/${subDir}/${filename}`
+  const relative = `static/${subDir}/${filename}`
+  if (isImageStaticPath(relative)) {
+    await ensureThumbnail(relative).catch(() => {})
+  }
+  return relative
 }
 
 /**
@@ -43,7 +47,11 @@ export async function saveUploadedFile(data: ArrayBuffer, subDir: string, origin
   const filePath = path.join(dir, filename)
 
   fs.writeFileSync(filePath, Buffer.from(data))
-  return `static/${subDir}/${filename}`
+  const relative = `static/${subDir}/${filename}`
+  if (isImageStaticPath(relative)) {
+    await ensureThumbnail(relative).catch(() => {})
+  }
+  return relative
 }
 
 function getExtFromUrl(url: string): string {
@@ -81,7 +89,11 @@ export async function saveBase64Image(base64Data: string, mimeType: string, subD
   const buffer = Buffer.from(base64Data, 'base64')
   fs.writeFileSync(filePath, buffer)
 
-  return `static/${subDir}/${filename}`
+  const relative = `static/${subDir}/${filename}`
+  if (isImageStaticPath(relative)) {
+    await ensureThumbnail(relative).catch(() => {})
+  }
+  return relative
 }
 
 export async function readLocalImageDimensions(relativePath: string): Promise<{ width: number; height: number } | null> {

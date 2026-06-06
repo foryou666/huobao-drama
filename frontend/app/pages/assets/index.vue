@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-left">
         <h1 class="page-title">资产库</h1>
-        <p class="page-desc">各项目的角色、场景、服装、道具图片统一归档；与项目内制作数据双向同步，任一侧修改都会自动更新</p>
+        <p class="page-desc">角色、场景、服装、道具与参考图统一归档；结构化资产与项目双向同步，参考图默认入库可复用</p>
       </div>
       <div class="head-actions">
         <button class="btn btn-sm" :disabled="!selectedDramaId || syncing" @click="syncDrama">
@@ -47,14 +47,20 @@
       <p class="dim" style="font-size:12px;margin-top:8px">各剧角色/场景会自动同步；也可手动添加或上传图片</p>
     </div>
     <div v-else class="asset-grid">
-      <div v-for="item in filteredAssets" :key="item.id" class="card asset-card">
+      <div v-for="item in visibleAssets" :key="item.id" class="card asset-card">
         <div class="asset-cover" :class="{ wide: activeType === 'scene' }">
-          <img
+          <button
             v-if="item.url || item.local_path || item.localPath"
-            :src="'/' + normalizePath(item.url || item.local_path || item.localPath)"
-            class="previewable-image"
-            @click="openImageViewer('/' + normalizePath(item.url || item.local_path || item.localPath), item.name)"
-          />
+            type="button"
+            class="asset-cover-btn"
+            @click="openAssetPreview(item)"
+          >
+            <GridMediaImage
+              :src="item.url || item.local_path || item.localPath"
+              :thumb="item.thumbnail_url || item.thumbnailUrl"
+              :alt="item.name"
+            />
+          </button>
           <div v-else class="asset-cover-empty">待上传</div>
           <span class="asset-cover-badge" :class="(item.url || item.local_path) ? 'is-ready' : ''">
             {{ item.source_type === 'manual' ? '手动' : item.source_type === 'import' ? '导入' : '同步' }}
@@ -66,10 +72,16 @@
           <div v-if="item.description" class="asset-meta dim truncate">{{ item.description }}</div>
         </div>
         <div class="asset-foot">
-          <button type="button" class="btn btn-sm" @click="openImageViewer('/' + normalizePath(item.url || item.local_path || item.localPath), item.name)">预览</button>
+          <button type="button" class="btn btn-sm" @click="openAssetPreview(item)">预览</button>
           <button type="button" class="btn btn-sm danger ml-auto" @click="removeAsset(item)">删除</button>
         </div>
       </div>
+    </div>
+
+    <div v-if="!loading && hasMoreAssets" class="library-more">
+      <button type="button" class="btn btn-sm" @click="loadMoreAssets">
+        加载更多（{{ visibleAssets.length }}/{{ filteredAssets.length }}）
+      </button>
     </div>
 
     <div v-if="imageViewer.open" class="image-viewer-overlay" @click="closeImageViewer">
@@ -119,7 +131,11 @@
 <script setup>
 import { dramaAPI, assetAPI } from '~/composables/useApi'
 import { ASSET_CATEGORIES, assetCategoryLabel } from '~/utils/asset-categories.js'
+import { mediaDisplayUrl, normalizeMediaPath } from '~/utils/media-url.js'
+import GridMediaImage from '~/components/GridMediaImage.vue'
 import { toast } from 'vue-sonner'
+
+const GRID_PAGE_SIZE = 48
 
 const dramas = ref([])
 const assets = ref([])
@@ -139,6 +155,7 @@ const createForm = ref({
   file: null,
 })
 const imageViewer = ref({ open: false, src: '', title: '' })
+const visibleCount = ref(GRID_PAGE_SIZE)
 
 function parseDramaFilter(raw) {
   const id = Number(raw)
@@ -159,6 +176,18 @@ const filteredAssets = computed(() => {
   })
 })
 
+const visibleAssets = computed(() => filteredAssets.value.slice(0, visibleCount.value))
+
+const hasMoreAssets = computed(() => visibleCount.value < filteredAssets.value.length)
+
+function resetVisibleCount() {
+  visibleCount.value = GRID_PAGE_SIZE
+}
+
+function loadMoreAssets() {
+  visibleCount.value = Math.min(visibleCount.value + GRID_PAGE_SIZE, filteredAssets.value.length)
+}
+
 function normalizePath(raw) {
   return String(raw || '').replace(/^\/+/, '')
 }
@@ -176,6 +205,12 @@ function countByType(type) {
     const itemDramaId = item.drama_id ?? item.dramaId ?? null
     return itemDramaId == null || itemDramaId === dramaId
   }).length
+}
+
+function openAssetPreview(item) {
+  const raw = item?.url || item?.local_path || item?.localPath
+  if (!raw) return
+  openImageViewer(mediaDisplayUrl(raw), item.name)
 }
 
 function openImageViewer(src, title = '') {
@@ -200,6 +235,7 @@ async function loadAssets() {
       drama_id: dramaId || undefined,
       q: keyword.value.trim() || undefined,
     }) || []
+    resetVisibleCount()
   } catch (e) {
     toast.error(e?.message || '加载资产失败')
   } finally {
@@ -275,7 +311,12 @@ async function removeAsset(item) {
 }
 
 watch([selectedDramaId, keyword], () => {
+  resetVisibleCount()
   loadAssets()
+})
+
+watch(activeType, () => {
+  resetVisibleCount()
 })
 
 watch(() => route.path, (path) => {
@@ -330,6 +371,11 @@ onMounted(async () => {
   justify-content: center;
 }
 .library-empty { padding: 40px; text-align: center; }
+.library-more {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}
 .asset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -343,7 +389,20 @@ onMounted(async () => {
   overflow: hidden;
 }
 .asset-cover.wide { aspect-ratio: 16 / 9; }
-.asset-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.asset-cover-btn {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  display: block;
+}
+.asset-cover :deep(.grid-media-image),
+.asset-cover :deep(.grid-media-empty) {
+  width: 100%;
+  height: 100%;
+}
 .asset-cover-empty {
   height: 100%;
   display: flex;

@@ -157,7 +157,7 @@
                 </label>
                 <label class="field">
                   <span class="field-label">Max Tokens</span>
-                  <input v-model.number="agentForm.max_tokens" class="input" type="number" min="100" max="32000" />
+                  <input v-model.number="agentForm.max_tokens" class="input" type="number" min="100" max="32768" />
                 </label>
               </div>
               <label class="field">
@@ -952,11 +952,16 @@ const agentCfgs = ref([])
 const editingAgent = ref(null)
 const agentSaving = ref(false)
 const agentSaved = ref(null)
+const AGENT_DEFAULT_MAX_TOKENS = {
+  shot_plan_generator: 32768,
+}
+
 const agentForm = reactive({ model: '', temperature: 0.7, max_tokens: 4096, system_prompt: '' })
 
 const agentDefs = [
   { type: 'script_rewriter', label: '剧本改写', icon: '📝' },
   { type: 'extractor', label: '角色场景提取', icon: '🔍' },
+  { type: 'shot_plan_generator', label: '工业镜头列表', icon: '🎞' },
   { type: 'storyboard_breaker', label: '分镜拆解', icon: '🎬' },
   { type: 'voice_assigner', label: '音色分配', icon: '🎙' },
   { type: 'grid_prompt_generator', label: '图片提示词生成', icon: '🖼' },
@@ -996,6 +1001,14 @@ const defaultPrompts = {
 - 角色要包含完整的外貌特征描述（发型、服装、体态等）
 - 场景要包含光线、色调、氛围等视觉信息
 - 不要遗漏任何有台词或重要动作的角色`,
+  shot_plan_generator: `你是红果竖屏短剧工业分镜生成 Agent。
+
+工作流程：
+1. 调用 read_shot_plan_context 读取剧本、角色库（R01…）、场景库（S01…）
+2. 按工业分镜规范生成完整 1-3 秒微镜头列表，覆盖全部剧本情节
+3. 调用 import_industrial_script 导入生成结果
+
+注意：禁止输出模板占位符；必须调用 import_industrial_script 完成导入。`,
   storyboard_breaker: `你是资深影视分镜师，擅长将剧本拆解为分镜方案。
 
 工作流程：
@@ -1081,7 +1094,7 @@ function toggleAgentEdit(type) {
   const cfg = getAgentCfg(type)
   agentForm.model = cfg?.model || ''
   agentForm.temperature = cfg?.temperature ?? 0.7
-  agentForm.max_tokens = cfg?.max_tokens ?? 4096
+  agentForm.max_tokens = cfg?.max_tokens ?? AGENT_DEFAULT_MAX_TOKENS[type] ?? 4096
   agentForm.system_prompt = cfg?.system_prompt || defaultPrompts[type] || ''
   agentSaved.value = null
   editingAgent.value = type

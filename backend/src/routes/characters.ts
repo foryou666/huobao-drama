@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
@@ -11,6 +11,7 @@ import { resolveCharacterImagePrompt } from '../utils/character-image-prompt.js'
 import { saveUploadedFile } from '../utils/storage.js'
 import { syncCharacterPrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncCharacterAsset } from '../services/asset-library.js'
+import { findActiveCharacterByName, redirectCharacterReferences } from '../utils/character-redirect.js'
 import { getConfigById, getActiveConfig } from '../services/ai.js'
 import {
   buildCharacterTransformPrompt,
@@ -103,10 +104,28 @@ app.put('/:id', async (c) => {
   return success(c)
 })
 
-// DELETE /characters/:id
+// DELETE /characters/:id — 软删除，同步隐藏资产库条目
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
-  db.update(schema.characters).set({ deletedAt: now() }).where(eq(schema.characters.id, id)).run()
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, '角色不存在')
+  const replacement = findActiveCharacterByName(char.dramaId, char.name)
+  const ts = now()
+  db.update(schema.characters)
+    .set({ deletedAt: ts, updatedAt: ts })
+    .where(eq(schema.characters.id, id))
+    .run()
+  db.update(schema.assets)
+    .set({ deletedAt: ts, updatedAt: ts })
+    .where(and(
+      eq(schema.assets.sourceType, 'character'),
+      eq(schema.assets.sourceId, id),
+      isNull(schema.assets.deletedAt),
+    ))
+    .run()
+  if (replacement && replacement.id !== id) {
+    redirectCharacterReferences(char.dramaId, id, replacement.id)
+  }
   return success(c)
 })
 

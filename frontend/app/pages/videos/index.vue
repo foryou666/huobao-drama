@@ -3,7 +3,7 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">视频生成</h1>
-        <p class="studio-desc">即梦式创作台：关联项目后可用 @ 引用角色/场景，或点击绑定；支持上传参考图手动生成</p>
+        <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；参考图上传默认入库，可从参考图库复用</p>
       </div>
       <div class="studio-header-actions">
         <select v-model="filterDramaId" class="studio-filter-select" @change="reload">

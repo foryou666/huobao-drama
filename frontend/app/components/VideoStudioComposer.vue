@@ -4,104 +4,66 @@
       <div v-if="dramaLinked" class="composer-project-panel">
         <div class="composer-project-head">
           <span class="composer-project-title">项目素材</span>
-          <span class="dim composer-project-hint">输入 <kbd>@</kbd> 关联角色/场景，或点击下方选择</span>
+          <span class="dim composer-project-hint">点击选择角色/场景，或在提示词输入 <kbd>@</kbd> 关联</span>
         </div>
 
-        <div class="composer-bind-row">
-          <span class="composer-bind-label">角色</span>
-          <div class="composer-bind-pills">
-            <button
-              v-for="char in projectChars"
-              :key="char.id"
-              type="button"
-              class="composer-bind-pill"
-              :class="{ active: isCharacterBound(char.id) }"
-              @click="onToggleCharacter(char)"
-            >
-              {{ char.name }}<span v-if="isCharacterBound(char.id)" class="composer-pill-x"> ×</span>
-            </button>
-            <span v-if="!projectChars.length" class="dim">该项目暂无角色</span>
-          </div>
+        <div class="composer-bind-actions">
+          <button type="button" class="btn btn-sm composer-pick-btn" @click="openCharacterPicker">
+            选择角色
+            <span v-if="boundCharacterCount" class="composer-pick-count">{{ boundCharacterCount }}</span>
+          </button>
+          <button type="button" class="btn btn-sm composer-pick-btn" @click="openScenePicker">
+            选择场景
+            <span v-if="binding.scene_id" class="composer-pick-count">1</span>
+          </button>
         </div>
 
-        <div class="composer-bind-row">
-          <span class="composer-bind-label">场景</span>
-          <select
-            :value="binding.scene_id || ''"
-            class="composer-select composer-scene-select"
-            @change="onSceneSelect"
-          >
-            <option value="">未绑定场景</option>
-            <option v-for="scene in projectScenes" :key="scene.id" :value="scene.id">
-              {{ scene.location }} · {{ scene.time || '未设时间' }}
-            </option>
-          </select>
+        <div v-if="boundCharacterCount || binding.scene_id" class="composer-bound-summary">
           <button
-            v-if="binding.scene_id"
+            v-for="char in boundCharacters"
+            :key="char.id"
             type="button"
-            class="btn btn-ghost btn-sm"
+            class="composer-bound-chip"
+            @click="unbindCharacterById(char.id, char.name)"
+          >
+            {{ char.name }} ×
+          </button>
+          <button
+            v-if="boundScene"
+            type="button"
+            class="composer-bound-chip"
             @click="clearSceneBinding"
           >
-            取消场景
+            {{ boundScene.location }} ×
           </button>
-          <button
-            v-if="binding.scene_id"
-            type="button"
-            class="btn btn-ghost btn-sm"
-            @click="insertSceneMention"
-          >
-            写入 @场景
-          </button>
-        </div>
-
-        <div v-if="linkedDisplayItems.length" class="composer-linked-refs">
-          <div
-            v-for="ref in linkedDisplayItems"
-            :key="ref.key"
-            class="composer-linked-ref"
-            :class="{ missing: ref.missing, clickable: !!ref.url }"
-            @click="ref.url && openImagePreview(ref.url, previewRefTitle(ref))"
-          >
-            <button
-              v-if="canUnlinkRef(ref)"
-              type="button"
-              class="composer-linked-ref-remove"
-              title="取消关联"
-              @click.stop="unlinkRef(ref)"
-            >
-              ×
-            </button>
-            <img v-if="ref.url" :src="displayUrl(ref.url)" alt="" />
-            <div v-else class="composer-linked-ref-empty">缺图</div>
-            <div class="composer-linked-ref-meta">
-              <span v-if="ref.imageIndex" class="mono">图{{ ref.imageIndex }}</span>
-              <span>{{ ref.label }}</span>
-            </div>
-          </div>
         </div>
       </div>
 
-      <div v-if="uploadedRefs.length" class="composer-refs">
+      <div v-if="showRefStrip" class="composer-refs">
         <div
-          v-for="(img, index) in uploadedRefs"
-          :key="img.path + index"
+          v-for="item in visualRefItems"
+          :key="item.key"
           class="composer-ref"
-          :class="{ 'is-first': refMode === 'first_last' && index === 0, 'is-last': refMode === 'first_last' && index === 1 }"
+          :class="{
+            missing: item.missing,
+            'is-first': refMode === 'first_last' && item.uploadIndex === 0,
+            'is-last': refMode === 'first_last' && item.uploadIndex === 1,
+          }"
         >
           <button
             type="button"
             class="composer-ref-thumb"
-            @click="openImagePreview(img.path, `上传参考图 ${index + 1}`)"
+            :disabled="!item.preview && item.missing"
+            @click="openVisualRefPreview(item)"
           >
-            <img :src="img.preview" alt="" />
+            <img v-if="item.preview" :src="item.preview" alt="" />
+            <div v-else class="composer-ref-empty">缺图</div>
           </button>
-          <button type="button" class="composer-ref-remove" @click.stop="removeUpload(index)">×</button>
-          <span v-if="refMode === 'first_last' && index === 0" class="composer-ref-tag">首帧</span>
-          <span v-else-if="refMode === 'first_last' && index === 1" class="composer-ref-tag">尾帧</span>
-          <span v-else class="composer-ref-tag">上传{{ index + 1 }}</span>
+          <button type="button" class="composer-ref-remove" @click.stop="removeVisualRef(item)">×</button>
+          <span class="composer-ref-tag">{{ item.tagLabel }}</span>
         </div>
         <label v-if="uploadedRefs.length < maxImages" class="composer-ref-add">
-          <input type="file" accept="image/*" hidden @change="onUpload" />
+          <input type="file" accept="image/*" multiple hidden @change="onUpload" />
           <span>+</span>
         </label>
       </div>
@@ -131,7 +93,7 @@
               class="composer-mention-item"
               @mousedown.prevent="pickMention(option)"
             >
-              <img v-if="option.thumb" :src="displayUrl(option.thumb)" alt="" />
+              <img v-if="option.thumb" :src="gridUrl(option.thumb)" alt="" loading="lazy" decoding="async" />
               <div v-else class="composer-mention-thumb-empty">{{ option.sub.slice(0, 1) }}</div>
               <div class="composer-mention-copy">
                 <span class="composer-mention-label">@{{ option.label }}</span>
@@ -204,6 +166,10 @@
               上传图片
             </label>
 
+            <button type="button" class="composer-upload-btn" @click="openReferencePicker">
+              参考图库
+            </button>
+
             <button
               v-if="dramaLinked"
               type="button"
@@ -225,6 +191,27 @@
         </div>
       </div>
     </div>
+
+    <ProjectEntityPickerModal
+      :open="entityPickerOpen"
+      :mode="entityPickerMode"
+      :characters="projectChars"
+      :scenes="projectScenes"
+      :selected-character-ids="binding.character_ids"
+      :selected-scene-id="binding.scene_id"
+      @close="entityPickerOpen = false"
+      @confirm="onEntityPickerConfirm"
+    />
+
+    <AssetPickerModal
+      :key="referencePickerKey"
+      :open="referencePickerOpen"
+      type="reference"
+      :extra-items="sessionReferenceAssets"
+      title="从参考图库选择"
+      @close="referencePickerOpen = false"
+      @select="onReferencePicked"
+    />
 
     <div
       v-if="imagePreview.open && imagePreview.src"
@@ -248,7 +235,7 @@
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, uploadAPI } from '~/composables/useApi'
-import { mediaDisplayUrl, normalizeMediaPath } from '~/utils/media-url.js'
+import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
 import {
   bindCharacter,
   bindScene,
@@ -293,12 +280,69 @@ const mentionOpen = ref(false)
 const mentionQuery = ref('')
 const mentionStart = ref(0)
 const imagePreview = ref({ open: false, src: '', title: '' })
+const entityPickerOpen = ref(false)
+const entityPickerMode = ref('character')
+const referencePickerOpen = ref(false)
+const referencePickerKey = ref(0)
+const sessionReferenceAssets = ref([])
 
 const dramaLinked = computed(() => !!dramaId.value)
+
+const boundCharacters = computed(() =>
+  projectChars.value.filter(char => (binding.character_ids || []).includes(char.id)),
+)
+
+const boundCharacterCount = computed(() => boundCharacters.value.length)
+
+const boundScene = computed(() =>
+  projectScenes.value.find(scene => scene.id === binding.scene_id) || null,
+)
 
 const linkedDisplayItems = computed(() => {
   if (!dramaLinked.value) return []
   return buildStudioDisplayItems(binding, prompt.value, projectChars.value, projectScenes.value)
+})
+
+const showRefStrip = computed(() =>
+  dramaLinked.value || uploadedRefs.value.length > 0 || linkedDisplayItems.value.length > 0,
+)
+
+const visualRefItems = computed(() => {
+  const items = []
+  const seenPaths = new Set()
+
+  for (const ref of linkedDisplayItems.value) {
+    const path = ref.url ? normalizeMediaPath(ref.url) : ''
+    if (path) seenPaths.add(path)
+    items.push({
+      key: ref.key,
+      kind: 'linked',
+      ref,
+      path,
+      preview: path ? gridUrl(path) : '',
+      missing: ref.missing,
+      tagLabel: ref.imageIndex ? `图${ref.imageIndex}` : ref.label,
+    })
+  }
+
+  uploadedRefs.value.forEach((img, uploadIndex) => {
+    const path = normalizeMediaPath(img.path)
+    if (!path || seenPaths.has(path)) return
+    seenPaths.add(path)
+    items.push({
+      key: `upload:${path}:${uploadIndex}`,
+      kind: 'upload',
+      uploadIndex,
+      path,
+      preview: img.preview || gridUrl(path),
+      ossUrl: img.ossUrl || null,
+      label: img.label,
+      missing: false,
+      tagLabel: img.label || `参考${uploadIndex + 1}`,
+    })
+  })
+
+  return items
 })
 
 const mentionOptions = computed(() => buildMentionOptions(
@@ -322,16 +366,46 @@ watch(
 watch(
   () => binding.reference_images,
   (paths) => {
-    uploadedRefs.value = (paths || []).map(path => ({
-      path,
-      preview: mediaDisplayUrl(path),
-    }))
+    const prevByPath = new Map(
+      uploadedRefs.value.map(item => [normalizeMediaPath(item.path), item]),
+    )
+    uploadedRefs.value = (paths || []).map(path => {
+      const normalized = normalizeMediaPath(path)
+      const prev = prevByPath.get(normalized)
+      return {
+        path: normalized,
+        preview: prev?.preview || gridUrl(normalized),
+        ossUrl: prev?.ossUrl || null,
+        label: prev?.label || null,
+        assetId: prev?.assetId || null,
+      }
+    })
   },
   { deep: true },
 )
 
 function displayUrl(raw) {
   return mediaDisplayUrl(raw)
+}
+
+function gridUrl(raw) {
+  return mediaGridUrl(raw)
+}
+
+function openVisualRefPreview(item) {
+  const raw = item.ossUrl || item.path || item.ref?.url
+  if (!raw || item.missing) return
+  openImagePreview(raw, item.label || item.tagLabel || '参考图')
+}
+
+function removeVisualRef(item) {
+  if (item.kind === 'linked' && item.ref) {
+    unlinkRef(item.ref)
+    return
+  }
+  if (item.kind === 'upload' && item.uploadIndex != null) {
+    removeUpload(item.uploadIndex)
+  }
 }
 
 function previewRefTitle(ref) {
@@ -394,6 +468,62 @@ function onDramaChange() {
   }
 }
 
+function openCharacterPicker() {
+  if (!projectChars.value.length) {
+    toast.warning('该项目暂无角色')
+    return
+  }
+  entityPickerMode.value = 'character'
+  entityPickerOpen.value = true
+}
+
+function openScenePicker() {
+  if (!projectScenes.value.length) {
+    toast.warning('该项目暂无场景')
+    return
+  }
+  entityPickerMode.value = 'scene'
+  entityPickerOpen.value = true
+}
+
+function onEntityPickerConfirm(result) {
+  if (result.mode === 'character') {
+    const prevIds = new Set(binding.character_ids || [])
+    const nextIds = new Set(result.characterIds || [])
+    for (const char of projectChars.value) {
+      const wasBound = prevIds.has(char.id)
+      const isBound = nextIds.has(char.id)
+      if (isBound && !wasBound) {
+        bindCharacter(binding, char.id, projectChars.value)
+        appendImageLabel(nextPromptImageIndex(prompt.value), char.name)
+      } else if (!isBound && wasBound) {
+        unbindCharacter(binding, char.id)
+        prompt.value = removePromptImageLabel(prompt.value, null, char.name)
+      }
+    }
+    return
+  }
+
+  if (result.mode === 'scene') {
+    if (binding.scene_id && !result.sceneId) {
+      clearSceneBinding()
+      return
+    }
+    if (!result.sceneId) return
+    binding.scene_id = Number(result.sceneId)
+    bindScene(binding, binding.scene_id)
+    const scene = result.scene || boundScene.value
+    if (scene?.location) {
+      appendImageLabel(nextPromptImageIndex(prompt.value), scene.location)
+    }
+  }
+}
+
+function unbindCharacterById(charId, name) {
+  unbindCharacter(binding, charId)
+  prompt.value = removePromptImageLabel(prompt.value, null, name)
+}
+
 function isCharacterBound(charId) {
   return (binding.character_ids || []).includes(charId)
 }
@@ -437,23 +567,6 @@ function unlinkRef(ref) {
   prompt.value = removePromptImageLabel(prompt.value, ref.imageIndex, label)
 }
 
-function onSceneSelect(event) {
-  const value = event.target.value
-  if (!value && binding.scene_id) {
-    clearSceneBinding()
-    return
-  }
-  binding.scene_id = value ? Number(value) : null
-  bindScene(binding, binding.scene_id)
-}
-
-function insertSceneMention(scene = null) {
-  const target = scene || projectScenes.value.find(item => item.id === binding.scene_id)
-  if (!target) return
-  const index = nextPromptImageIndex(prompt.value)
-  appendImageLabel(index, target.location || '场景')
-}
-
 function appendImageLabel(index, label) {
   const el = promptEl.value
   const cursor = el?.selectionStart ?? prompt.value.length
@@ -470,6 +583,32 @@ function syncUploadPaths() {
   binding.reference_images = uploadedRefs.value.map(item => item.path)
 }
 
+function addReferencePath(path, meta = {}) {
+  const normalized = normalizeMediaPath(path)
+  if (!normalized) return false
+  if (uploadedRefs.value.length >= maxImages) {
+    toast.warning(`最多 ${maxImages} 张参考图`)
+    return false
+  }
+  if (uploadedRefs.value.some(item => normalizeMediaPath(item.path) === normalized)) {
+    return true
+  }
+  uploadedRefs.value.push({
+    path: normalized,
+    preview: gridUrl(normalized),
+    ossUrl: meta.ossUrl || null,
+    label: meta.label || null,
+    assetId: meta.assetId || null,
+  })
+  syncUploadPaths()
+  return true
+}
+
+function appendReferenceLabel(label) {
+  if (!label) return
+  appendImageLabel(nextPromptImageIndex(prompt.value), label)
+}
+
 async function onUpload(event) {
   const files = Array.from(event?.target?.files || [])
   if (!files.length) return
@@ -480,16 +619,59 @@ async function onUpload(event) {
   }
   for (const file of files.slice(0, remain)) {
     try {
-      const res = await uploadAPI.image(file)
+      const res = await uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null)
       const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
       if (!path) throw new Error('上传失败')
-      uploadedRefs.value.push({ path, preview: mediaDisplayUrl(path) })
+      const ossUrl = res?.oss_url || res?.ossUrl || null
+      const label = res?.name || file.name?.replace(/\.[^.]+$/, '') || `参考图${uploadedRefs.value.length + 1}`
+      const assetId = res?.asset_id || res?.assetId || null
+      addReferencePath(path, { ossUrl, label, assetId })
+      pushSessionReferenceAsset({ path, label, assetId })
+      if (!ossUrl) await prefetchMediaUrls([path])
+      if (assetId) toast.success('已上传并入库参考图')
+      else toast.warning('图片已添加，但未入库（请重启后端后重试上传）')
     } catch (err) {
       toast.error(err?.message || '上传失败')
     }
   }
-  syncUploadPaths()
   if (event?.target) event.target.value = ''
+}
+
+function pushSessionReferenceAsset({ path, label, assetId }) {
+  const normalized = normalizeMediaPath(path)
+  if (!normalized) return
+  const entry = {
+    id: assetId || `session:${normalized}`,
+    name: label || '参考图',
+    type: 'reference',
+    url: normalized,
+    local_path: normalized,
+  }
+  sessionReferenceAssets.value = [
+    entry,
+    ...sessionReferenceAssets.value.filter(item =>
+      normalizeMediaPath(item.url || item.local_path || item.localPath) !== normalized,
+    ),
+  ]
+}
+
+function openReferencePicker() {
+  referencePickerKey.value += 1
+  referencePickerOpen.value = true
+}
+
+function onReferencePicked(item) {
+  const asset = item?.asset || item
+  const path = normalizeMediaPath(asset?.url || asset?.local_path || asset?.localPath)
+  if (!path) {
+    toast.error('参考图无效')
+    return
+  }
+  const label = asset?.name || '参考图'
+  if (!addReferencePath(path, { label, assetId: asset?.id || null })) return
+  appendReferenceLabel(label)
+  referencePickerOpen.value = false
+  prefetchMediaUrls([path]).catch(() => {})
 }
 
 function removeUpload(index) {
@@ -557,6 +739,8 @@ function pickMention(option) {
   } else if (option.type === 'scene') {
     binding.scene_id = option.id
     bindScene(binding, option.id)
+  } else if (option.type === 'upload') {
+    addReferencePath(option.path, { label: option.label, preview: option.thumb })
   }
 
   const result = replaceMentionWithImageLabel(
@@ -675,7 +859,7 @@ function loadFromItem(item) {
   const refs = item?.reference_images || []
   uploadedRefs.value = refs.map(ref => ({
     path: ref.path || ref.display_url,
-    preview: ref.display_url || mediaDisplayUrl(ref.path),
+    preview: gridUrl(ref.path) || ref.display_url,
   })).filter(ref => ref.path)
   syncUploadPaths()
 
@@ -761,6 +945,53 @@ defineExpose({ loadFromItem, clearPrompt })
   border: 1px solid var(--border);
   background: var(--bg-2);
   font-size: 10px;
+}
+
+.composer-bind-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.composer-pick-btn {
+  position: relative;
+}
+
+.composer-pick-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 11px;
+}
+
+.composer-bound-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.composer-bound-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.composer-bound-chip:hover {
+  border-color: rgba(239, 83, 80, 0.45);
+  color: var(--text-1);
 }
 
 .composer-bind-row {
@@ -919,6 +1150,21 @@ defineExpose({ loadFromItem, clearPrompt })
 
 .composer-ref.is-first { box-shadow: 0 0 0 2px #4c7dff; }
 .composer-ref.is-last { box-shadow: 0 0 0 2px #7c4dff; }
+
+.composer-ref.missing {
+  border-color: rgba(239, 83, 80, 0.45);
+}
+
+.composer-ref-empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-3);
+  background: var(--bg-3);
+}
 
 .composer-ref-tag {
   position: absolute;

@@ -105,6 +105,18 @@ export const episodeAPI = {
   characters: (id: number) => api.get(`/episodes/${id}/characters`),
   scenes: (id: number) => api.get(`/episodes/${id}/scenes`),
   storyboards: (id: number) => api.get(`/episodes/${id}/storyboards`),
+  shotPlans: (id: number) => api.get(`/episodes/${id}/shot-plans`),
+  importShotPlans: (id: number, text: string) => api.post(`/episodes/${id}/shot-plans/import`, { text }),
+  generateShotPlans: (id: number) => api.post(`/episodes/${id}/shot-plans/generate`),
+  confirmShotPlans: (id: number) => api.post(`/episodes/${id}/shot-plans/confirm`),
+  reorderShotPlans: (id: number, orderedIds: number[]) =>
+    api.post(`/episodes/${id}/shot-plans/reorder`, { ordered_ids: orderedIds }),
+  updateShotPlan: (episodeId: number, planId: number, data: any) =>
+    api.put(`/episodes/${episodeId}/shot-plans/${planId}`, data),
+  clips: (id: number) => api.get(`/episodes/${id}/clips`),
+  autoGroupClips: (id: number) => api.post(`/episodes/${id}/clips/auto-group`),
+  movePlanToClip: (episodeId: number, planId: number, targetClipId: number) =>
+    api.post(`/episodes/${episodeId}/clips/move-plan`, { plan_id: planId, target_clip_id: targetClipId }),
   pipelineStatus: (id: number) => api.get(`/episodes/${id}/pipeline-status`),
   activityLogs: (id: number, params?: { limit?: number; offset?: number }) => {
     const q = new URLSearchParams()
@@ -157,9 +169,12 @@ async function uploadForm(path: string, form: FormData) {
 }
 
 export const uploadAPI = {
-  image: (file: File) => {
+  image: (file: File, dramaId?: number | null) => {
     const form = new FormData()
     form.append('file', file)
+    if (dramaId != null && Number.isFinite(Number(dramaId)) && Number(dramaId) > 0) {
+      form.append('drama_id', String(dramaId))
+    }
     return uploadForm('/upload/image', form)
   },
 }
@@ -358,6 +373,7 @@ export const characterAPI = {
     api.post(`/characters/${id}/generate-outfit`, data),
   transformPresets: () => api.get('/characters/transform-presets'),
   batchImages: (ids: number[], episodeId: number) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId }),
+  del: (id: number) => api.del(`/characters/${id}`),
 }
 
 export const sceneAPI = {
@@ -384,6 +400,7 @@ export const sceneAPI = {
   generateAngleSheet: (id: number, data: { episode_id: number; prompt?: string }) =>
     api.post(`/scenes/${id}/generate-angle-sheet`, data),
   anglePresets: () => api.get<{ items: any[] }>('/scenes/angle-presets/list'),
+  del: (id: number) => api.del(`/scenes/${id}`),
 }
 
 export const assetAPI = {

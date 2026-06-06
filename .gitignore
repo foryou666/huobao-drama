@@ -33,6 +33,7 @@ data/public.sql
 data/*.bak*
 data/static/
 data/storage/
+data/logs/
 # Keep committed seed snapshot for developer sync
 !data/seed/
 !data/seed/**

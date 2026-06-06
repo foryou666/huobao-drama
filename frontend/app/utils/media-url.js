@@ -22,11 +22,14 @@ function scheduleResolve(path) {
 }
 
 async function flushResolve() {
-  const paths = [...pending].filter(p => !urlCache.value[p])
-  pending.clear()
-  if (!paths.length) return
+  const batch = [...pending].filter(p => !urlCache.value[p]).slice(0, 48)
+  for (const path of batch) pending.delete(path)
+  if (!batch.length) {
+    pending.clear()
+    return
+  }
   try {
-    const data = await api.post('/media/resolve-urls', { paths })
+    const data = await api.post('/media/resolve-urls', { paths: batch })
     const urls = data?.urls || {}
     let changed = false
     for (const [path, url] of Object.entries(urls)) {
@@ -39,6 +42,33 @@ async function flushResolve() {
   } catch {
     // 保留本地回退
   }
+  if (pending.size) {
+    clearTimeout(flushTimer)
+    flushTimer = setTimeout(() => { flushResolve().catch(() => {}) }, 30)
+  }
+}
+
+/** 由原图 static 路径推导缩略图路径 */
+export function thumbPathFromSource(raw) {
+  const path = normalizeMediaPath(raw)
+  if (!path || !path.startsWith('static/')) return ''
+  if (path.startsWith('static/thumbs/')) return path
+  const rest = path.slice('static/'.length)
+  const withoutExt = rest.replace(/\.[^.]+$/i, '')
+  return `static/thumbs/${withoutExt}.webp`
+}
+
+function localStaticUrl(path) {
+  if (!path) return ''
+  if (path.startsWith('http://') || path.startsWith('https://')) return path
+  if (path.startsWith('static/')) return `/${path}`
+  return path.startsWith('/') ? path : `/${path}`
+}
+
+/** 列表/网格缩略图：优先 thumbs，不触发 OSS 批量解析 */
+export function mediaGridUrl(raw, explicitThumb) {
+  const thumb = normalizeMediaPath(explicitThumb) || thumbPathFromSource(raw)
+  return localStaticUrl(thumb || normalizeMediaPath(raw))
 }
 
 /** 页面展示 URL：优先 OSS，static/ 未解析前暂用本地路径 */

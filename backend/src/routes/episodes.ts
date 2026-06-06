@@ -12,6 +12,13 @@ import {
   assertEpisodeTeamAccess,
   loadDramaById,
 } from '../services/team-access.js'
+import { repairEpisodeSceneLinks } from '../utils/scene-redirect.js'
+import {
+  getStoryboardCharacterIdsForEpisode,
+  repairEpisodeCharacterLinks,
+  resolveCharacterIdsForEpisode,
+} from '../utils/character-redirect.js'
+import shotPlans from './shot-plans.js'
 
 const app = new Hono()
 
@@ -155,13 +162,21 @@ app.get('/:id/characters', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
+  repairEpisodeCharacterLinks(episodeId, access.drama!.id)
   const links = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
-  const charIds = links.map(l => l.characterId)
-  if (!charIds.length) return success(c, [])
+  const charIds = new Set(links.map(l => l.characterId))
+  for (const id of getStoryboardCharacterIdsForEpisode(episodeId)) charIds.add(id)
+  if (!charIds.size) return success(c, [])
   const allChars = db.select().from(schema.characters).all()
-  const result = allChars.filter(ch => charIds.includes(ch.id) && !ch.deletedAt)
-  return success(c, toSnakeCaseArray(result))
+  const result = [...charIds]
+    .map(id => allChars.find(ch => ch.id === id))
+    .filter((ch): ch is NonNullable<typeof ch> => !!ch && !ch.deletedAt)
+  // 分镜仍引用但已软删的角色：保留返回以便视频参考图可展示名称与造型
+  const referencedDeleted = [...charIds]
+    .map(id => allChars.find(ch => ch.id === id))
+    .filter((ch): ch is NonNullable<typeof ch> => !!ch && !!ch.deletedAt && !result.some(r => r.id === ch.id))
+  return success(c, toSnakeCaseArray([...result, ...referencedDeleted]))
 })
 
 // GET /episodes/:id/scenes — 项目内全部场景（场景为项目级资产，各集共享）
@@ -188,6 +203,8 @@ app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
+  repairEpisodeSceneLinks(episodeId, access.drama!.id)
+  repairEpisodeCharacterLinks(episodeId, access.drama!.id)
   const rows = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
     .orderBy(schema.storyboards.storyboardNumber)
@@ -203,16 +220,22 @@ app.get('/:episode_id/storyboards', async (c) => {
   const episodeCharIds = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
     .map(link => link.characterId)
-  const allChars = db.select().from(schema.characters).all()
-    .filter(ch => episodeCharIds.includes(ch.id) && !ch.deletedAt)
+  const referencedCharIds = new Set([...episodeCharIds, ...getStoryboardCharacterIdsForEpisode(episodeId)])
+  const allCharsFull = db.select().from(schema.characters).all()
+  const charsForEpisode = [...referencedCharIds]
+    .map(id => allCharsFull.find(ch => ch.id === id))
+    .filter((ch): ch is NonNullable<typeof ch> => !!ch && (!ch.deletedAt || referencedCharIds.has(ch.id)))
 
-  return success(c, rows.map((row) => ({
-    ...toSnakeCase(row),
-    character_ids: charIdsByStoryboard.get(row.id) || [],
-    characters: allChars
-      .filter(ch => (charIdsByStoryboard.get(row.id) || []).includes(ch.id))
-      .map(ch => toSnakeCase(ch)),
-  })))
+  return success(c, rows.map((row) => {
+    const resolvedIds = resolveCharacterIdsForEpisode(access.drama!.id, charIdsByStoryboard.get(row.id) || [])
+    return {
+      ...toSnakeCase(row),
+      character_ids: resolvedIds,
+      characters: charsForEpisode
+        .filter(ch => resolvedIds.includes(ch.id))
+        .map(ch => toSnakeCase(ch)),
+    }
+  }))
 })
 
 // GET /episodes/:id/pipeline-status — 流水线进度
@@ -268,5 +291,7 @@ app.get('/:id/activity-logs', async (c) => {
   const result = listEpisodeActivityLogs(episodeId, { limit, offset })
   return success(c, result)
 })
+
+app.route('/', shotPlans)
 
 export default app

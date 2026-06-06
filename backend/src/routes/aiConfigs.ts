@@ -29,11 +29,12 @@ const HUOBAO_PRESET_SERVICES = [
 ] as const
 
 const HUOBAO_AGENT_DEFAULTS = [
-  { agentType: 'script_rewriter', name: '剧本改写' },
-  { agentType: 'extractor', name: '角色场景提取' },
-  { agentType: 'storyboard_breaker', name: '分镜拆解' },
-  { agentType: 'voice_assigner', name: '音色分配' },
-  { agentType: 'grid_prompt_generator', name: '图片提示词生成' },
+  { agentType: 'script_rewriter', name: '剧本改写', maxTokens: 4096 },
+  { agentType: 'extractor', name: '角色场景提取', maxTokens: 4096 },
+  { agentType: 'shot_plan_generator', name: '工业镜头列表', maxTokens: 32768 },
+  { agentType: 'storyboard_breaker', name: '分镜拆解', maxTokens: 4096 },
+  { agentType: 'voice_assigner', name: '音色分配', maxTokens: 4096 },
+  { agentType: 'grid_prompt_generator', name: '图片提示词生成', maxTokens: 4096 },
 ] as const
 
 const HUOBAO_AGENT_MODEL = 'gemini-3-pro-preview'
@@ -295,7 +296,7 @@ app.post('/huobao-preset', async (c) => {
         name: agent.name,
         systemPrompt: '',
         temperature: 0.7,
-        maxTokens: 4096,
+        maxTokens: agent.maxTokens,
         maxIterations: 10,
         isActive: true,
         createdAt: ts,

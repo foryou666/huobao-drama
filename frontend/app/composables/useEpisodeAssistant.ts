@@ -38,7 +38,7 @@ const STEP_AGENT: Record<string, string | null> = {
   'script:rewrite': 'script_rewriter',
   'script:extract': 'extractor',
   'script:voice': 'voice_assigner',
-  'script:storyboard': 'storyboard_breaker',
+  'script:storyboard': 'shot_plan_generator',
   'prod:chars': 'grid_prompt_generator',
   'prod:scenes': 'grid_prompt_generator',
   'prod:dubbing': 'voice_assigner',
@@ -69,9 +69,9 @@ export const ASSISTANT_QUICK_CHIPS: Record<string, string[]> = {
   'script:extract': ['补全遗漏角色并去重保存', '合并重复场景'],
   'script:voice': ['按性格重新分配音色', '女主换更甜的声音'],
   'script:storyboard': [
-    '按工业格式重写全部 video_prompt',
-    '只改选中镜头的 video_prompt，不要全量重生成',
-    '钩子镜再强一点',
+    '读取剧本并生成完整工业镜头列表并导入',
+    '重新生成全部镜头列表',
+    '加强集末悬念钩子镜头',
   ],
   'prod:chars': ['生成所有角色图片', '重新生成没有图片的角色', '优化所有角色 image_prompt'],
   'prod:scenes': ['生成所有场景图片', '重新生成缺失的场景图', '优化场景 image_prompt'],
@@ -301,6 +301,9 @@ export function useEpisodeAssistant(
         }
       }
       if (type === 'storyboard_breaker' && /超时|空响应|连接中断/i.test(message)) {
+        onDataChanged?.()
+      }
+      if (type === 'shot_plan_generator' && /超时|空响应|连接中断/i.test(message)) {
         onDataChanged?.()
       }
     } finally {

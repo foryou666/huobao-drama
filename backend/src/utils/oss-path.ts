@@ -26,6 +26,14 @@ export function projectAssetObjectKey(dramaId: number, localPath: string): strin
   return projectObjectKey(dramaId, 'asset', basename)
 }
 
+/** 视频参考图（团队级，可选项目标签仅作 metadata）：reference/{文件名} */
+export function referenceUploadObjectKey(localPath: string): string {
+  const basename = path.basename(normalizeStaticPath(localPath))
+  const globalPrefix = ossKeyPrefix()
+  const joined = `reference/${basename}`
+  return globalPrefix ? `${globalPrefix}/${joined}` : joined
+}
+
 function getStoryboardDramaId(storyboardId: number): number | null {
   const [sb] = db.select({ episodeId: schema.storyboards.episodeId })
     .from(schema.storyboards)

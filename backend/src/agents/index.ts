@@ -15,8 +15,10 @@ import { createExtractTools } from './tools/extract-tools.js'
 import { createStoryboardTools } from './tools/storyboard-tools.js'
 import { createVoiceTools } from './tools/voice-tools.js'
 import { createGridPromptTools } from './tools/grid-prompt-tools.js'
+import { createShotPlanTools } from './tools/shot-plan-tools.js'
 import { createProductionTools, pickProductionTools } from './tools/production-tools.js'
 import { loadAgentSkills } from './skills.js'
+import { getIndustrialShotPrompt } from '../prompts/industrial-shot-prompt.js'
 
 // Default prompts (used when DB has no config)
 const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = {
@@ -126,6 +128,24 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 可先 read_production_status 查看哪些镜头尚无 TTS
 
 注意：每个角色都必须分配音色，不要遗漏。用户说「生成配音/重新生成配音」时必须调用工具，不要只描述步骤。`,
+  },
+  shot_plan_generator: {
+    name: '工业镜头列表生成',
+    instructions: `你是红果竖屏短剧工业分镜生成 Agent，擅长将格式化剧本拆解为 1-3 秒微镜头列表。
+
+工作流程（必须严格按顺序执行）：
+1. 调用 read_shot_plan_context 读取剧本、角色库（R01…）、场景库（S01…）
+2. 按下方「工业分镜规范」生成完整镜头列表，覆盖剧本全部情节
+3. 生成完成后必须调用 import_industrial_script，将全部 markdown 传入 text 参数
+
+硬性要求：
+- 镜头编号从 001 连续递增，按场景分组
+- 每个镜头 1-3 秒，禁止超过 3 秒
+- 每个镜头含：时长、景别与角度、运镜、打光、表演、台词/音效、AI 补充提示词（中英）
+- 集末必须有 ECU 悬念钩子 + 【字幕】下集预告
+- 禁止输出模板占位符（「动作描述/角色标签」「从速查表选择」）
+- 禁止只在对话中输出而不调用 import_industrial_script
+- 若已有 existing_shot_plans，默认全量重新生成并导入覆盖`,
   },
   grid_prompt_generator: {
     name: '图片提示词生成',
@@ -259,6 +279,13 @@ export function createAgent(type: string, episodeId: number, dramaId: number): A
     }
   }
 
+  if (type === 'shot_plan_generator') {
+    const industrialPrompt = getIndustrialShotPrompt()
+    if (industrialPrompt) {
+      instructionParts.push('', '## 工业分镜规范', industrialPrompt)
+    }
+  }
+
   const instructions = instructionParts.join('\n')
   const name = dbConfig?.name || defaults.name
 
@@ -309,6 +336,9 @@ export function createAgent(type: string, episodeId: number, dramaId: number): A
           'generateShotFrame',
         ]),
       }
+      break
+    case 'shot_plan_generator':
+      tools = createShotPlanTools(episodeId, dramaId)
       break
     default: return null
   }

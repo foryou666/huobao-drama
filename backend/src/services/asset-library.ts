@@ -2,6 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import type { AssetCategory } from '../constants/asset-categories.js'
+import { thumbPathForSource } from '../utils/thumbnail.js'
 
 /** 从资产名称解析场景地点与时间，如「养心殿（日）」「王府书房·夜」 */
 export function parseSceneAssetName(name: string): { location: string; time: string } {
@@ -78,7 +79,7 @@ export function upsertLibraryAsset(input: UpsertAssetInput) {
     category: input.category ?? input.type,
     url,
     localPath,
-    thumbnailUrl: normalizePath(input.thumbnailUrl) || url,
+    thumbnailUrl: normalizePath(input.thumbnailUrl) || (url ? thumbPathForSource(url) : null),
     sourceType: input.sourceType ?? 'manual',
     sourceId: input.sourceId ?? null,
     imageGenId: input.imageGenId ?? null,
@@ -98,6 +99,42 @@ export function upsertLibraryAsset(input: UpsertAssetInput) {
     createdAt: ts,
   }).run()
   return Number(res.lastInsertRowid)
+}
+
+function formatReferenceAssetName(originalName?: string | null): string {
+  const base = String(originalName || '参考图').trim()
+  const stem = base.replace(/\.[^.]+$/, '') || '参考图'
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  return `参考图-${stem}-${stamp}`
+}
+
+/** 视频参考图上传默认入库（团队级，可选 drama 标签，不同步角色/场景） */
+export function createReferenceUploadAsset(input: {
+  dramaId?: number | null
+  localPath: string
+  originalName?: string | null
+}): number {
+  const localPath = normalizePath(input.localPath)
+  if (!localPath) throw new Error('localPath is required')
+
+  const [existing] = db.select().from(schema.assets).where(
+    and(
+      eq(schema.assets.localPath, localPath),
+      eq(schema.assets.type, 'reference'),
+      isNull(schema.assets.deletedAt),
+    ),
+  ).all()
+  if (existing) return existing.id
+
+  return upsertLibraryAsset({
+    dramaId: input.dramaId ?? null,
+    name: formatReferenceAssetName(input.originalName),
+    type: 'reference',
+    category: 'reference',
+    url: localPath,
+    localPath,
+    sourceType: 'reference_upload',
+  })
 }
 
 export function syncCharacterAsset(characterId: number) {

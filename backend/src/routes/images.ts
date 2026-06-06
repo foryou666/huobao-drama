@@ -53,6 +53,7 @@ app.post('/', async (c) => {
       size: body.size,
       referenceImages: body.reference_images,
       frameType: body.frame_type,
+      imageType: body.image_type,
       configId,
       creditTransactionId: billed.charge.transactionId,
     })

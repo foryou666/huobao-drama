@@ -97,7 +97,10 @@ export function buildStudioDisplayItems(binding, prompt, chars, scenes) {
   const sb = bindingToStoryboard(binding)
   const helpers = createStudioHelpers(binding)
   return buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helpers)
-    .filter(item => item.type === 'image' && item.source !== 'first_frame' && item.source !== 'last_frame')
+    .filter(item => item.type === 'image'
+      && item.source !== 'first_frame'
+      && item.source !== 'last_frame'
+      && item.source !== 'reference')
 }
 
 export function buildStudioContentRefs(binding, prompt, chars, scenes) {

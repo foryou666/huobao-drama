@@ -139,10 +139,49 @@ export const storyboards = sqliteTable('storyboards', {
   subtitleUrl: text('subtitle_url'),
   composedVideoUrl: text('composed_video_url'),
   status: text('status').default('pending'),
+  promptStatus: text('prompt_status').default('empty'),
+  clipSource: text('clip_source'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
 })
+
+export const shotPlans = sqliteTable('shot_plans', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  episodeId: integer('episode_id').notNull(),
+  shotNumber: integer('shot_number').notNull(),
+  title: text('title'),
+  sceneId: integer('scene_id'),
+  location: text('location'),
+  time: text('time'),
+  action: text('action'),
+  dialogue: text('dialogue'),
+  dialogueType: text('dialogue_type').default('dialogue'),
+  duration: real('duration').default(2),
+  description: text('description'),
+  industrialBlock: text('industrial_block'),
+  source: text('source').default('manual'),
+  status: text('status').default('draft'),
+  sortOrder: integer('sort_order').default(0),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  deletedAt: text('deleted_at'),
+})
+
+export const shotPlanCharacters = sqliteTable('shot_plan_characters', {
+  shotPlanId: integer('shot_plan_id').notNull(),
+  characterId: integer('character_id').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.shotPlanId, table.characterId] }),
+}))
+
+export const shotClipPlans = sqliteTable('shot_clip_plans', {
+  storyboardId: integer('storyboard_id').notNull(),
+  shotPlanId: integer('shot_plan_id').notNull(),
+  orderInClip: integer('order_in_clip').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.storyboardId, table.shotPlanId] }),
+}))
 
 export const storyboardCharacters = sqliteTable('storyboard_characters', {
   storyboardId: integer('storyboard_id').notNull(),

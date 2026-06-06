@@ -166,6 +166,15 @@ p { line-height: 1.75; }
 }
 .btn-ghost:hover { background: var(--bg-hover); border-color: transparent; color: var(--text-0); box-shadow: none; }
 .btn-sm { padding: 4px 10px; font-size: 12px; gap: var(--sp-1); }
+.btn.danger {
+  color: #ef5350;
+  border-color: rgba(239, 83, 80, 0.35);
+}
+.btn.danger:hover {
+  background: rgba(239, 83, 80, 0.08);
+  border-color: rgba(239, 83, 80, 0.5);
+  color: #ef5350;
+}
 .btn-icon { padding: 0; width: 32px; height: 32px; border-radius: var(--radius); }
 
 /* === Inputs === */

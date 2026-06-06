@@ -23,6 +23,9 @@ export function useAgent() {
       if (type === 'storyboard_breaker' && /超时|空响应|连接中断/i.test(message)) {
         onDone?.()
       }
+      if (type === 'shot_plan_generator' && /超时|空响应|连接中断/i.test(message)) {
+        onDone?.()
+      }
     } finally {
       running.value = false
       runningType.value = null

@@ -33,6 +33,7 @@ const MUTATING_TOOLS = new Set([
   'save_script',
   'save_storyboards',
   'update_storyboard',
+  'import_industrial_script',
   'save_dedup_characters',
   'save_dedup_scenes',
   'assign_voice',

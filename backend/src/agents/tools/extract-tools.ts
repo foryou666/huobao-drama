@@ -14,6 +14,7 @@ import { eq, and } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { syncCharacterAsset, syncSceneAsset } from '../../services/asset-library.js'
+import { repairEpisodeSceneLinks } from '../../utils/scene-redirect.js'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 function linkCharToEpisode(episodeId: number, characterId: number) {
@@ -233,6 +234,8 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           results.created++
         }
       }
+
+      repairEpisodeSceneLinks(episodeId, dramaId)
 
       const payload = {
         message: `场景保存完成：新增 ${results.created}，复用已有 ${results.reused}`,

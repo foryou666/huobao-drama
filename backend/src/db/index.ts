@@ -384,7 +384,53 @@ ensureColumn('storyboards', 'character_image_refs', 'TEXT')
 ensureColumn('storyboards', 'blocking_image', 'TEXT')
 ensureColumn('storyboards', 'blocking_layout', 'TEXT')
 ensureColumn('storyboards', 'scene_angle_id', 'TEXT')
+ensureColumn('storyboards', 'prompt_status', "TEXT DEFAULT 'empty'")
+ensureColumn('storyboards', 'clip_source', 'TEXT')
 ensureColumn('scenes', 'reference_images', 'TEXT')
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS shot_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id INTEGER NOT NULL,
+    shot_number INTEGER NOT NULL,
+    title TEXT,
+    scene_id INTEGER,
+    location TEXT,
+    time TEXT,
+    action TEXT,
+    dialogue TEXT,
+    dialogue_type TEXT DEFAULT 'dialogue',
+    duration REAL DEFAULT 2,
+    description TEXT,
+    industrial_block TEXT,
+    source TEXT DEFAULT 'manual',
+    status TEXT DEFAULT 'draft',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_shot_plans_episode_id ON shot_plans (episode_id);
+
+  CREATE TABLE IF NOT EXISTS shot_plan_characters (
+    shot_plan_id INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    PRIMARY KEY (shot_plan_id, character_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_shot_plan_characters_plan_id ON shot_plan_characters (shot_plan_id);
+
+  CREATE TABLE IF NOT EXISTS shot_clip_plans (
+    storyboard_id INTEGER NOT NULL,
+    shot_plan_id INTEGER NOT NULL,
+    order_in_clip INTEGER NOT NULL,
+    PRIMARY KEY (storyboard_id, shot_plan_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_shot_clip_plans_storyboard_id ON shot_clip_plans (storyboard_id);
+  CREATE INDEX IF NOT EXISTS idx_shot_clip_plans_shot_plan_id ON shot_clip_plans (shot_plan_id);
+`)
 ensureColumn('assets', 'source_type', 'TEXT')
 ensureColumn('assets', 'source_id', 'INTEGER')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')

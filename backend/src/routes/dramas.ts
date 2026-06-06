@@ -282,14 +282,23 @@ app.get('/:id', async (c) => {
   })
 })
 
+const DRAMA_ADMIN_UPDATE_KEYS = [
+  'title', 'description', 'genre', 'style', 'status', 'tags', 'metadata', 'director_style',
+] as const
+
 // PUT /dramas/:id - Update drama
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const [existing] = db.select().from(schema.dramas).where(eq(schema.dramas.id, id)).all()
   if (!existing) return notFound(c, '剧本不存在')
-  const denied = assertDramaAdminAccess(c, existing)
-  if (denied) return denied
+  const teamDenied = assertDramaTeamAccess(c, existing)
+  if (teamDenied) return teamDenied
   const body = await c.req.json()
+  const needsAdmin = DRAMA_ADMIN_UPDATE_KEYS.some(key => body[key] !== undefined)
+  if (needsAdmin) {
+    const adminDenied = assertDramaAdminAccess(c, existing)
+    if (adminDenied) return adminDenied
+  }
   const updates: Record<string, any> = { updatedAt: now() }
   if (body.title !== undefined) updates.title = body.title
   if (body.description !== undefined) updates.description = body.description

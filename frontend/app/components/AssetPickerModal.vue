@@ -22,7 +22,12 @@
           :class="{ selected: selectedItem?.id === item.id }"
           @click="onItemClick(item)"
         >
-          <img :src="'/' + normalizePath(item.url || item.local_path || item.localPath)" :alt="item.name" />
+          <GridMediaImage
+            :src="item.url || item.local_path || item.localPath"
+            :thumb="item.thumbnail_url || item.thumbnailUrl"
+            :alt="item.name"
+            :placeholder="String(item.name || '?').slice(0, 1)"
+          />
           <span class="asset-picker-name">{{ item.name }}</span>
           <span class="asset-picker-tag">{{ assetCategoryLabel(item.type) }}</span>
         </button>
@@ -64,11 +69,13 @@
 <script setup>
 import { assetAPI } from '~/composables/useApi'
 import { assetCategoryLabel } from '~/utils/asset-categories.js'
+import GridMediaImage from '~/components/GridMediaImage.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   type: { type: String, default: 'character' },
   dramaId: { type: Number, default: null },
+  extraItems: { type: Array, default: () => [] },
   title: { type: String, default: '从资产库选择' },
   confirmBeforeSelect: { type: Boolean, default: false },
   confirmLabel: { type: String, default: '确认' },
@@ -89,13 +96,23 @@ const selectedItem = ref(null)
 const customPrompt = ref('')
 
 const subtitleText = computed(() => {
+  if (props.type === 'reference') return '团队共享参考图；选项目时可筛该项目 + 通用参考图'
   if (props.confirmBeforeSelect) return '选择服装后点击确认，将基于角色基准图重新生成换装图'
   return '仅显示有图片的资产'
 })
 
 const filteredItems = computed(() => {
   const q = keyword.value.trim().toLowerCase()
-  return items.value.filter(item => {
+  const merged = [...props.extraItems, ...items.value]
+  const seen = new Set()
+  const unique = []
+  for (const item of merged) {
+    const key = normalizePath(item.url || item.local_path || item.localPath)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    unique.push(item)
+  }
+  return unique.filter(item => {
     const url = item.url || item.local_path || item.localPath
     if (!url) return false
     if (!q) return true
@@ -111,11 +128,13 @@ async function load() {
   loading.value = true
   try {
     const params = { type: props.type }
-    if (props.dramaId) params.drama_id = props.dramaId
+    if (props.dramaId && props.type !== 'reference') params.drama_id = props.dramaId
     const res = await assetAPI.list(params)
-    items.value = Array.isArray(res) ? res : []
-  } catch {
+    const rows = Array.isArray(res) ? res : (res?.items || res?.data || [])
+    items.value = Array.isArray(rows) ? rows : []
+  } catch (err) {
     items.value = []
+    console.error('[AssetPickerModal] load failed', err)
   } finally {
     loading.value = false
   }
@@ -204,6 +223,12 @@ watch(() => [props.open, props.type, props.dramaId], ([isOpen]) => {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px rgba(76, 125, 255, 0.25);
   background: var(--accent-bg);
+}
+.asset-picker-item :deep(.grid-media-image),
+.asset-picker-item :deep(.grid-media-empty) {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 6px;
 }
 .asset-picker-item img {
   width: 100%;
