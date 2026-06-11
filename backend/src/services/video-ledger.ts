@@ -1,4 +1,5 @@
 import { db, schema } from '../db/index.js'
+import { eq } from 'drizzle-orm'
 import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
@@ -49,6 +50,44 @@ export interface VideoLedgerQuery {
   keyword?: string
   limit?: number
   offset?: number
+  mineOnly?: boolean
+}
+
+function buildVideoOwnerMaps() {
+  const creditTxUser = new Map<number, number>()
+  for (const tx of db.select({
+    id: schema.creditTransactions.id,
+    userId: schema.creditTransactions.userId,
+  }).from(schema.creditTransactions).all()) {
+    creditTxUser.set(tx.id, tx.userId)
+  }
+
+  const generationOwner = new Map<number, number>()
+  for (const log of db.select().from(schema.activityLogs)
+    .where(eq(schema.activityLogs.action, 'video.generate')).all()) {
+    if (!log.metadata) continue
+    try {
+      const meta = JSON.parse(log.metadata)
+      const genId = Number(meta.generation_id)
+      if (Number.isFinite(genId) && genId > 0) {
+        generationOwner.set(genId, log.userId)
+      }
+    } catch { /* ignore */ }
+  }
+
+  return { creditTxUser, generationOwner }
+}
+
+function resolveVideoOwnerUserId(
+  row: typeof schema.videoGenerations.$inferSelect,
+  maps: ReturnType<typeof buildVideoOwnerMaps>,
+): number | null {
+  if (row.userId) return row.userId
+  if (row.creditTransactionId) {
+    const fromTx = maps.creditTxUser.get(row.creditTransactionId)
+    if (fromTx) return fromTx
+  }
+  return maps.generationOwner.get(row.id) ?? null
 }
 
 function buildAccessibleDramaIds(user: AuthUser, activeTeamId: number | null | undefined): Set<number> {
@@ -102,6 +141,11 @@ export function listVideoLedger(query: VideoLedgerQuery) {
   if (query.keyword?.trim()) {
     const kw = query.keyword.trim().toLowerCase()
     rows = rows.filter(r => String(r.prompt || '').toLowerCase().includes(kw))
+  }
+
+  const ownerMaps = query.mineOnly ? buildVideoOwnerMaps() : null
+  if (query.mineOnly) {
+    rows = rows.filter(r => resolveVideoOwnerUserId(r, ownerMaps!) === query.user.id)
   }
 
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))

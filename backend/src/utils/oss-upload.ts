@@ -5,7 +5,15 @@ import fs from 'fs'
 import path from 'path'
 import OSS from 'ali-oss'
 import { eq, or } from 'drizzle-orm'
-import { getAbsolutePath } from './storage.js'
+import {
+  CHENGMENT_REF_IMAGE_MAX_BYTES,
+  CHENGMENT_REF_IMAGE_MAX_HEIGHT,
+  CHENGMENT_REF_IMAGE_MAX_WIDTH,
+  CHENGMENT_REF_IMAGE_QUALITY,
+  CHENGMENT_REF_IMAGE_REUPLOAD_BYTES,
+} from '../constants/chengmeng.js'
+import { compressLocalImageFile, getAbsolutePath, isLocalImageFile } from './storage.js'
+import { isImageStaticPath } from './thumbnail.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
 import { now } from './response.js'
 import { db, schema } from '../db/index.js'
@@ -135,13 +143,46 @@ export function signOssObjectKey(objectKey: string): string {
   }))
 }
 
-/** 上传本地文件到指定 OSS objectKey（覆盖写入） */
+async function compressImageForOss(absPath: string) {
+  return compressLocalImageFile(absPath, {
+    maxWidth: CHENGMENT_REF_IMAGE_MAX_WIDTH,
+    maxHeight: CHENGMENT_REF_IMAGE_MAX_HEIGHT,
+    quality: CHENGMENT_REF_IMAGE_QUALITY,
+    maxBytes: CHENGMENT_REF_IMAGE_MAX_BYTES,
+  })
+}
+
+/** 上传本地文件到指定 OSS objectKey（覆盖写入）；图片自动压缩为 JPEG */
 export async function putLocalFileToOss(absPath: string, objectKey: string): Promise<void> {
+  const compressed = await compressImageForOss(absPath)
+  if (compressed) {
+    const originalBytes = fs.statSync(absPath).size
+    await getClient().put(objectKey, compressed.buffer, {
+      headers: {
+        'Content-Type': compressed.contentType,
+      },
+    })
+    logTaskProgress('OSS', 'uploaded-compressed-image', {
+      objectKey,
+      originalBytes,
+      compressedBytes: compressed.buffer.length,
+    })
+    return
+  }
+
   await getClient().put(objectKey, absPath, {
     headers: {
       'Content-Type': mimeFromPath(absPath),
     },
   })
+}
+
+async function ensureCompressedOssImage(staticPath: string, objectKey: string): Promise<void> {
+  const absPath = getAbsolutePath(staticPath)
+  if (!fs.existsSync(absPath) || !isLocalImageFile(absPath)) return
+  const originalBytes = fs.statSync(absPath).size
+  if (originalBytes <= CHENGMENT_REF_IMAGE_REUPLOAD_BYTES) return
+  await putLocalFileToOss(absPath, objectKey)
 }
 
 /**
@@ -185,6 +226,9 @@ export async function resolveMediaUrlForExternalApi(value: string | null | undef
     try {
       const mappedKey = lookupOssObjectKey(staticPath)
       if (mappedKey) {
+        if (isImageStaticPath(staticPath)) {
+          await ensureCompressedOssImage(staticPath, mappedKey)
+        }
         return signOssObjectKey(mappedKey)
       }
       return await uploadStaticToOss(staticPath)

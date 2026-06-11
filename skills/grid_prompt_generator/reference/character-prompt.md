@@ -3,17 +3,18 @@
 ## 模板结构
 
 ```
-A [gender] [age] character, [name], [body type], [facial features].
-[Hair description]. [Clothing details].
-[Pose and expression]. [Background: simple/gradient].
-Style: [art style], high quality, detailed, character concept art.
+[角色名]，[外貌/服装/体态/气质描述]，电影级人物定妆照。真人电影角色定妆照，白色纯背景，左侧为面部特写，右侧为全身三视图（正面、侧面、背面），人物完整入画，无遮挡，站姿自然
 ```
+
+## 生成规则
+
+- 以 `appearance`（外貌描述）为核心，补充发型、服装、年龄感、体态
+- 必须保留四视图定妆照构图要求，不要改成单人肖像或插画立绘
+- 背景固定为白色纯背景
+- 左侧面部特写 + 右侧全身三视图（正/侧/背）必须在同一张图内完成
 
 ## 示例
 
 ```
-A young woman in her early 20s, Li Mei, slender build, delicate oval face with bright almond eyes.
-Long black hair flowing over shoulders with subtle waves. Wearing a vintage blue qipao with floral embroidery.
-Standing confidently with a slight smile, one hand on hip. Background: soft gradient.
-Style: cinematic anime, high quality, detailed, character concept art.
+李明，28岁男性，短发，深色西装，身形挺拔，气质沉稳，电影级人物定妆照。真人电影角色定妆照，白色纯背景，左侧为面部特写，右侧为全身三视图（正面、侧面、背面），人物完整入画，无遮挡，站姿自然
 ```

@@ -11,10 +11,12 @@ import {
   ensureSceneFromManualSceneAsset,
   syncDramaAssets,
   syncEntityFromAsset,
+  resolveAssetDisplayMedia,
   upsertLibraryAsset,
 } from '../services/asset-library.js'
 import { saveUploadedFile } from '../utils/storage.js'
-import { syncCharacterPrimaryImage, syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
+import { syncCharacterPrimaryImage, syncProjectAsset, syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
+import { isOssConfigured } from '../utils/oss-upload.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import {
@@ -23,6 +25,16 @@ import {
   resolveMediaFilePath,
 } from '../utils/audio-duration.js'
 import fs from 'fs'
+import path from 'path'
+import { thumbPathForSource } from '../utils/thumbnail.js'
+
+const IMAGE_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
+
+function isUploadableImage(file: File): boolean {
+  if (file.type?.startsWith('image/')) return true
+  const ext = path.extname(file.name || '').toLowerCase()
+  return IMAGE_UPLOAD_EXTS.has(ext)
+}
 
 const app = new Hono()
 
@@ -49,7 +61,16 @@ app.get('/', async (c) => {
     )
   }
   rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-  return success(c, toSnakeCaseArray(rows))
+  const enriched = rows.map((row) => {
+    const media = resolveAssetDisplayMedia(row)
+    return toSnakeCase({
+      ...row,
+      url: media.url ?? row.url,
+      localPath: media.localPath ?? row.localPath,
+      thumbnailUrl: media.thumbnailUrl ?? row.thumbnailUrl,
+    })
+  })
+  return success(c, enriched)
 })
 
 app.post('/', async (c) => {
@@ -151,6 +172,9 @@ app.post('/upload', async (c) => {
       duration: Math.round(duration),
       fileSize: buffer.byteLength,
     })
+    if (dramaId && isOssConfigured()) {
+      await syncProjectAsset(dramaId, path).catch(() => {})
+    }
     const [row] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()
     return created(c, toSnakeCase(row))
   }
@@ -222,6 +246,101 @@ app.post('/sync', async (c) => {
   return success(c, { synced })
 })
 
+app.post('/:id/upload', async (c) => {
+  const id = Number(c.req.param('id'))
+  const [row] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()
+  if (!row || row.deletedAt) return badRequest(c, 'Asset not found')
+
+  const body = await c.req.parseBody()
+  const file = body['file']
+  if (!file || !(file instanceof File)) return badRequest(c, 'file is required')
+
+  const mime = String(file.type || '').toLowerCase()
+  const lowerName = String(file.name || '').toLowerCase()
+
+  if (row.type === 'voice') {
+    const isMp3 = mime.includes('mpeg') || mime.includes('mp3') || lowerName.endsWith('.mp3')
+    if (!isMp3) return badRequest(c, '音色库仅支持 MP3 文件')
+    const buffer = await file.arrayBuffer()
+    const savedPath = await saveUploadedFile(buffer, 'assets', file.name)
+    const duration = await getAudioDurationSeconds(savedPath)
+    const durationError = validateVoiceRefDuration(duration)
+    if (durationError) {
+      const abs = resolveMediaFilePath(savedPath)
+      if (abs && fs.existsSync(abs)) fs.unlinkSync(abs)
+      return badRequest(c, durationError)
+    }
+    db.update(schema.assets).set({
+      url: savedPath,
+      localPath: savedPath,
+      mimeType: mime || 'audio/mpeg',
+      duration: Math.round(duration),
+      fileSize: buffer.byteLength,
+      thumbnailUrl: null,
+      updatedAt: now(),
+    }).where(eq(schema.assets.id, id)).run()
+    if (row.dramaId && isOssConfigured()) {
+      await syncProjectAsset(row.dramaId, savedPath).catch(() => {})
+    }
+  } else {
+    if (!isUploadableImage(file)) return badRequest(c, '仅支持 JPG / PNG / WebP / GIF 等图片文件')
+    const buffer = await file.arrayBuffer()
+    const savedPath = await saveUploadedFile(buffer, 'assets', file.name)
+    db.update(schema.assets).set({
+      url: savedPath,
+      localPath: savedPath,
+      thumbnailUrl: thumbPathForSource(savedPath),
+      mimeType: mime || null,
+      fileSize: buffer.byteLength,
+      updatedAt: now(),
+    }).where(eq(schema.assets.id, id)).run()
+  }
+
+  const linked = syncEntityFromAsset(id)
+  let [next] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()
+  if ((!next || next.deletedAt) && linked) {
+    ;[next] = db.select().from(schema.assets).where(
+      and(
+        eq(schema.assets.sourceType, linked.type),
+        eq(schema.assets.sourceId, linked.id),
+        isNull(schema.assets.deletedAt),
+      ),
+    ).all()
+  }
+  let ossWarning: string | undefined
+  if (linked?.type === 'scene') {
+    const imagePath = next?.url || next?.localPath
+    if (imagePath) {
+      try {
+        await syncScenePrimaryImage(linked.id, String(imagePath))
+      } catch (err: any) {
+        ossWarning = err?.message || String(err)
+      }
+    }
+  } else if (linked?.type === 'character') {
+    const imagePath = next?.url || next?.localPath
+    if (imagePath) {
+      try {
+        await syncCharacterPrimaryImage(linked.id, String(imagePath))
+      } catch (err: any) {
+        ossWarning = err?.message || String(err)
+      }
+    }
+  }
+
+  logActivity(getAuthUser(c), {
+    action: 'asset.upload',
+    summary: `重新上传资产：${row.name}`,
+    resourceType: 'asset',
+    resourceId: id,
+    dramaId: row.dramaId ?? undefined,
+  })
+  return success(c, {
+    ...toSnakeCase(next),
+    oss_warning: ossWarning,
+  })
+})
+
 app.put('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const body = await c.req.json()
@@ -229,7 +348,11 @@ app.put('/:id', async (c) => {
   if (!row || row.deletedAt) return badRequest(c, 'Asset not found')
 
   const updates: Record<string, unknown> = { updatedAt: now() }
-  if (body.name !== undefined) updates.name = String(body.name).trim()
+  if (body.name !== undefined) {
+    const nextName = String(body.name).trim()
+    if (!nextName) return badRequest(c, 'name is required')
+    updates.name = nextName
+  }
   if (body.description !== undefined) updates.description = body.description
   if (body.type !== undefined) {
     if (!isAssetCategory(body.type)) return badRequest(c, '无效的资产分类')

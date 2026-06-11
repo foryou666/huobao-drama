@@ -1,12 +1,15 @@
 {
   "name": "huobao-drama-frontend",
+  "version": "2.0.4",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --host 0.0.0.0 --port 3013",
     "build": "nuxt build",
     "generate": "nuxt generate",
-    "generate:dist": "nuxt generate && node scripts/sync-dist.mjs",
+    "generate:dist": "node scripts/write-build-meta.mjs && nuxt generate && node scripts/sync-dist.mjs",
+    "backup:dist": "node scripts/backup-dist.mjs",
+    "restore:dist": "node scripts/restore-dist.mjs",
     "preview": "nuxt preview",
     "postinstall": "nuxt prepare"
   },

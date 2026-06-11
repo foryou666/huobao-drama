@@ -9,12 +9,34 @@ import { joinProviderUrl } from './adapters/url.js'
 export type ServiceType = 'text' | 'image' | 'video' | 'audio'
 
 export interface AIConfig {
+  id?: number
   provider: string
   baseUrl: string
   apiKey: string
   model: string
   models?: string[]
   settings?: Record<string, unknown>
+}
+
+function rowToAIConfig(row: typeof schema.aiServiceConfigs.$inferSelect): AIConfig {
+  const models = row.model ? JSON.parse(row.model) : []
+  let settings: Record<string, unknown> | undefined
+  if (row.settings) {
+    try {
+      settings = JSON.parse(row.settings)
+    } catch {
+      settings = undefined
+    }
+  }
+  return {
+    id: row.id,
+    provider: row.provider || '',
+    baseUrl: row.baseUrl,
+    apiKey: row.apiKey,
+    model: models[0] || '',
+    models,
+    settings,
+  }
 }
 
 export function getTextProviderBaseUrl(config: AIConfig) {
@@ -65,22 +87,7 @@ export function getActiveConfig(serviceType: ServiceType): AIConfig | null {
     model: models[0] || '',
     priority: active.priority,
   })
-  let settings: Record<string, unknown> | undefined
-  if (active.settings) {
-    try {
-      settings = JSON.parse(active.settings)
-    } catch {
-      settings = undefined
-    }
-  }
-  return {
-    provider: active.provider || '',
-    baseUrl: active.baseUrl,
-    apiKey: active.apiKey,
-    model: models[0] || '',
-    models,
-    settings,
-  }
+  return rowToAIConfig(active)
 }
 
 export function getTextConfig(): AIConfig {
@@ -103,34 +110,66 @@ export function getAudioConfigById(id?: number | null): AIConfig {
   return getAudioConfig()
 }
 
-export function getConfigById(id: number): AIConfig | null {
+export function getConfigById(id: number, options?: { includeInactive?: boolean }): AIConfig | null {
   const [row] = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.id, id)).all()
-  if (!row || !row.isActive) {
-    logTaskWarn('AIConfig', 'config-by-id-missing', { configId: id })
+  if (!row || (!row.isActive && !options?.includeInactive)) {
+    logTaskWarn('AIConfig', 'config-by-id-missing', { configId: id, includeInactive: !!options?.includeInactive })
     return null
   }
-  const models = row.model ? JSON.parse(row.model) : []
   logTaskProgress('AIConfig', 'config-by-id-selected', {
     configId: id,
     provider: row.provider,
-    model: models[0] || '',
+    model: rowToAIConfig(row).model,
     serviceType: row.serviceType,
+    includeInactive: !!options?.includeInactive,
   })
-  let settings: Record<string, unknown> | undefined
-  if (row.settings) {
-    try {
-      settings = JSON.parse(row.settings)
-    } catch {
-      settings = undefined
-    }
+  return rowToAIConfig(row)
+}
+
+/** 视频任务轮询/恢复时使用：优先任务创建时的 config_id（含已停用配置） */
+export function resolveVideoTaskConfig(record: {
+  configId?: number | null
+  provider?: string | null
+}): AIConfig | null {
+  if (record.configId) {
+    const stored = getConfigById(record.configId, { includeInactive: true })
+    if (stored) return stored
   }
-  return {
-    provider: row.provider || '',
-    baseUrl: row.baseUrl,
-    apiKey: row.apiKey,
-    model: models[0] || '',
-    models,
-    settings,
+  const provider = String(record.provider || '').trim()
+  if (!provider) return getActiveConfig('video')
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
+    .all()
+    .filter(r => r.provider === provider)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+  const match = rows.find(r => r.isActive) || rows[0]
+  return match ? rowToAIConfig(match) : getActiveConfig('video')
+}
+
+/** 橙盟余额不足时，取另一条视频配置作为备用 Key（通常为新账号） */
+export function getFallbackChengmengVideoConfig(excludeConfigId?: number | null): AIConfig | null {
+  const exclude = Number(excludeConfigId)
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .all()
+    .filter(r => r.serviceType === 'video' && r.provider === 'chengmeng')
+    .filter(r => !Number.isFinite(exclude) || r.id !== exclude)
+    .sort((a, b) => (b.id || 0) - (a.id || 0))
+  const row = rows[0]
+  return row ? rowToAIConfig(row) : null
+}
+
+/** 备用 Key 接管后，将其设为唯一启用的橙盟视频配置 */
+export function promoteChengmengVideoConfig(configId: number) {
+  const ts = new Date().toISOString()
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .all()
+    .filter(r => r.serviceType === 'video' && r.provider === 'chengmeng')
+  for (const row of rows) {
+    db.update(schema.aiServiceConfigs)
+      .set({ isActive: row.id === configId, updatedAt: ts })
+      .where(eq(schema.aiServiceConfigs.id, row.id))
+      .run()
   }
+  logTaskProgress('AIConfig', 'chengmeng-config-promoted', { configId })
 }

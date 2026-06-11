@@ -20,6 +20,12 @@ import {
   resolveCharacterImageForStoryboard,
 } from '../../utils/character-image-variants.js'
 import { resolveSceneImageForStoryboard } from '../../utils/scene-image-variants.js'
+import {
+  assertCharacterInEpisode,
+  assertSceneInEpisode,
+  getEpisodeCharacters,
+  getEpisodeScenes,
+} from '../../utils/episode-entity-links.js'
 
 const IGNORE_TTS_SPEAKERS = /^(环境音|环境声|音效|效果音|sfx|sound ?effect|bgm|背景音|背景音乐|ambient)$/i
 const IGNORE_TTS_TEXT = /^(无|无对白|无台词|无旁白|无需配音|无需对白|none|null|n\/a|na|环境音|环境声|音效|效果音|纯音效|纯环境音|只有环境音|仅环境音|背景音|背景音乐|bgm|sfx|ambient)$/i
@@ -154,12 +160,8 @@ export function createProductionTools(episodeId: number, dramaId: number) {
     inputSchema: z.object({}),
     execute: async () => {
       const ep = getEpisode(episodeId)
-      const chars = db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)).all()
-        .filter(c => !c.deletedAt)
-      const scenes = db.select().from(schema.scenes)
-        .where(eq(schema.scenes.dramaId, dramaId)).all()
-        .filter(s => !s.deletedAt)
+      const chars = getEpisodeCharacters(episodeId, dramaId)
+      const scenes = getEpisodeScenes(episodeId, dramaId)
       const sbs = db.select().from(schema.storyboards)
         .where(eq(schema.storyboards.episodeId, episodeId)).all()
         .filter(sb => !sb.deletedAt)
@@ -210,12 +212,14 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const updateCharacterImagePrompt = createTool({
     id: 'update_character_image_prompt',
-    description: '更新角色的 image_prompt（生成图片前可先优化提示词）。',
+    description: '更新当前集关联角色的 image_prompt（生成图片前可先优化提示词）。',
     inputSchema: z.object({
       character_id: z.number(),
       image_prompt: z.string(),
     }),
     execute: async ({ character_id, image_prompt }) => {
+      const scopeErr = assertCharacterInEpisode(episodeId, dramaId, character_id)
+      if (scopeErr) return { error: scopeErr }
       const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, character_id)).all()
       if (!char) return { error: 'Character not found' }
       db.update(schema.characters)
@@ -227,12 +231,14 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const updateSceneImagePrompt = createTool({
     id: 'update_scene_image_prompt',
-    description: '更新场景的 prompt（生成场景图前可先优化提示词）。',
+    description: '更新当前集关联场景的 prompt（生成场景图前可先优化提示词）。',
     inputSchema: z.object({
       scene_id: z.number(),
       prompt: z.string(),
     }),
     execute: async ({ scene_id, prompt }) => {
+      const scopeErr = assertSceneInEpisode(episodeId, dramaId, scene_id)
+      if (scopeErr) return { error: scopeErr }
       const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, scene_id)).all()
       if (!scene) return { error: 'Scene not found' }
       db.update(schema.scenes)
@@ -244,7 +250,7 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const generateCharacterImage = createTool({
     id: 'generate_character_image',
-    description: '为单个角色发起 AI 图片生成（异步，完成后 image_url 会更新）。重新生成也调用此工具。',
+    description: '为当前集关联的单个角色发起 AI 图片生成（异步，完成后 image_url 会更新）。重新生成也调用此工具。',
     inputSchema: z.object({
       character_id: z.number(),
       prompt: z.string().optional(),
@@ -252,6 +258,8 @@ export function createProductionTools(episodeId: number, dramaId: number) {
     execute: async ({ character_id, prompt }) => {
       const ep = getEpisode(episodeId)
       if (!ep) return { error: 'Episode not found' }
+      const scopeErr = assertCharacterInEpisode(episodeId, dramaId, character_id)
+      if (scopeErr) return { error: scopeErr }
       const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, character_id)).all()
       if (!char) return { error: 'Character not found' }
 
@@ -278,7 +286,7 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const batchGenerateCharacterImages = createTool({
     id: 'batch_generate_character_images',
-    description: '批量为多个角色发起图片生成。不传 character_ids 则生成所有尚无图片的角色。',
+    description: '批量为当前集关联的多个角色发起图片生成。不传 character_ids 则生成当前集所有尚无图片的角色。',
     inputSchema: z.object({
       character_ids: z.array(z.number()).optional(),
     }),
@@ -286,13 +294,16 @@ export function createProductionTools(episodeId: number, dramaId: number) {
       const ep = getEpisode(episodeId)
       if (!ep) return { error: 'Episode not found' }
 
-      const allChars = db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)).all()
-        .filter(c => !c.deletedAt)
+      const allChars = getEpisodeCharacters(episodeId, dramaId)
+      const episodeCharIdSet = new Set(allChars.map(c => c.id))
 
-      const targetIds = character_ids?.length
-        ? character_ids
+      const requestedIds = character_ids?.length ? character_ids : null
+      const targetIds = requestedIds?.length
+        ? requestedIds.filter(id => episodeCharIdSet.has(id))
         : allChars.filter(c => !c.imageUrl).map(c => c.id)
+      const skippedIds = requestedIds?.length
+        ? requestedIds.filter(id => !episodeCharIdSet.has(id))
+        : []
 
       const started: number[] = []
       const items: { character_id: number; character_name: string }[] = []
@@ -312,19 +323,23 @@ export function createProductionTools(episodeId: number, dramaId: number) {
       }
       return {
         status: 'processing',
+        episode_id: episodeId,
         requested: targetIds.length,
+        skipped_not_in_episode: skippedIds,
         started: started.length,
         character_ids: items.map(row => row.character_id),
         items,
         image_generation_ids: started,
-        message: `已提交 ${started.length} 个角色图片生成任务`,
+        message: skippedIds.length
+          ? `已提交 ${started.length} 个当前集角色图片生成任务，已忽略 ${skippedIds.length} 个非本集角色`
+          : `已提交 ${started.length} 个当前集角色图片生成任务`,
       }
     },
   })
 
   const generateSceneImage = createTool({
     id: 'generate_scene_image',
-    description: '为单个场景发起 AI 图片生成（异步）。重新生成也调用此工具。',
+    description: '为当前集关联的单个场景发起 AI 图片生成（异步）。重新生成也调用此工具。',
     inputSchema: z.object({
       scene_id: z.number(),
       prompt: z.string().optional(),
@@ -332,6 +347,8 @@ export function createProductionTools(episodeId: number, dramaId: number) {
     execute: async ({ scene_id, prompt }) => {
       const ep = getEpisode(episodeId)
       if (!ep) return { error: 'Episode not found' }
+      const scopeErr = assertSceneInEpisode(episodeId, dramaId, scene_id)
+      if (scopeErr) return { error: scopeErr }
       const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, scene_id)).all()
       if (!scene) return { error: 'Scene not found' }
 
@@ -359,7 +376,7 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const batchGenerateSceneImages = createTool({
     id: 'batch_generate_scene_images',
-    description: '批量为多个场景发起图片生成。不传 scene_ids 则生成所有尚无图片的场景。',
+    description: '批量为当前集关联的多个场景发起图片生成。不传 scene_ids 则生成当前集所有尚无图片的场景。',
     inputSchema: z.object({
       scene_ids: z.array(z.number()).optional(),
     }),
@@ -367,13 +384,16 @@ export function createProductionTools(episodeId: number, dramaId: number) {
       const ep = getEpisode(episodeId)
       if (!ep) return { error: 'Episode not found' }
 
-      const allScenes = db.select().from(schema.scenes)
-        .where(eq(schema.scenes.dramaId, dramaId)).all()
-        .filter(s => !s.deletedAt)
+      const allScenes = getEpisodeScenes(episodeId, dramaId)
+      const episodeSceneIdSet = new Set(allScenes.map(s => s.id))
 
-      const targetIds = scene_ids?.length
-        ? scene_ids
+      const requestedIds = scene_ids?.length ? scene_ids : null
+      const targetIds = requestedIds?.length
+        ? requestedIds.filter(id => episodeSceneIdSet.has(id))
         : allScenes.filter(s => !s.imageUrl).map(s => s.id)
+      const skippedIds = requestedIds?.length
+        ? requestedIds.filter(id => !episodeSceneIdSet.has(id))
+        : []
 
       const started: number[] = []
       const items: { scene_id: number; location: string }[] = []
@@ -393,11 +413,16 @@ export function createProductionTools(episodeId: number, dramaId: number) {
       }
       return {
         status: 'processing',
+        episode_id: episodeId,
         requested: targetIds.length,
+        skipped_not_in_episode: skippedIds,
         started: started.length,
         scene_ids: items.map(row => row.scene_id),
         items,
         image_generation_ids: started,
+        message: skippedIds.length
+          ? `已提交 ${started.length} 个当前集场景图片生成任务，已忽略 ${skippedIds.length} 个非本集场景`
+          : `已提交 ${started.length} 个当前集场景图片生成任务`,
       }
     },
   })
@@ -440,11 +465,13 @@ export function createProductionTools(episodeId: number, dramaId: number) {
 
   const generateVoiceSampleTool = createTool({
     id: 'generate_voice_sample',
-    description: '为角色生成音色试听文件（需已分配 voice_style）。',
+    description: '为当前集关联的角色生成音色试听文件（需已分配 voice_style）。',
     inputSchema: z.object({
       character_id: z.number(),
     }),
     execute: async ({ character_id }) => {
+      const scopeErr = assertCharacterInEpisode(episodeId, dramaId, character_id)
+      if (scopeErr) return { error: scopeErr }
       const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, character_id)).all()
       if (!char) return { error: 'Character not found' }
       if (!char.voiceStyle) return { error: '请先分配音色' }

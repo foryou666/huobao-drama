@@ -4,10 +4,10 @@ import { db, schema } from '../db/index.js'
 import { success, badRequest, now } from '../utils/response.js'
 import { generateVoiceSample } from '../services/tts-generation.js'
 import { generateImage } from '../services/image-generation.js'
-import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { logTaskError, logTaskStart, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
-import { resolveCharacterImagePrompt } from '../utils/character-image-prompt.js'
+import { resolveCharacterImagePrompt, buildDefaultCharacterImagePrompt } from '../utils/character-image-prompt.js'
 import { saveUploadedFile } from '../utils/storage.js'
 import { syncCharacterPrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncCharacterAsset } from '../services/asset-library.js'
@@ -26,6 +26,15 @@ import { buildOutfitChangePrompt, slugifyOutfitId } from '../utils/character-out
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
 import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 import { linkCharacterToEpisode } from '../utils/episode-entity-links.js'
+import path from 'path'
+
+const IMAGE_UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
+
+function isUploadableImage(file: File): boolean {
+  if (file.type?.startsWith('image/')) return true
+  const ext = path.extname(file.name || '').toLowerCase()
+  return IMAGE_UPLOAD_EXTS.has(ext)
+}
 
 const app = new Hono()
 
@@ -55,7 +64,11 @@ app.post('/', async (c) => {
     description: body.description || '',
     appearance: body.appearance || '',
     personality: body.personality || '',
-    imagePrompt: body.image_prompt || body.appearance || body.description || '',
+    imagePrompt: body.image_prompt?.trim() || buildDefaultCharacterImagePrompt({
+      name,
+      appearance: body.appearance,
+      description: body.description,
+    }),
     createdAt: ts,
     updatedAt: ts,
   }).run()
@@ -173,17 +186,23 @@ app.post('/:id/upload-image', async (c) => {
   const body = await c.req.parseBody()
   const file = body['file']
   if (!file || !(file instanceof File)) return badRequest(c, 'file is required')
-  if (!file.type.startsWith('image/')) return badRequest(c, '仅支持图片文件')
+  if (!isUploadableImage(file)) return badRequest(c, '仅支持 JPG / PNG / WebP / GIF 等图片文件')
 
   try {
     const buffer = await file.arrayBuffer()
-    const path = await saveUploadedFile(buffer, 'characters', file.name)
+    const savedPath = await saveUploadedFile(buffer, 'characters', file.name)
     const ts = now()
     db.update(schema.characters)
-      .set({ imageUrl: path, localPath: path, updatedAt: ts })
+      .set({ imageUrl: savedPath, localPath: savedPath, updatedAt: ts })
       .where(eq(schema.characters.id, id))
       .run()
-    await syncCharacterPrimaryImage(id, path)
+    let ossWarning: string | null = null
+    try {
+      await syncCharacterPrimaryImage(id, savedPath)
+    } catch (ossErr: any) {
+      ossWarning = ossErr?.message || String(ossErr)
+      logTaskWarn('CharacterUpload', 'oss-sync-failed', { characterId: id, path: savedPath, error: ossWarning })
+    }
     syncCharacterAsset(id)
     logActivity(getAuthUser(c), {
       action: 'character.image.upload',
@@ -192,7 +211,11 @@ app.post('/:id/upload-image', async (c) => {
       resourceId: id,
       dramaId: char.dramaId,
     })
-    return success(c, { path, url: `/${path}` })
+    return success(c, {
+      path: savedPath,
+      url: `/${savedPath}`,
+      oss_warning: ossWarning || undefined,
+    })
   } catch (err: any) {
     return badRequest(c, err.message || '上传失败')
   }

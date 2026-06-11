@@ -416,7 +416,7 @@ function onAttachmentClick(att: AssistantAttachment) {
 .assistant-tool {
   margin-top: 4px;
   font-size: 10px;
-  color: var(--success);
+  color: var(--accent-text);
 }
 
 .assistant-attachments {

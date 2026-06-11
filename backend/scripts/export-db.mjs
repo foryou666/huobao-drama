@@ -48,7 +48,6 @@ const clearColumns = {
   characters: ['image_url', 'local_path', 'reference_images', 'voice_sample_url'],
   scenes: ['image_url', 'local_path'],
   props: ['image_url', 'local_path', 'reference_images'],
-  assets: ['url', 'thumbnail_url', 'local_path'],
   episodes: ['video_url', 'thumbnail'],
   dramas: ['thumbnail'],
   video_merges: ['merged_url'],
@@ -60,6 +59,17 @@ for (const [table, columns] of Object.entries(clearColumns)) {
       writable.prepare(`UPDATE "${table}" SET "${col}" = NULL WHERE "${col}" IS NOT NULL`).run()
     } catch { /* column may not exist */ }
   }
+}
+
+// 资产库：仅清除 http(s) 外链，保留 static/ 本地路径（服装/道具导入图不是密钥）
+for (const col of ['url', 'thumbnail_url', 'local_path']) {
+  try {
+    writable.prepare(`
+      UPDATE assets SET "${col}" = NULL
+      WHERE "${col}" IS NOT NULL
+        AND ("${col}" LIKE 'http://%' OR "${col}" LIKE 'https://%')
+    `).run()
+  } catch { /* ignore */ }
 }
 
 // Scrub any remaining signed URLs / keys in text columns

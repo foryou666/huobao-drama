@@ -11,6 +11,14 @@ import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import { db, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
+import { buildDefaultCharacterImagePrompt } from '../../utils/character-image-prompt.js'
+import { buildDefaultSceneImagePrompt } from '../../utils/scene-image-prompt.js'
+import {
+  assertCharacterInEpisode,
+  assertSceneInEpisode,
+  getEpisodeCharacters,
+  getEpisodeScenes,
+} from '../../utils/episode-entity-links.js'
 
 export function createGridPromptTools(episodeId: number, dramaId: number) {
 
@@ -18,12 +26,10 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
 
   const readCharacters = createTool({
     id: 'read_characters',
-    description: '读取当前剧集中的所有角色信息，用于生成角色图片提示词。',
+    description: '读取当前集关联的所有角色信息，用于生成角色图片提示词。',
     inputSchema: z.object({}),
     execute: async () => {
-      const chars = db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)).all()
-        .filter(c => !c.deletedAt)
+      const chars = getEpisodeCharacters(episodeId, dramaId)
       return {
         characters: chars.map(c => ({
           id: c.id,
@@ -44,18 +50,19 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       character_id: z.number(),
     }),
     execute: async ({ character_id }) => {
+      const scopeErr = assertCharacterInEpisode(episodeId, dramaId, character_id)
+      if (scopeErr) return { error: scopeErr }
       const [c] = db.select().from(schema.characters)
         .where(eq(schema.characters.id, character_id)).all()
       if (!c) return { error: 'Character not found' }
 
-      const parts: string[] = []
-      if (c.appearance) parts.push(c.appearance)
-      if (c.description) parts.push(c.description)
-      if (c.role) parts.push(`role: ${c.role}`)
-      if (c.personality) parts.push(`personality: ${c.personality}`)
-
-      const base = parts.join(', ')
-      const prompt = `${base}, cinematic portrait, high quality, consistent art style, no text, no watermark`
+      const prompt = buildDefaultCharacterImagePrompt({
+        name: c.name,
+        appearance: [c.appearance, c.description, c.role ? `角色定位：${c.role}` : '', c.personality ? `性格：${c.personality}` : '']
+          .filter(Boolean)
+          .join('，') || undefined,
+        description: c.description,
+      })
 
       return {
         character_id: c.id,
@@ -69,12 +76,10 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
 
   const readScenes = createTool({
     id: 'read_scenes',
-    description: '读取当前剧集中的所有场景信息，用于生成场景图片提示词。',
+    description: '读取当前集关联的所有场景信息，用于生成场景图片提示词。',
     inputSchema: z.object({}),
     execute: async () => {
-      const scenes = db.select().from(schema.scenes)
-        .where(eq(schema.scenes.dramaId, dramaId)).all()
-        .filter(s => !s.deletedAt)
+      const scenes = getEpisodeScenes(episodeId, dramaId)
       return {
         scenes: scenes.map(s => ({
           id: s.id,
@@ -93,17 +98,17 @@ export function createGridPromptTools(episodeId: number, dramaId: number) {
       scene_id: z.number(),
     }),
     execute: async ({ scene_id }) => {
+      const scopeErr = assertSceneInEpisode(episodeId, dramaId, scene_id)
+      if (scopeErr) return { error: scopeErr }
       const [s] = db.select().from(schema.scenes)
         .where(eq(schema.scenes.id, scene_id)).all()
       if (!s) return { error: 'Scene not found' }
 
-      const parts: string[] = []
-      if (s.location) parts.push(s.location)
-      if (s.time) parts.push(s.time)
-      if (s.prompt) parts.push(s.prompt)
-
-      const base = parts.join(', ')
-      const prompt = `${base}, cinematic scene, atmospheric lighting, high quality, consistent art style, no text, no watermark`
+      const prompt = buildDefaultSceneImagePrompt({
+        location: s.location,
+        time: s.time,
+        prompt: [s.location, s.time, s.prompt].filter(Boolean).join('，') || undefined,
+      })
 
       return {
         scene_id: s.id,

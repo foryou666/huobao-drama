@@ -12,7 +12,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
 const DB_PATH = process.env.DB_PATH || path.join(projectRoot, 'data', 'huobao_drama.db')
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.join(projectRoot, 'data', 'static')
-const SOURCE_ROOT = process.argv[2] || 'C:/baidunetdiskdownload/500'
+const args = process.argv.slice(2).filter(a => a !== '--repair')
+const repair = process.argv.includes('--repair')
+const SOURCE_ROOT = args[0] || 'C:/baidunetdiskdownload/500'
 
 const FOLDER_MAP = {
   '\u4eba\u7269\u8d44\u4ea7': 'character',
@@ -48,10 +50,15 @@ function walkImages(dir) {
 
 function findExisting(db, name, type) {
   return db.prepare(`
-    SELECT id FROM assets
+    SELECT id, url, local_path FROM assets
     WHERE deleted_at IS NULL AND name = ? AND type = ? AND source_type = 'import'
     LIMIT 1
   `).get(name, type)
+}
+
+function parseDescriptionPath(description) {
+  const m = String(description || '').match(/从本地资产包导入：[^/]+[/\\]([^/\\]+)$/)
+  return m?.[1] || null
 }
 
 function main() {
@@ -88,7 +95,9 @@ function main() {
         continue
       }
 
-      if (findExisting(db, name, assetType)) {
+      const existing = findExisting(db, name, assetType)
+      const hasPath = existing && String(existing.url || existing.local_path || '').trim()
+      if (existing && hasPath && !repair) {
         skipped += 1
         console.log('  已存在，跳过:', name)
         continue
@@ -102,20 +111,31 @@ function main() {
 
         const relative = `static/assets/imported/${filename}`
         const ts = now()
-        insert.run(
-          null,
-          name,
-          `从本地资产包导入：${folderName}/${path.basename(src)}`,
-          assetType,
-          assetType,
-          relative,
-          relative,
-          relative,
-          ts,
-          ts,
-        )
-        imported += 1
-        console.log('  +', name)
+        const description = `从本地资产包导入：${folderName}/${path.basename(src)}`
+        if (existing && repair) {
+          db.prepare(`
+            UPDATE assets
+            SET url = ?, local_path = ?, thumbnail_url = ?, description = ?, updated_at = ?
+            WHERE id = ?
+          `).run(relative, relative, relative, description, ts, existing.id)
+          imported += 1
+          console.log('  ↻ 修复:', name)
+        } else {
+          insert.run(
+            null,
+            name,
+            description,
+            assetType,
+            assetType,
+            relative,
+            relative,
+            relative,
+            ts,
+            ts,
+          )
+          imported += 1
+          console.log('  +', name)
+        }
       } catch (err) {
         failed += 1
         console.error('  失败:', name, err.message)
@@ -124,7 +144,7 @@ function main() {
   }
 
   db.close()
-  console.log(`\n完成：导入 ${imported}，跳过 ${skipped}，失败 ${failed}`)
+  console.log(`\n完成：${repair ? '修复' : '导入'} ${imported}，跳过 ${skipped}，失败 ${failed}`)
 }
 
 main()

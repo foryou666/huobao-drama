@@ -2,7 +2,13 @@ import { logTaskWarn } from './task-logger.js'
 import { isOssConfigured, resolveMediaUrlForExternalApi } from './oss-upload.js'
 import type { VideoContentRef } from './seedance-content.js'
 import { parseVideoContentRefs } from './seedance-content.js'
-import { CHENGMENT_DEFAULT_GROUP_ID, CHENGMENT_DEFAULT_MODEL_ID, CHENGMENT_DURATION_BOUNDS, CHENGMENT_PROMPT_MAX_LENGTH } from '../constants/chengmeng.js'
+import {
+  CHENGMENT_DEFAULT_GROUP_ID,
+  CHENGMENT_DEFAULT_MODEL_ID,
+  CHENGMENT_DURATION_BOUNDS,
+  CHENGMENT_PROMPT_MAX_LENGTH,
+} from '../constants/chengmeng.js'
+import { ensureApiTrimmedAudioPath } from './audio-trim.js'
 import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 
 function publicBaseUrl() {
@@ -51,7 +57,11 @@ export async function normalizeChengmengContentRefs(raw: string | null | undefin
   const refs = parseVideoContentRefs(raw)
   const normalized = await Promise.all(
     refs.map(async (ref) => {
-      const url = await resolveChengmengMediaUrl(ref.url)
+      let localPath = ref.url
+      if (ref.type === 'audio') {
+        localPath = await ensureApiTrimmedAudioPath(ref.url)
+      }
+      const url = await resolveChengmengMediaUrl(localPath)
       return url ? { ...ref, url } : null
     }),
   )
@@ -104,17 +114,33 @@ function stripChengmengInlineTags(prompt: string) {
   return String(prompt || '').trim()
     .replace(/@图片\s*(\d+)/gi, '图片$1')
     .replace(/@素材\s*(\d+)/gi, '素材$1')
+    .replace(/@音频\s*(\d+)/gi, '音频$1')
 }
 
-export function buildChengmengTagPrefix(imageCount: number, videoCount: number) {
+/** 工作台常用「音色N」，橙盟/Seedance 识别「音频N」 */
+export function normalizeChengmengAudioLabels(prompt: string): string {
+  return String(prompt || '').replace(/音色\s*(\d+)/gi, '音频$1')
+}
+
+function buildChengmengAudioHeader(refs: VideoContentRef[], prompt: string): string {
+  const audios = refs.filter(ref => ref.type === 'audio')
+  if (!audios.length) return ''
+  if (/音频\s*\d/i.test(prompt)) return ''
+  const lines = audios.map((ref, index) => `音频${index + 1}是${ref.label || '参考音色'}`)
+  return `${lines.join('，')}。`
+}
+
+export function buildChengmengTagPrefix(imageCount: number, videoCount: number, audioCount = 0) {
   const imageTags = Array.from({ length: Math.max(0, imageCount) }, (_, i) => `@图片${i + 1}`)
   const videoTags = Array.from({ length: Math.max(0, videoCount) }, (_, i) => `@素材${i + 1}`)
-  const tags = [...imageTags, ...videoTags]
+  const audioTags = Array.from({ length: Math.max(0, audioCount) }, (_, i) => `@音频${i + 1}`)
+  const tags = [...imageTags, ...videoTags, ...audioTags]
   return tags.length ? `${tags.join(' ')} ` : ''
 }
 
-export function estimateChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0) {
-  return buildChengmengTagPrefix(imageCount, videoCount).length + stripChengmengInlineTags(prompt).length
+export function estimateChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0, audioCount = 0) {
+  return buildChengmengTagPrefix(imageCount, videoCount, audioCount).length
+    + stripChengmengInlineTags(normalizeChengmengAudioLabels(prompt)).length
 }
 
 export function formatChengmengPromptOverLimitMessage(
@@ -125,14 +151,19 @@ export function formatChengmengPromptOverLimitMessage(
   return `视频提示词约 ${sendLength} 字符，超过上限 ${limit} 字符（含 @图片N 前缀），超出 ${over} 字符。请精简后再生成，否则部分内容不会发送。`
 }
 
-export function assertChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0): void {
-  const sendLength = estimateChengmengPromptLength(prompt, imageCount, videoCount)
+export function assertChengmengPromptLength(
+  prompt: string,
+  imageCount: number,
+  videoCount = 0,
+  audioCount = 0,
+): void {
+  const sendLength = estimateChengmengPromptLength(prompt, imageCount, videoCount, audioCount)
   if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
     throw new Error(formatChengmengPromptOverLimitMessage(sendLength))
   }
 }
 
-/** 与橙盟 adapter 一致：估算 @ 标签前缀所需的图片/素材数量 */
+/** 与橙盟 adapter 一致：估算 @ 标签前缀所需的图片/素材/音频数量 */
 export function resolveChengmengPromptMediaCounts(input: {
   prompt?: string | null
   referenceMode?: string | null
@@ -141,12 +172,13 @@ export function resolveChengmengPromptMediaCounts(input: {
   lastFrameUrl?: string | null
   referenceImageUrls?: string[] | null
   contentRefs?: VideoContentRef[] | null
-}): { imageCount: number; videoCount: number } {
+}): { imageCount: number; videoCount: number; audioCount: number } {
   const refs = input.contentRefs || []
   const videos = collectChengmengVideos(refs)
+  const audios = collectChengmengAudios(refs)
   const useFramesMode = input.referenceMode === 'first_last'
     && !!(input.firstFrameUrl || input.lastFrameUrl)
-  if (useFramesMode) return { imageCount: 0, videoCount: videos.length }
+  if (useFramesMode) return { imageCount: 0, videoCount: videos.length, audioCount: audios.length }
 
   const extraImages: string[] = []
   if (!refs.length) {
@@ -159,6 +191,7 @@ export function resolveChengmengPromptMediaCounts(input: {
   return {
     imageCount: collectChengmengImages(refs, extraImages).length,
     videoCount: videos.length,
+    audioCount: audios.length,
   }
 }
 
@@ -197,14 +230,25 @@ export function truncateChengmengPromptBody(text: string, maxLen: number): strin
 }
 
 /**
- * 文档要求 prompt 内用 @图片1 / @素材1 关联资源；
- * 工作台仍用「图片1是…」描述，发送前自动补 @ 标签。
+ * 文档要求 prompt 内用 @图片1 / @素材1 / @音频1 关联资源；
+ * 工作台仍用「图片1是…」「音色1是…」描述，发送前自动补 @ 标签并统一为「音频N」。
  * 超过 CHENGMENT_PROMPT_MAX_LENGTH 时直接报错，禁止静默截断。
  */
-export function buildChengmengPrompt(prompt: string, imageCount: number, videoCount: number): string {
-  assertChengmengPromptLength(prompt, imageCount, videoCount)
-  const text = normalizeVideoPromptFraming(stripChengmengInlineTags(prompt))
-  const prefix = buildChengmengTagPrefix(imageCount, videoCount)
+export function buildChengmengPrompt(
+  prompt: string,
+  imageCount: number,
+  videoCount: number,
+  audioCount = 0,
+  contentRefs: VideoContentRef[] = [],
+): string {
+  const normalizedPrompt = normalizeChengmengAudioLabels(prompt)
+  const audioHeader = buildChengmengAudioHeader(contentRefs, normalizedPrompt)
+  const mergedPrompt = audioHeader
+    ? `${audioHeader}${normalizedPrompt}`.trim()
+    : normalizedPrompt
+  assertChengmengPromptLength(mergedPrompt, imageCount, videoCount, audioCount)
+  const text = normalizeVideoPromptFraming(stripChengmengInlineTags(mergedPrompt))
+  const prefix = buildChengmengTagPrefix(imageCount, videoCount, audioCount)
   return prefix ? `${prefix}${text}`.trim() : text
 }
 

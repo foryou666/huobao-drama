@@ -82,6 +82,7 @@
         </div>
         <div class="asset-foot">
           <button v-if="activeType !== 'voice'" type="button" class="btn btn-sm" @click="openAssetPreview(item)">预览</button>
+          <button type="button" class="btn btn-sm" @click="openEdit(item)">编辑</button>
           <button type="button" class="btn btn-sm danger ml-auto" @click="removeAsset(item)">删除</button>
         </div>
       </div>
@@ -96,6 +97,37 @@
     <div v-if="imageViewer.open" class="image-viewer-overlay" @click="closeImageViewer">
       <img :src="imageViewer.src" :alt="imageViewer.title" @click.stop />
       <div class="image-viewer-title">{{ imageViewer.title }}</div>
+    </div>
+
+    <div v-if="openEditModal" class="modal-overlay" @click.self="closeEdit">
+      <div class="card modal-card">
+        <h3 class="modal-title">编辑资产</h3>
+        <label class="modal-field">
+          <span>名称</span>
+          <input v-model="editForm.name" class="input" placeholder="资产名称" />
+          <span v-if="editForm.type === 'scene'" class="dim" style="font-size:11px;margin-top:4px;display:block">场景建议格式：养心殿（日）</span>
+        </label>
+        <label class="modal-field">
+          <span>描述</span>
+          <textarea v-model="editForm.description" class="textarea" rows="2" />
+        </label>
+        <label class="modal-field">
+          <span>{{ editForm.type === 'voice' ? '重新上传 MP3' : '重新上传图片' }}</span>
+          <input
+            type="file"
+            :accept="editForm.type === 'voice' ? '.mp3,audio/mpeg,audio/mp3' : 'image/*'"
+            @change="onEditFile"
+          />
+          <span v-if="editForm.type === 'voice'" class="dim" style="font-size:11px;margin-top:4px;display:block">时长须 3~10 秒；不选文件则保留原音频</span>
+          <span v-else class="dim" style="font-size:11px;margin-top:4px;display:block">不选文件则保留原图片</span>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-sm" @click="closeEdit">取消</button>
+          <button type="button" class="btn btn-primary btn-sm" :disabled="savingEdit" @click="submitEdit">
+            {{ savingEdit ? '保存中' : '保存' }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <div v-if="openCreate" class="modal-overlay" @click.self="openCreate = false">
@@ -152,7 +184,9 @@ const assets = ref([])
 const loading = ref(true)
 const syncing = ref(false)
 const creating = ref(false)
+const savingEdit = ref(false)
 const openCreate = ref(false)
+const openEditModal = ref(false)
 const route = useRoute()
 const selectedDramaId = ref('')
 const activeType = ref('character')
@@ -162,6 +196,13 @@ const createForm = ref({
   name: '',
   description: '',
   drama_id: null,
+  file: null,
+})
+const editForm = ref({
+  id: null,
+  type: 'character',
+  name: '',
+  description: '',
   file: null,
 })
 const imageViewer = ref({ open: false, src: '', title: '' })
@@ -273,6 +314,63 @@ async function syncDrama() {
 
 function onCreateFile(event) {
   createForm.value.file = event?.target?.files?.[0] || null
+}
+
+function onEditFile(event) {
+  editForm.value.file = event?.target?.files?.[0] || null
+}
+
+function openEdit(item) {
+  editForm.value = {
+    id: item.id,
+    type: item.type,
+    name: item.name || '',
+    description: item.description || '',
+    file: null,
+  }
+  openEditModal.value = true
+}
+
+function closeEdit() {
+  openEditModal.value = false
+  editForm.value = { id: null, type: 'character', name: '', description: '', file: null }
+}
+
+async function submitEdit() {
+  if (!editForm.value.name.trim()) {
+    toast.warning('请填写资产名称')
+    return
+  }
+  if (!editForm.value.id) return
+  savingEdit.value = true
+  try {
+    let assetId = editForm.value.id
+    const original = assets.value.find(item => item.id === assetId)
+    const nameChanged = editForm.value.name.trim() !== String(original?.name || '').trim()
+    const descChanged = editForm.value.description.trim() !== String(original?.description || '').trim()
+    if (nameChanged || descChanged) {
+      const updated = await assetAPI.update(assetId, {
+        name: editForm.value.name.trim(),
+        description: editForm.value.description.trim() || null,
+      })
+      if (updated?.id) assetId = updated.id
+    }
+    if (editForm.value.file) {
+      const form = new FormData()
+      form.append('file', editForm.value.file)
+      const res = await assetAPI.uploadToAsset(assetId, form)
+      if (res?.oss_warning) {
+        toast.warning(`图片已保存，云端同步失败：${res.oss_warning}`)
+      }
+    }
+    toast.success('资产已更新')
+    closeEdit()
+    await loadAssets()
+  } catch (e) {
+    toast.error(e?.message || '保存失败')
+  } finally {
+    savingEdit.value = false
+  }
 }
 
 async function submitCreate() {

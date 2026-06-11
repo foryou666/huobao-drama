@@ -12,6 +12,7 @@ import { syncCharacterAsset, syncSceneAsset } from './asset-library.js'
 import { upsertSceneAngleImage } from '../utils/scene-image-variants.js'
 import { formatProviderError } from '../utils/format-provider-error.js'
 import { failImageGeneration } from '../utils/generation-failure.js'
+import { getMaxImageReferenceCount } from '../utils/image-reference-limits.js'
 import {
   trySyncCharacterImageAfterGeneration,
   trySyncSceneImageAfterGeneration,
@@ -162,7 +163,8 @@ async function processImageGeneration(id: number, config: AIConfig) {
     })
 
     // 使用 Adapter 构建请求
-    const resolvedReferenceImages = await normalizeReferenceImages(record.referenceImages)
+    const maxRefs = getMaxImageReferenceCount(config)
+    const resolvedReferenceImages = await normalizeReferenceImages(record.referenceImages, maxRefs)
     const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
       id: record.id,
       model: record.model,
@@ -238,7 +240,7 @@ async function processImageGeneration(id: number, config: AIConfig) {
   }
 }
 
-async function normalizeReferenceImages(raw: string | null | undefined): Promise<string[]> {
+async function normalizeReferenceImages(raw: string | null | undefined, maxCount = getMaxImageReferenceCount()): Promise<string[]> {
   if (!raw) return []
   let refs: string[] = []
   try {
@@ -273,7 +275,7 @@ async function normalizeReferenceImages(raw: string | null | undefined): Promise
     return value
   }))
 
-  return normalized.filter((item): item is string => !!item).slice(0, 6)
+  return normalized.filter((item): item is string => !!item).slice(0, Math.max(0, maxCount))
 }
 
 async function pollImageTask(id: number, config: AIConfig, taskId: string) {

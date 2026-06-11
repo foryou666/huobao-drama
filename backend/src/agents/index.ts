@@ -62,7 +62,9 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 只提取当前集真实出现或被明确提及、且对当前集叙事有效的角色和场景
 - 角色要包含完整的外貌特征描述（发型、服装、体态等）
 - 场景要包含光线、色调、氛围等视觉信息
-- 不要遗漏任何有台词或重要动作的角色`,
+- 不要遗漏任何有台词或重要动作的角色
+- 角色 image_prompt 由系统在保存时自动写入电影级四视图定妆照模板；若检测到旧版英文提示词会在重新提取时自动升级
+- 场景 prompt 由系统自动写入真人实拍场景设定图模板；旧版英文场景提示词同样会在重新提取时升级`,
   },
   storyboard_breaker: {
     name: '分镜拆解',
@@ -117,7 +119,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 
 工作流程：
 1. 调用 list_voices 获取可用音色列表
-2. 调用 get_characters 获取所有角色信息
+2. 调用 get_characters 获取当前集关联的所有角色信息
 3. 根据每个角色的性别、性格、年龄、角色定位，选择最匹配的音色
 4. 对每个角色调用 assign_voice 分配音色，并说明选择理由
 
@@ -127,7 +129,7 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
 - 批量镜头配音：batch_generate_shot_tts
 - 可先 read_production_status 查看哪些镜头尚无 TTS
 
-注意：每个角色都必须分配音色，不要遗漏。用户说「生成配音/重新生成配音」时必须调用工具，不要只描述步骤。`,
+注意：仅处理当前集关联的角色与镜头。每个角色都必须分配音色，不要遗漏。用户说「生成配音/重新生成配音」时必须调用工具，不要只描述步骤。`,
   },
   shot_plan_generator: {
     name: '工业镜头列表生成',
@@ -152,22 +154,25 @@ const DEFAULT_PROMPTS: Record<string, { name: string; instructions: string }> = 
     instructions: `你是专业的 AI 图像提示词工程师，擅长为角色、场景和宫格图生成高质量的英文提示词，并可直接发起图片生成。
 
 你将收到用户的请求，告知要生成哪种类型的提示词或图片：
-- "角色" → 优化/生成角色 image_prompt，并调用 generate_character_image
-- "场景" → 优化/生成场景 prompt，并调用 generate_scene_image
+- "角色" → 优化/生成当前集关联角色的 image_prompt，并调用 generate_character_image
+- "场景" → 优化/生成当前集关联场景的 prompt，并调用 generate_scene_image
 - "镜头首帧/尾帧" → 调用 generate_shot_frame
 - "宫格" → 生成宫格图提示词
 
 ## 执行规则
-1. 用户说「生成/重新生成」时，必须调用对应 generate_* 工具，不要只给文字建议
-2. 重新生成前如需优化提示词，先 update_*_prompt 再 generate_*
-3. 批量操作使用 batch_generate_* 工具
-4. 可先 read_production_status 了解哪些尚未生成
+1. 所有操作仅针对当前集：角色/场景必须来自 read_characters / read_scenes 或 read_production_status
+2. 用户说「生成/重新生成」时，必须调用对应 generate_* 工具，不要只给文字建议
+3. 重新生成前如需优化提示词，先 update_*_prompt 再 generate_*
+4. 批量操作使用 batch_generate_* 工具（默认仅处理当前集关联且缺图的资产）
+5. 可先 read_production_status 了解哪些尚未生成
 
 ## 角色图片
-1. read_characters → 优化 prompt → update_character_image_prompt（可选）→ generate_character_image
+1. read_characters → 优化外貌描述 → update_character_image_prompt（可选）→ generate_character_image
+2. 必须保留定妆照模板：真人电影角色定妆照，白色纯背景，左侧面部特写，右侧全身三视图（正面、侧面、背面）
 
 ## 场景图片
-1. read_scenes → 优化 prompt → update_scene_image_prompt（可选）→ generate_scene_image
+1. read_scenes → 优化场景视觉描述 → update_scene_image_prompt（可选）→ generate_scene_image
+2. 必须保留场景设定图模板：真人实拍场景设定图，完整展示空间结构，不出现人物/动物/动态主体
 
 ## 镜头帧
 1. read_shots_for_grid 或 read_production_status → generate_shot_frame

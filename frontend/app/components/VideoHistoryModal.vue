@@ -61,16 +61,27 @@
               <span class="tag mono">#{{ selectedItem.id }}</span>
               <span class="dim">{{ formatTime(selectedItem.createdAt) }}</span>
             </div>
-            <button
-              v-if="!isCurrent(selectedItem)"
-              type="button"
-              class="btn btn-primary btn-sm"
-              :disabled="selecting"
-              @click="selectCurrent"
-            >
-              {{ selecting ? '设置中…' : '设为当前视频' }}
-            </button>
-            <span v-else class="tag tag-success">已是当前镜头视频</span>
+            <div class="video-history-preview-actions">
+              <button
+                v-if="!isCurrent(selectedItem)"
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="selecting"
+                @click="selectCurrent"
+              >
+                {{ selecting ? '设置中…' : '设为当前视频' }}
+              </button>
+              <span v-else class="tag tag-success">已是当前镜头视频</span>
+              <button
+                v-if="playableUrl(selectedItem)"
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="downloading"
+                @click="downloadSelected"
+              >
+                {{ downloading ? '下载中…' : '下载视频' }}
+              </button>
+            </div>
           </template>
           <div v-else-if="selectedItem" class="dim video-history-preview-empty">
             {{ selectedItem.errorMsg || '该记录暂无可播放视频' }}
@@ -84,9 +95,11 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { toast } from 'vue-sonner'
 import { videoAPI } from '~/composables/useApi'
 import { useOverlayDismiss } from '~/composables/useOverlayDismiss'
 import { mediaDisplayUrl } from '~/utils/media-url.js'
+import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -99,6 +112,7 @@ const emit = defineEmits(['close', 'selected'])
 
 const loading = ref(false)
 const selecting = ref(false)
+const downloading = ref(false)
 const items = ref([])
 const selectedId = ref(null)
 
@@ -187,6 +201,21 @@ async function selectCurrent() {
     emit('selected', { storyboardId: props.storyboardId, videoUrl: url, generationId: item.id })
   } finally {
     selecting.value = false
+  }
+}
+
+async function downloadSelected() {
+  const item = selectedItem.value
+  const url = playableUrl(item)
+  if (!item || !url || downloading.value) return
+  downloading.value = true
+  try {
+    await downloadMediaFile(url, buildVideoDownloadFilename({ id: item.id, title: props.storyboardTitle }))
+    toast.success('开始下载')
+  } catch (e) {
+    toast.error(e?.message || '下载失败')
+  } finally {
+    downloading.value = false
   }
 }
 
@@ -345,6 +374,13 @@ watch(() => [props.open, props.storyboardId], ([open]) => {
 .video-history-preview-meta {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+.video-history-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
 }
 .video-history-preview-empty {

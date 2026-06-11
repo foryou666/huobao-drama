@@ -24,3 +24,4 @@ for (const suffix of ['', '-wal', '-shm']) {
 }
 fs.copyFileSync(seedDb, targetDb)
 console.log('Imported seed database to:', targetDb)
+console.log('注意：seed 库中导入类资产的图片路径可能为空，需用 assets:repair-import 从原始资产包目录修复。')

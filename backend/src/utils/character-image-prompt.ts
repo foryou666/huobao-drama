@@ -1,9 +1,14 @@
+import {
+  appendCharacterImageStylePrompt,
+  buildDefaultCharacterImagePrompt as composeDefaultCharacterImagePrompt,
+} from '../constants/image-prompt-templates.js'
+
 export function buildDefaultCharacterImagePrompt(char: {
   name: string
   appearance?: string | null
   description?: string | null
 }) {
-  return `${char.name}, ${char.appearance || char.description || '人物立绘'}, 高质量, 正面, 白色背景`
+  return composeDefaultCharacterImagePrompt(char)
 }
 
 export function resolveCharacterImagePrompt(
@@ -16,6 +21,6 @@ export function resolveCharacterImagePrompt(
   override?: string | null,
 ) {
   const custom = override?.trim() || char.imagePrompt?.trim()
-  if (custom) return custom
+  if (custom) return appendCharacterImageStylePrompt(custom)
   return buildDefaultCharacterImagePrompt(char)
 }

@@ -3,20 +3,18 @@
 ## 模板结构
 
 ```
-A cinematic [style] pure background scene depicting [location] at [time].
-The scene shows [environment details, architecture, objects, lighting].
-No characters, no people, no figures.
-Style: [art style], rich details, high quality, atmospheric lighting.
-Mood: [mood description].
+[地点]，[时间段/光线/色调/氛围]，[环境细节与陈设描述]，真人实拍场景设定图，完整展示场景空间结构、前景、中景、后景关系，固定陈设清晰，主视觉区域明确，不出现人物，不出现动物，不出现动态主体，适合作为后续分镜、镜头承接、场景一致性锁定参考图
 ```
+
+## 生成规则
+
+- 以 `location`（地点）为基础，补充光线、材质、陈设、空间层次
+- 必须保留「真人实拍场景设定图」模板后缀
+- 严禁出现人物、动物或任何动态主体
+- 强调前景/中景/后景关系，便于后续分镜与场景一致性锁定
 
 ## 示例
 
 ```
-A cinematic anime-style pure background scene depicting a traditional Japanese courtyard at dusk.
-The scene shows wooden corridors surrounding a zen garden with raked white gravel,
-a single cherry blossom tree with petals falling, stone lanterns casting warm light,
-sliding shoji doors partially open. No characters.
-Style: ghibli, rich details, high quality, warm golden hour lighting.
-Mood: peaceful, nostalgic, serene.
+古代宫廷正殿，日内，暖金色侧光，朱红立柱与雕梁，前景为台阶与中轴地毯，中景为御座与案几，后景为层层门扇与深景深，真人实拍场景设定图，完整展示场景空间结构、前景、中景、后景关系，固定陈设清晰，主视觉区域明确，不出现人物，不出现动物，不出现动态主体，适合作为后续分镜、镜头承接、场景一致性锁定参考图
 ```

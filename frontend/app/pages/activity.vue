@@ -174,6 +174,16 @@
 
             <span class="summary-value cost-negative">{{ teamStats.summary.total_consumed }}</span>
 
+            <span v-if="teamStats.summary.total_refunded" class="summary-hint">含退款 {{ teamStats.summary.total_refunded }}</span>
+
+          </div>
+
+          <div class="summary-card card">
+
+            <span class="summary-label">积分充值</span>
+
+            <span class="summary-value">{{ teamStats.summary.total_granted }}</span>
+
           </div>
 
           <div class="summary-card card">
@@ -244,7 +254,9 @@
 
                   <th>余额</th>
 
-                  <th>消耗积分</th>
+                  <th>充值</th>
+
+                  <th>净消耗</th>
 
                   <th>操作</th>
 
@@ -275,6 +287,8 @@
                   </td>
 
                   <td class="mono">{{ m.credits_balance }}</td>
+
+                  <td class="mono">{{ m.period.credits_granted }}</td>
 
                   <td class="mono cost-negative">{{ m.period.credits_consumed }}</td>
 
@@ -822,7 +836,7 @@ th { color: var(--text-3); font-weight: 500; font-size: 12px; }
 
   display: grid;
 
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 
   gap: 12px;
 
@@ -845,6 +859,8 @@ th { color: var(--text-3); font-weight: 500; font-size: 12px; }
 .summary-label { font-size: 12px; color: var(--text-3); }
 
 .summary-value { font-size: 22px; font-weight: 700; font-family: var(--font-mono); }
+
+.summary-hint { font-size: 11px; color: var(--text-3); }
 
 .stats-panel { padding: 16px; margin-bottom: 16px; }
 

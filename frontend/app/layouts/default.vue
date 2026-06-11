@@ -36,6 +36,12 @@
           </svg>
           <span>视频生成</span>
         </NuxtLink>
+        <NuxtLink to="/images" class="nav-link" :class="{ active: route.path.startsWith('/images') }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+          </svg>
+          <span>图片生成</span>
+        </NuxtLink>
         <NuxtLink to="/activity" class="nav-link" :class="{ active: route.path === '/activity' }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
@@ -175,8 +181,8 @@ onMounted(async () => {
   letter-spacing: -0.01em;
 }
 .brand-sub {
-  font-size: 10px; font-weight: 400;
-  color: var(--text-3); margin-top: 1px;
+  font-size: 10px; font-weight: 500;
+  color: var(--text-2); margin-top: 1px;
   letter-spacing: 0.04em;
 }
 
@@ -184,9 +190,9 @@ onMounted(async () => {
 .header-nav { display: flex; gap: 4px; flex: 1; }
 .nav-link {
   display: flex; align-items: center; gap: 7px;
-  padding: 7px 14px; border-radius: var(--radius);
-  font-size: 13px; font-weight: 500;
-  color: var(--text-2); text-decoration: none;
+  padding: 8px 15px; border-radius: var(--radius);
+  font-size: 15px; font-weight: 600;
+  color: var(--text-0); text-decoration: none;
   transition: all 0.18s var(--ease-out);
   border: 1px solid transparent;
 }
@@ -219,7 +225,8 @@ onMounted(async () => {
 }
 .team-switcher-label {
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--text-1);
+  font-weight: 600;
   flex-shrink: 0;
 }
 .team-select {
@@ -236,7 +243,7 @@ onMounted(async () => {
   padding-left: 34px;
   font-size: 11px;
   line-height: 1.35;
-  color: var(--text-3);
+  color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -258,11 +265,12 @@ onMounted(async () => {
   color: inherit;
 }
 .credits-badge:hover { border-color: var(--accent); }
-.credits-label { font-size: 11px; color: var(--text-dim); }
+.credits-label { font-size: 11px; color: var(--text-1); font-weight: 600; }
 .credits-value { font-size: 12px; font-weight: 700; color: var(--accent-text); }
 .user-name {
   font-size: 13px;
-  color: var(--text-2);
+  font-weight: 600;
+  color: var(--text-0);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;

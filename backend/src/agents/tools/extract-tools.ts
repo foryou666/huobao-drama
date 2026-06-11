@@ -15,6 +15,12 @@ import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
 import { syncCharacterAsset, syncSceneAsset } from '../../services/asset-library.js'
 import { repairEpisodeSceneLinks } from '../../utils/scene-redirect.js'
+import {
+  buildDefaultCharacterImagePrompt,
+  buildDefaultSceneImagePrompt,
+  shouldRefreshCharacterImagePrompt,
+  shouldRefreshSceneImagePrompt,
+} from '../../constants/image-prompt-templates.js'
 
 // ─── 关联辅助 ────────────────────────────────────────────────
 function linkCharToEpisode(episodeId: number, characterId: number) {
@@ -142,12 +148,22 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           .find(c => c.name === char.name)
 
         if (existing) {
+          const mergedAppearance = char.appearance || existing.appearance
+          const mergedDescription = char.description || existing.description
+          const imagePrompt = shouldRefreshCharacterImagePrompt(existing.imagePrompt)
+            ? buildDefaultCharacterImagePrompt({
+              name: char.name,
+              appearance: mergedAppearance,
+              description: mergedDescription,
+            })
+            : existing.imagePrompt!.trim()
           // 已存在：合并信息，保留 ID
           db.update(schema.characters).set({
             role: char.role || existing.role,
             description: char.description || existing.description,
             appearance: char.appearance || existing.appearance,
             personality: char.personality || existing.personality,
+            imagePrompt,
             updatedAt: ts,
           }).where(eq(schema.characters.id, existing.id)).run()
           linkCharToEpisode(episodeId, existing.id)
@@ -161,6 +177,11 @@ export function createExtractTools(episodeId: number, dramaId: number) {
             description: char.description || '',
             appearance: char.appearance || '',
             personality: char.personality || '',
+            imagePrompt: buildDefaultCharacterImagePrompt({
+              name: char.name,
+              appearance: char.appearance,
+              description: char.description,
+            }),
             dramaId,
             createdAt: ts,
             updatedAt: ts,
@@ -209,8 +230,17 @@ export function createExtractTools(episodeId: number, dramaId: number) {
           .find(s => s.location === scene.location && s.time === (scene.time || ''))
 
         if (existing) {
-          // 已存在完全匹配的场景：直接关联
           linkSceneToEpisode(episodeId, existing.id)
+          if (shouldRefreshSceneImagePrompt(existing.prompt)) {
+            db.update(schema.scenes).set({
+              prompt: buildDefaultSceneImagePrompt({
+                location: existing.location,
+                time: existing.time || scene.time,
+                prompt: scene.prompt || existing.prompt,
+              }),
+              updatedAt: ts,
+            }).where(eq(schema.scenes.id, existing.id)).run()
+          }
           syncSceneAsset(existing.id)
           results.reused++
         } else {
@@ -224,7 +254,11 @@ export function createExtractTools(episodeId: number, dramaId: number) {
             dramaId,
             location: scene.location,
             time: scene.time || '',
-            prompt: scene.prompt || scene.location,
+            prompt: buildDefaultSceneImagePrompt({
+              location: scene.location,
+              time: scene.time,
+              prompt: scene.prompt,
+            }),
             createdAt: ts,
             updatedAt: ts,
           }).run()

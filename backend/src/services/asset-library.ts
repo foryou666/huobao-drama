@@ -73,6 +73,11 @@ export function upsertLibraryAsset(input: UpsertAssetInput) {
     existing = findSyncedAsset(dramaId, input.sourceType, input.sourceId)
   }
 
+  const preservedUrl = existing
+    ? normalizePath(existing.url || existing.localPath)
+    : null
+  const finalUrl = url || preservedUrl
+  const finalLocalPath = localPath || preservedUrl
   const payload = {
     dramaId,
     episodeId: input.episodeId ?? null,
@@ -80,9 +85,11 @@ export function upsertLibraryAsset(input: UpsertAssetInput) {
     description: input.description ?? null,
     type: input.type,
     category: input.category ?? input.type,
-    url,
-    localPath,
-    thumbnailUrl: normalizePath(input.thumbnailUrl) || (url && input.type !== 'voice' ? thumbPathForSource(url) : null),
+    url: finalUrl,
+    localPath: finalLocalPath,
+    thumbnailUrl: normalizePath(input.thumbnailUrl)
+      || (finalUrl && input.type !== 'voice' ? thumbPathForSource(finalUrl) : null)
+      || (existing && !finalUrl ? normalizePath(existing.thumbnailUrl) : null),
     sourceType: input.sourceType ?? 'manual',
     sourceId: input.sourceId ?? null,
     imageGenId: input.imageGenId ?? null,
@@ -141,6 +148,42 @@ export function createReferenceUploadAsset(input: {
     localPath,
     sourceType: 'reference_upload',
   })
+}
+
+function normalizeAssetMediaPath(raw?: string | null): string | null {
+  return normalizePath(raw)
+}
+
+/** 列表展示：资产无图时回退到已绑定的角色/场景实体图 */
+export function resolveAssetDisplayMedia(asset: {
+  url?: string | null
+  localPath?: string | null
+  thumbnailUrl?: string | null
+  sourceType?: string | null
+  sourceId?: number | null
+  type?: string | null
+}) {
+  let url = normalizeAssetMediaPath(asset.url || asset.localPath)
+  let thumbnailUrl = normalizeAssetMediaPath(asset.thumbnailUrl)
+
+  if (!url && asset.sourceId) {
+    if (asset.sourceType === 'character') {
+      const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, asset.sourceId)).all()
+      url = normalizeAssetMediaPath(char?.imageUrl || char?.localPath)
+    } else if (asset.sourceType === 'scene') {
+      const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, asset.sourceId)).all()
+      url = normalizeAssetMediaPath(scene?.imageUrl || scene?.localPath)
+    } else if (asset.sourceType === 'prop' && asset.type !== 'voice') {
+      const [prop] = db.select().from(schema.props).where(eq(schema.props.id, asset.sourceId)).all()
+      url = normalizeAssetMediaPath(prop?.imageUrl || prop?.localPath)
+    }
+  }
+
+  if (url && !thumbnailUrl && asset.type !== 'voice') {
+    thumbnailUrl = thumbPathForSource(url)
+  }
+
+  return { url, localPath: url, thumbnailUrl }
 }
 
 export function syncCharacterAsset(characterId: number) {
@@ -210,26 +253,46 @@ function finalizeEntityAssetLink(pickedAssetId: number, entityType: 'scene' | 'c
   return syncedId
 }
 
-function pushAssetImageToScene(sceneId: number, url: string | null, description?: string | null) {
+function pushAssetToScene(sceneId: number, input: {
+  url?: string | null
+  description?: string | null
+  name?: string | null
+}) {
   const ts = now()
   const updates: Record<string, unknown> = { updatedAt: ts }
+  const url = normalizePath(input.url)
   if (url) {
     updates.imageUrl = url
     updates.localPath = url
     updates.status = 'completed'
   }
-  if (description) updates.prompt = description
+  if (input.description !== undefined) updates.prompt = input.description
+  const name = String(input.name || '').trim()
+  if (name) {
+    const { location, time } = parseSceneAssetName(name)
+    if (location) {
+      updates.location = location
+      updates.time = time
+    }
+  }
   db.update(schema.scenes).set(updates).where(eq(schema.scenes.id, sceneId)).run()
 }
 
-function pushAssetImageToCharacter(characterId: number, url: string | null, description?: string | null) {
+function pushAssetToCharacter(characterId: number, input: {
+  url?: string | null
+  description?: string | null
+  name?: string | null
+}) {
   const ts = now()
   const updates: Record<string, unknown> = { updatedAt: ts }
+  const url = normalizePath(input.url)
   if (url) {
     updates.imageUrl = url
     updates.localPath = url
   }
-  if (description) updates.appearance = description
+  if (input.description !== undefined) updates.appearance = input.description
+  const name = String(input.name || '').trim()
+  if (name) updates.name = name
   db.update(schema.characters).set(updates).where(eq(schema.characters.id, characterId)).run()
 }
 
@@ -382,16 +445,18 @@ export function syncEntityFromAsset(assetId: number) {
   if (!asset || asset.deletedAt) return null
 
   const url = normalizePath(asset.url || asset.localPath)
-  const description = asset.description || null
+  const description = asset.description ?? null
+  const name = String(asset.name || '').trim() || null
+  const entityPatch = { url, description, name }
 
   if (asset.sourceType === 'scene' && asset.sourceId) {
-    pushAssetImageToScene(asset.sourceId, url, description)
+    pushAssetToScene(asset.sourceId, entityPatch)
     syncSceneAsset(asset.sourceId)
     return { type: 'scene' as const, id: asset.sourceId }
   }
 
   if (asset.sourceType === 'character' && asset.sourceId) {
-    pushAssetImageToCharacter(asset.sourceId, url, description)
+    pushAssetToCharacter(asset.sourceId, entityPatch)
     syncCharacterAsset(asset.sourceId)
     return { type: 'character' as const, id: asset.sourceId }
   }

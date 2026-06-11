@@ -417,6 +417,7 @@ export const assetAPI = {
   del: (id: number) => api.del(`/assets/${id}`),
   sync: (dramaId: number) => api.post('/assets/sync', { drama_id: dramaId }),
   upload: (form: FormData) => uploadForm('/assets/upload', form),
+  uploadToAsset: (id: number, form: FormData) => uploadForm(`/assets/${id}/upload`, form),
   applyToCharacter: (assetId: number, characterId: number) =>
     api.post(`/assets/${assetId}/apply-character`, { character_id: characterId }),
   applyToScene: (assetId: number, sceneId: number) =>
@@ -426,11 +427,34 @@ export const assetAPI = {
 export const imageAPI = {
   generate: (d: any) => api.post('/images', d),
   get: (id: number) => api.get(`/images/${id}`),
+  capabilities: () => api.get('/images/studio/capabilities'),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
     if (params?.storyboard_id) query.set('storyboard_id', String(params.storyboard_id))
     return api.get(`/images${query.size ? `?${query.toString()}` : ''}`)
+  },
+  ledger: (params?: {
+    drama_id?: number
+    episode_id?: number
+    status?: string
+    keyword?: string
+    limit?: number
+    offset?: number
+    mine_only?: boolean
+    studio_only?: boolean
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.drama_id) query.set('drama_id', String(params.drama_id))
+    if (params?.episode_id) query.set('episode_id', String(params.episode_id))
+    if (params?.status) query.set('status', params.status)
+    if (params?.keyword) query.set('keyword', params.keyword)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.mine_only === false) query.set('mine_only', '0')
+    else if (params?.mine_only !== undefined) query.set('mine_only', '1')
+    if (params?.studio_only) query.set('studio_only', '1')
+    return api.get(`/images/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
 }
 export const gridAPI = {
@@ -455,6 +479,7 @@ export const videoAPI = {
     keyword?: string
     limit?: number
     offset?: number
+    mine_only?: boolean
   }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
@@ -463,6 +488,8 @@ export const videoAPI = {
     if (params?.keyword) query.set('keyword', params.keyword)
     if (params?.limit) query.set('limit', String(params.limit))
     if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.mine_only === false) query.set('mine_only', '0')
+    else if (params?.mine_only !== undefined) query.set('mine_only', '1')
     return api.get(`/videos/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
 }

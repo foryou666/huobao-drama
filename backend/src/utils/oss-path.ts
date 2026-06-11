@@ -2,7 +2,7 @@
  * OSS 对象路径 — 以项目(dramaId)为根，所有资产统一放在 asset/ 目录
  */
 import path from 'path'
-import { eq, or } from 'drizzle-orm'
+import { and, eq, isNull, or } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 
 function normalizeStaticPath(raw: string): string {
@@ -92,6 +92,18 @@ export function resolveDramaIdForStaticPath(localPath: string): number | null {
     .where(eq(schema.imageGenerations.localPath, normalized))
     .all()
   if (gen?.dramaId) return gen.dramaId
+
+  const [asset] = db.select({ dramaId: schema.assets.dramaId })
+    .from(schema.assets)
+    .where(and(
+      isNull(schema.assets.deletedAt),
+      or(
+        eq(schema.assets.url, normalized),
+        eq(schema.assets.localPath, normalized),
+      ),
+    ))
+    .all()
+  if (asset?.dramaId) return asset.dramaId
 
   return null
 }

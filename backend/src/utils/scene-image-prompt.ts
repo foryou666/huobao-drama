@@ -1,11 +1,16 @@
+import {
+  appendSceneImageStylePrompt,
+  buildDefaultSceneImagePrompt as composeDefaultSceneImagePrompt,
+} from '../constants/image-prompt-templates.js'
+
+export { SCENE_IMAGE_STYLE_PROMPT } from '../constants/image-prompt-templates.js'
+
 export function buildDefaultSceneImagePrompt(scene: {
   location: string
   time?: string | null
   prompt?: string | null
 }) {
-  const base = scene.prompt?.trim()
-  if (base) return base
-  return `${scene.location}, ${scene.time || ''}, 高质量场景, 电影感`.replace(/,\s*,/g, ',').replace(/,\s*$/, '')
+  return composeDefaultSceneImagePrompt(scene)
 }
 
 export function resolveSceneImagePrompt(
@@ -13,6 +18,6 @@ export function resolveSceneImagePrompt(
   override?: string | null,
 ) {
   const custom = override?.trim()
-  if (custom) return custom
+  if (custom) return appendSceneImageStylePrompt(custom)
   return buildDefaultSceneImagePrompt(scene)
 }

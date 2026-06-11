@@ -83,7 +83,7 @@ const props = defineProps({
   promptLabel: { type: String, default: '自定义提示（可选）' },
   promptPlaceholder: {
     type: String,
-    default: '例如：保持三视图拼板布局不变，仅替换为参考图2的服装，保持写实摄影质感。',
+    default: '例如：保持三视图拼板布局不变，换装为参考图2的宫女定稿服装，表情自然无眼泪，去除破损污渍与绳绑。',
   },
 })
 

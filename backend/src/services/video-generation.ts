@@ -1,6 +1,6 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { getActiveConfig, getConfigById, resolveVideoTaskConfig, getFallbackChengmengVideoConfig, promoteChengmengVideoConfig } from './ai.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readFileAsDataUrl, readImageAsCompressedDataUrl } from '../utils/storage.js'
 import { getDramaImageAspectRatio } from '../utils/image-size.js'
@@ -10,7 +10,7 @@ import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuc
 import type { VideoContentRef } from '../utils/seedance-content.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/video-content-refs.js'
-import { isChengmengProvider } from '../constants/chengmeng.js'
+import { isChengmengProvider, isChengmengBalanceError } from '../constants/chengmeng.js'
 import {
   normalizeChengmengContentRefs,
   normalizeChengmengReferenceUrls,
@@ -37,6 +37,7 @@ interface GenerateVideoParams {
   aspectRatio?: string
   configId?: number
   creditTransactionId?: number
+  userId?: number
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
@@ -45,6 +46,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     ? getConfigById(params.configId)
     : getActiveConfig('video')
   if (!config) throw new Error('No active video AI config')
+  const configId = config.id ?? params.configId ?? null
 
   if (params.storyboardId) {
     const [sb] = db.select().from(schema.storyboards)
@@ -74,7 +76,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
 
   if (useChengmeng) {
-    const { imageCount, videoCount } = resolveChengmengPromptMediaCounts({
+    const { imageCount, videoCount, audioCount } = resolveChengmengPromptMediaCounts({
       prompt: params.prompt,
       referenceMode: params.referenceMode,
       imageUrl: params.imageUrl,
@@ -83,7 +85,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
       referenceImageUrls: params.referenceImageUrls,
       contentRefs: params.contentRefs,
     })
-    assertChengmengPromptLength(params.prompt, imageCount, videoCount)
+    assertChengmengPromptLength(params.prompt, imageCount, videoCount, audioCount)
   }
 
   const res = db.insert(schema.videoGenerations).values({
@@ -101,6 +103,8 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     duration: params.duration || 15,
     aspectRatio,
     creditTransactionId: params.creditTransactionId ?? null,
+    configId,
+    userId: params.userId ?? null,
     status: 'processing',
     createdAt: ts,
     updatedAt: ts,
@@ -131,7 +135,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   return lastId
 }
 
-async function processVideoGeneration(id: number, config: AIConfig) {
+async function processVideoGeneration(id: number, config: AIConfig, options?: { allowChengmengFallback?: boolean }) {
   const adapter = getVideoAdapter(config.provider)
 
   try {
@@ -209,10 +213,19 @@ async function processVideoGeneration(id: number, config: AIConfig) {
       body: JSON.stringify(body),
     })
 
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
+    if (!resp.ok) {
+      const errText = await resp.text()
+      throw new Error(`API error ${resp.status}: ${errText}`)
+    }
     const result = await resp.json() as any
 
-    const { isAsync, taskId, videoUrl } = adapter.parseGenerateResponse(result)
+    let parsed: ReturnType<typeof adapter.parseGenerateResponse>
+    try {
+      parsed = adapter.parseGenerateResponse(result)
+    } catch (parseErr: any) {
+      throw new Error(parseErr?.message || String(parseErr))
+    }
+    const { isAsync, taskId, videoUrl } = parsed
 
     if (!isAsync && videoUrl) {
       logTaskProgress('VideoTask', 'sync-complete', { id, videoUrl })
@@ -236,8 +249,30 @@ async function processVideoGeneration(id: number, config: AIConfig) {
 
     pollVideoTask(id, config, taskId!, record.storyboardId)
   } catch (err: any) {
-    logTaskError('VideoTask', 'process', { id, provider: config.provider, error: err.message })
-    failVideoGeneration(id, err.message)
+    const message = err?.message || String(err)
+    if (
+      options?.allowChengmengFallback !== false
+      && isChengmengProvider(config.provider)
+      && isChengmengBalanceError(message)
+    ) {
+      const fallback = getFallbackChengmengVideoConfig(config.id)
+      if (fallback?.id && fallback.id !== config.id) {
+        logTaskWarn('VideoTask', 'chengmeng-balance-fallback', {
+          id,
+          fromConfigId: config.id,
+          toConfigId: fallback.id,
+          error: message,
+        })
+        db.update(schema.videoGenerations)
+          .set({ configId: fallback.id, updatedAt: now() })
+          .where(eq(schema.videoGenerations.id, id))
+          .run()
+        promoteChengmengVideoConfig(fallback.id)
+        return processVideoGeneration(id, fallback, { allowChengmengFallback: false })
+      }
+    }
+    logTaskError('VideoTask', 'process', { id, provider: config.provider, error: message })
+    failVideoGeneration(id, message)
   }
 }
 
@@ -442,17 +477,39 @@ export async function handleVideoComplete(id: number, videoUrl: string, duration
   }
 }
 
-/** 服务重启后恢复 processing 任务的轮询 */
-function getVideoConfigForProvider(provider: string): AIConfig | null {
-  const rows = db.select().from(schema.aiServiceConfigs)
-    .where(eq(schema.aiServiceConfigs.serviceType, 'video'))
-    .all()
-    .filter(r => r.isActive && r.provider === provider)
-    .sort((a, b) => (b.priority || 0) - (a.priority || 0))
-  const match = rows[0]
-  return match ? getConfigById(match.id) : null
+/** 使用任务创建时的 Key 向橙盟等平台查询一次任务状态（补下载/刷新外链） */
+export async function refreshVideoFromProvider(id: number): Promise<typeof schema.videoGenerations.$inferSelect | null> {
+  const [record] = db.select().from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.id, id)).all()
+  if (!record) return null
+  if (!record.taskId) throw new Error('该记录无 task_id，无法向服务商查询')
+
+  const config = resolveVideoTaskConfig(record)
+  if (!config) throw new Error('未找到视频服务配置')
+
+  const adapter = getVideoAdapter(config.provider)
+  if (adapter.provider === 'vidu') {
+    throw new Error('Vidu 视频请等待 Webhook 回调')
+  }
+
+  const { url, method, headers } = adapter.buildPollRequest(config, record.taskId)
+  const resp = await fetch(url, { method, headers })
+  if (!resp.ok) throw new Error(`查询任务失败 HTTP ${resp.status}`)
+  const result = await resp.json() as any
+  const pollResp = adapter.parsePollResponse(result)
+
+  if (pollResp.status === 'completed' && pollResp.videoUrl) {
+    await handleVideoComplete(id, pollResp.videoUrl, record.duration, record.storyboardId)
+  } else if (pollResp.status === 'failed') {
+    failVideoGeneration(id, pollResp.error || 'Video generation failed')
+  }
+
+  const [updated] = db.select().from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.id, id)).all()
+  return updated || null
 }
 
+/** 服务重启后恢复 processing 任务的轮询 */
 export function resumeProcessingVideoTasks() {
   const rows = db.select()
     .from(schema.videoGenerations)
@@ -460,12 +517,17 @@ export function resumeProcessingVideoTasks() {
     .all()
   for (const row of rows) {
     if (!row.taskId || !row.provider) continue
-    const config = getVideoConfigForProvider(row.provider) || getActiveConfig('video')
+    const config = resolveVideoTaskConfig(row)
     if (!config) {
       logTaskWarn('VideoTask', 'resume-skipped', { id: row.id, reason: 'no config' })
       continue
     }
-    logTaskProgress('VideoTask', 'resume-poll', { id: row.id, taskId: row.taskId, provider: row.provider })
+    logTaskProgress('VideoTask', 'resume-poll', {
+      id: row.id,
+      taskId: row.taskId,
+      provider: row.provider,
+      configId: row.configId ?? config.id,
+    })
     pollVideoTask(row.id, config, row.taskId, row.storyboardId).catch(err => {
       logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
     })

@@ -1760,7 +1760,7 @@
 
                 <!-- Step 4: Done -->
                 <div v-else-if="gridStep === 4" class="grid-tool-body" style="align-items:center;justify-content:center;min-height:200px">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent-dark)" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
                   <div style="font-size:17px;font-weight:700;font-family:var(--font-display);margin-top:8px">分配完成</div>
                   <div class="dim" style="font-size:13px;margin-top:4px">{{ gridAssignedCount }} 格已分配</div>
                   <button class="btn btn-primary" style="margin-top:16px" @click="gridDialog = false; refresh()">关闭</button>
@@ -1798,7 +1798,7 @@
                     :index-label="`#${String(i + 1).padStart(2, '0')}`"
                     :portrait="isPortraitDramaAspect"
                     compact
-                    @expand="openVideoViewer(displayUrl(getVideoUrl(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 视频预览`)"
+                    @expand="openVideoViewer(displayUrl(getVideoUrl(sb)), `镜头 #${String(i + 1).padStart(2, '0')} 视频预览`, getVideoUrl(sb))"
                   >
                     <template #badges>
                       <span v-if="hasComposed(sb)" class="prod-overlay-badge">已合成</span>
@@ -2032,14 +2032,14 @@
                       </div>
                       <div v-if="getStoryboardVoiceRefs(sb).length" class="video-voice-list">
                         <div
-                          v-for="(ref, vIdx) in getStoryboardVoiceRefs(sb)"
-                          :key="ref.path || vIdx"
+                          v-for="(voiceRef, vIdx) in getStoryboardVoiceRefs(sb)"
+                          :key="voiceRef.path || vIdx"
                           class="video-voice-chip"
                         >
-                          <span>{{ ref.name }}</span>
-                          <span v-if="ref.duration" class="dim">{{ formatVoiceDuration(ref.duration) }}</span>
-                          <audio :src="'/' + normalizeMediaPath(ref.path)" controls preload="none" />
-                          <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, ref)">移除</button>
+                          <span>{{ voiceRef.name }}</span>
+                          <span v-if="voiceRef.duration" class="dim">{{ formatVoiceDuration(voiceRef.duration) }}</span>
+                          <audio :src="'/' + normalizeMediaPath(voiceRef.path)" controls preload="none" />
+                          <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, voiceRef)">移除</button>
                         </div>
                       </div>
                       <div v-else class="dim video-ref-empty-hint">未选择音色参考，可在音色库上传后在生成视频时使用</div>
@@ -2063,55 +2063,55 @@
                       </div>
                       <div v-if="collectVideoReferencesExceptBlocking(sb).length" class="video-ref-list">
                         <div
-                          v-for="ref in collectVideoReferencesExceptBlocking(sb)"
-                          :key="ref.key"
+                          v-for="mediaRef in collectVideoReferencesExceptBlocking(sb)"
+                          :key="mediaRef.key"
                           class="video-ref-card"
-                          :class="{ missing: ref.missing }"
+                          :class="{ missing: mediaRef.missing }"
                         >
                           <div class="video-ref-card-media">
                             <button
-                              v-if="ref.url && ref.type === 'image'"
+                              v-if="mediaRef.url && mediaRef.type === 'image'"
                               type="button"
                               class="video-ref-thumb"
-                              @click="openImageViewer(displayUrl(ref.url), ref.label)"
+                              @click="openImageViewer(displayUrl(mediaRef.url), mediaRef.label)"
                             >
-                              <img :src="gridUrl(ref.url)" :alt="ref.label" loading="lazy" decoding="async" />
+                              <img :src="gridUrl(mediaRef.url)" :alt="mediaRef.label" loading="lazy" decoding="async" />
                             </button>
-                            <div v-else-if="ref.type === 'audio' && ref.url" class="video-ref-audio">
-                              <audio :src="'/' + normalizeMediaPath(ref.url)" controls preload="none" />
+                            <div v-else-if="mediaRef.type === 'audio' && mediaRef.url" class="video-ref-audio">
+                              <audio :src="'/' + normalizeMediaPath(mediaRef.url)" controls preload="none" />
                             </div>
-                            <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ ref.missing ? '待生成' : '无素材' }}</div>
-                            <span v-if="ref.displayImageIndex" class="video-ref-index">图{{ ref.displayImageIndex }}</span>
+                            <div v-else class="video-ref-thumb video-ref-thumb-empty">{{ mediaRef.missing ? '待生成' : '无素材' }}</div>
+                            <span v-if="mediaRef.displayImageIndex" class="video-ref-index">图{{ mediaRef.displayImageIndex }}</span>
                           </div>
                           <div class="video-ref-meta">
-                            <span class="video-ref-label">{{ ref.label }}</span>
-                            <span class="video-ref-tag">{{ ref.typeLabel }}</span>
+                            <span class="video-ref-label">{{ mediaRef.label }}</span>
+                            <span class="video-ref-tag">{{ mediaRef.typeLabel }}</span>
                           </div>
                           <div class="video-ref-actions">
-                            <template v-if="ref.source === 'first_frame'">
+                            <template v-if="mediaRef.source === 'first_frame'">
                               <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'first_frame')">更换</button>
                               <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'first_frame')">删除</button>
                             </template>
-                            <template v-else-if="ref.source === 'last_frame'">
+                            <template v-else-if="mediaRef.source === 'last_frame'">
                               <button type="button" class="video-ref-action" @click="genShotFrame(sb, 'last_frame')">更换</button>
                               <button type="button" class="video-ref-action danger" @click="clearVideoFrame(sb, 'last_frame')">删除</button>
                             </template>
-                            <template v-else-if="ref.source === 'character'">
-                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genCharImg(ref.charId)">生成</button>
-                              <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, ref.charId)">移除</button>
+                            <template v-else-if="mediaRef.source === 'character'">
+                              <button v-if="mediaRef.missing" type="button" class="video-ref-action" @click="genCharImg(mediaRef.charId)">生成</button>
+                              <button type="button" class="video-ref-action danger" @click="removeVideoRefCharacter(sb, mediaRef.charId)">移除</button>
                             </template>
-                            <template v-else-if="ref.source === 'scene'">
-                              <button v-if="ref.missing" type="button" class="video-ref-action" @click="genSceneImg(ref.sceneId)">生成</button>
+                            <template v-else-if="mediaRef.source === 'scene'">
+                              <button v-if="mediaRef.missing" type="button" class="video-ref-action" @click="genSceneImg(mediaRef.sceneId)">生成</button>
                               <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
                             </template>
-                            <template v-else-if="ref.source === 'reference'">
-                              <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, ref)">删除</button>
+                            <template v-else-if="mediaRef.source === 'reference'">
+                              <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, mediaRef)">删除</button>
                             </template>
-                            <template v-else-if="ref.source === 'tts'">
+                            <template v-else-if="mediaRef.source === 'tts'">
                               <button type="button" class="video-ref-action" @click="genShotTTS(sb)">重生成</button>
                             </template>
-                            <template v-else-if="ref.source === 'voice'">
-                              <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, { path: ref.url, asset_id: ref.assetId })">移除</button>
+                            <template v-else-if="mediaRef.source === 'voice'">
+                              <button type="button" class="video-ref-action danger" @click="removeStoryboardVoiceRef(sb, { path: mediaRef.url, asset_id: mediaRef.assetId })">移除</button>
                             </template>
                           </div>
                         </div>
@@ -2134,6 +2134,15 @@
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
                     {{ isPendingVideo(sb.id) && !isVideoGenerationSlow(sb.id) ? '生成中…' : (isPendingVideo(sb.id) ? '继续生成' : '生成视频') }}
+                  </button>
+                  <button
+                    v-if="hasVid(sb)"
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="videoDownloadShotId === sb.id"
+                    @click="downloadStoryboardVideo(sb, i)"
+                  >
+                    {{ videoDownloadShotId === sb.id ? '下载中…' : '下载' }}
                   </button>
                   <button
                     v-if="hasVid(sb) || videoGenCount(sb.id) > 0"
@@ -2340,9 +2349,20 @@
         <div class="card image-viewer-dialog video-viewer-dialog">
           <div class="image-viewer-head">
             <div class="image-viewer-title">{{ videoViewer.title || '视频预览' }}</div>
-            <button class="btn btn-ghost btn-icon" @click="closeVideoViewer">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
+            <div class="image-viewer-actions">
+              <button
+                v-if="videoViewer.downloadRaw"
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="videoDownloading"
+                @click="downloadCurrentVideo"
+              >
+                {{ videoDownloading ? '下载中…' : '下载视频' }}
+              </button>
+              <button class="btn btn-ghost btn-icon" @click="closeVideoViewer">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
           </div>
           <div class="image-viewer-body video-viewer-body">
             <video
@@ -2389,7 +2409,7 @@
       :title="assetPickerTitle"
       :confirm-before-select="assetPicker.type === 'costume'"
       confirm-label="确认生成换装图"
-      confirm-hint="将基于当前角色基准图与所选服装，重新生成一张换装图"
+      confirm-hint="将基于角色基准图（图1）与定稿服装（图2）生成换装图，默认修正为自然表情并替换破损服装"
       @close="closeAssetPicker"
       @select="applyPickedAsset"
     />
@@ -2483,6 +2503,7 @@
 </template>
 
 <script setup>
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { toast } from 'vue-sonner'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2, Sparkles, Music,
@@ -2504,8 +2525,9 @@ import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import { parseVoiceRefs, formatVoiceDuration, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
 import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
-import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
+import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceAudios, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
 import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
+import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
 import {
@@ -2532,6 +2554,7 @@ import {
   buildBlockingVideoPromptSnippet,
 } from '~/utils/blocking-layout.js'
 import { formatImageGenerationError } from '~/utils/image-generation-error.js'
+import { getCharacterImagePrompt, getSceneImagePrompt as resolveSceneImagePromptText } from '~/utils/image-prompt-templates.js'
 
 definePageMeta({ layout: 'studio' })
 
@@ -2680,9 +2703,11 @@ const prodCardDetailOpen = ref({})
 const prodCardDetailMounted = ref({})
 const failedComposeMessages = ref({})
 const imageViewer = ref({ open: false, src: '', title: '' })
-const videoViewer = ref({ open: false, src: '', title: '' })
+const videoViewer = ref({ open: false, src: '', title: '', downloadRaw: '' })
 const videoViewerEl = ref(null)
 const videoViewerOverlayMouseDown = ref(false)
+const videoDownloading = ref(false)
+const videoDownloadShotId = ref(null)
 const videoHistory = ref({ open: false, storyboardId: null, title: '', currentVideoUrl: '' })
 const videoPromptEditor = ref({
   open: false,
@@ -2770,14 +2795,56 @@ function closeImageViewer() {
   imageViewer.value = { open: false, src: '', title: '' }
 }
 
-function openVideoViewer(src, title = '') {
+function openVideoViewer(src, title = '', downloadRaw = '') {
   if (!src) return
-  videoViewer.value = { open: true, src, title }
+  videoViewer.value = { open: true, src, title, downloadRaw: downloadRaw || '' }
 }
 
 function closeVideoViewer() {
   if (videoViewerEl.value) videoViewerEl.value.pause()
-  videoViewer.value = { open: false, src: '', title: '' }
+  videoViewer.value = { open: false, src: '', title: '', downloadRaw: '' }
+}
+
+function storyboardVideoDownloadName(sb, index = null) {
+  const num = index != null ? index + 1 : (sb?.storyboard_number ?? sb?.storyboardNumber)
+  return buildVideoDownloadFilename({
+    dramaTitle: drama.value?.title,
+    episodeNumber: episodeNumber.value,
+    storyboardNumber: num,
+    title: sb?.title || sb?.description,
+  })
+}
+
+async function downloadStoryboardVideo(sb, index = null) {
+  const raw = getVideoUrl(sb)
+  if (!raw || videoDownloadShotId.value != null) return
+  videoDownloadShotId.value = sb.id
+  try {
+    await downloadMediaFile(raw, storyboardVideoDownloadName(sb, index))
+    toast.success('开始下载')
+  } catch (e) {
+    toast.error(e?.message || '下载失败')
+  } finally {
+    videoDownloadShotId.value = null
+  }
+}
+
+async function downloadCurrentVideo() {
+  const raw = videoViewer.value.downloadRaw
+  if (!raw || videoDownloading.value) return
+  videoDownloading.value = true
+  try {
+    await downloadMediaFile(raw, buildVideoDownloadFilename({
+      dramaTitle: drama.value?.title,
+      episodeNumber: episodeNumber.value,
+      title: videoViewer.value.title,
+    }))
+    toast.success('开始下载')
+  } catch (e) {
+    toast.error(e?.message || '下载失败')
+  } finally {
+    videoDownloading.value = false
+  }
 }
 
 function onVideoViewerOverlayMouseDown(event) {
@@ -4260,12 +4327,8 @@ async function setDramaImageAspect(value) {
   }
 }
 
-function buildDefaultCharImagePrompt(c) {
-  return `${c.name}, ${c.appearance || c.description || '人物立绘'}, 高质量, 正面, 白色背景`
-}
-
 function getCharImagePrompt(c) {
-  return c.image_prompt || c.imagePrompt || buildDefaultCharImagePrompt(c)
+  return getCharacterImagePrompt(c)
 }
 
 async function onCharImagePromptBlur(c, event) {
@@ -4281,13 +4344,8 @@ async function onCharImagePromptBlur(c, event) {
   }
 }
 
-function buildDefaultScenePrompt(s) {
-  return `${s.location}, ${s.time || ''}, 高质量场景, 电影感`.replace(/,\s*,/g, ',').replace(/,\s*$/, '')
-}
-
 function getSceneImagePrompt(s) {
-  const custom = String(s.prompt || '').trim()
-  return custom || buildDefaultScenePrompt(s)
+  return resolveSceneImagePromptText(s)
 }
 
 async function onScenePromptBlur(s, event) {
@@ -4473,8 +4531,8 @@ function skipRewrite() {
   toast.success('已跳过 AI 改写，当前将直接使用原始内容')
   scriptStep.value = 2
 }
-function doExtract() { saveScr(); sendAssistant('请从剧本中提取所有角色和场景信息，提取时自动与项目已有数据进行去重合并', refresh) }
-function doVoice() { sendAssistant('请为所有角色分配合适的音色', refresh) }
+function doExtract() { saveScr(); sendAssistant('请从当前集剧本中提取本集出现的角色和场景，提取时自动与项目已有数据进行去重合并', refresh) }
+function doVoice() { sendAssistant('请为当前集关联的所有角色分配合适的音色', refresh) }
 async function batchGenSamples() {
   const pending = chars.value.filter(c => (c.voice_style || c.voiceStyle) && !(c.voice_sample_url || c.voiceSampleUrl))
   if (!pending.length) {
@@ -4681,7 +4739,9 @@ async function uploadCharImage(charId, event) {
     const res = await characterAPI.uploadImage(charId, file)
     const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
     if (!path) throw new Error('上传失败')
-    toast.success('角色形象已上传')
+    const ossWarning = res?.oss_warning || res?.ossWarning
+    toast.success(ossWarning ? '角色形象已上传（OSS 同步稍后重试）' : '角色形象已上传')
+    if (ossWarning) toast.warning(`云端同步未成功：${ossWarning}`)
     await refresh()
   } catch (e) {
     toast.error(e?.message || '上传失败')
@@ -4815,7 +4875,7 @@ function batchCharImages() {
     const char = chars.value.find(c => c.id === id)
     genTimer.startTask(charTimerKey(id), `角色「${char?.name || id}」形象`, 'image')
   })
-  sendAssistant('请为所有尚未生成图片的角色批量生成图片，调用 batch_generate_character_images', () => {
+  sendAssistant(`请为当前集以下尚未生成图片的角色批量生成图片，调用 batch_generate_character_images，character_ids=[${ids.join(',')}]`, () => {
     watchAsyncResult(() => ids.every(id => {
       const char = chars.value.find(c => c.id === id)
       const done = !!(char?.image_url || char?.imageUrl)
@@ -5100,7 +5160,7 @@ function batchSceneImages() {
     const scene = scenes.value.find(s => s.id === id)
     genTimer.startTask(sceneTimerKey(id), `场景「${scene?.location || id}」主视角`, 'image')
   })
-  sendAssistant('请为所有尚未生成图片的场景批量生成图片，调用 batch_generate_scene_images', () => {
+  sendAssistant(`请为当前集以下尚未生成图片的场景批量生成图片，调用 batch_generate_scene_images，scene_ids=[${ids.join(',')}]`, () => {
     watchAsyncResult(() => ids.every(id => {
       const scene = scenes.value.find(s => s.id === id)
       const done = !!(scene?.image_url || scene?.imageUrl)
@@ -5645,7 +5705,8 @@ async function genVid(sb) {
   const contentRefs = buildVideoContentRefs(sb)
   if (isChengmengVideoActive.value) {
     const imageCount = countChengmengReferenceImages(contentRefs)
-    const sendLength = estimateChengmengPromptLength(prompt, imageCount)
+    const audioCount = countChengmengReferenceAudios(contentRefs)
+    const sendLength = estimateChengmengPromptLength(prompt, imageCount, 0, audioCount)
     if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
       toast.error(formatVideoPromptOverLimitMessage(sendLength))
       return
@@ -5947,10 +6008,9 @@ watch(() => route.params.episodeNumber, () => {
   flex-shrink: 0;
   padding: 8px 12px;
   border-radius: 18px;
-  background: rgba(252, 253, 255, 0.84);
+  background: var(--bg-0);
   border: 1px solid rgba(27, 41, 64, 0.08);
   box-shadow: 0 14px 36px rgba(20, 32, 54, 0.07), 0 3px 10px rgba(20, 32, 54, 0.04);
-  backdrop-filter: blur(16px);
 }
 
 .studio-gen-banner {
@@ -5987,10 +6047,9 @@ watch(() => route.params.episodeNumber, () => {
 .studio-topbar-main,
 .sidebar,
 .main {
-  background: rgba(252, 253, 255, 0.84);
+  background: var(--bg-0);
   border: 1px solid rgba(27, 41, 64, 0.08);
   box-shadow: 0 18px 48px rgba(20, 32, 54, 0.08), 0 4px 14px rgba(20, 32, 54, 0.05);
-  backdrop-filter: blur(16px);
 }
 
 .studio-topbar-main {
@@ -6083,12 +6142,12 @@ watch(() => route.params.episodeNumber, () => {
   color: var(--accent-text);
 }
 .studio-meta-pill.is-progress {
-  background: rgba(45, 122, 69, 0.08);
-  color: var(--success);
+  background: rgba(53, 95, 206, 0.1);
+  color: var(--accent-text);
 }
 .studio-meta-inline {
   font-size: 9px;
-  color: var(--text-3);
+  color: var(--text-2);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -6159,13 +6218,13 @@ watch(() => route.params.episodeNumber, () => {
 
 .studio-body {
   display: grid;
-  grid-template-columns: 244px minmax(0, 1fr) minmax(0, 320px);
+  grid-template-columns: 260px minmax(0, 1fr) minmax(0, 320px);
   gap: 10px;
   min-height: 0;
   flex: 1;
 }
 .studio-body.assistant-collapsed {
-  grid-template-columns: 244px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
 }
 
 /* ===== Sidebar ===== */
@@ -6177,12 +6236,13 @@ watch(() => route.params.episodeNumber, () => {
   overflow: hidden;
   min-height: 0;
   border-radius: 28px;
+  -webkit-font-smoothing: auto;
 }
 .back-btn {
   width: 40px; height: 40px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   border: 1px solid rgba(27, 41, 64, 0.1); border-radius: 14px;
-  background: rgba(255,255,255,0.8); color: var(--text-2);
+  background: rgba(255,255,255,0.8); color: #121212;
   cursor: pointer; transition: all 0.15s;
   box-shadow: var(--shadow-xs);
 }
@@ -6192,34 +6252,35 @@ watch(() => route.params.episodeNumber, () => {
 .pipeline { flex: 1; overflow-y: auto; padding: 16px 14px 12px; display: flex; flex-direction: column; gap: 12px; }
 .pipe-section { display: flex; flex-direction: column; gap: 4px; }
 .pipe-section-label {
-  font-size: 10px; font-weight: 700; color: #95a1b6;
-  text-transform: uppercase; letter-spacing: 0.1em;
-  padding: 2px 8px 3px;
+  font-size: 12px; font-weight: 800; color: #0a0a0a;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 8px 4px;
 }
 .pipe-item {
   display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
-  padding: 7px 10px;
+  padding: 9px 12px;
   border-radius: 17px;
-  font-size: 12px; font-weight: 600;
-  background: none; border: 1px solid transparent; color: var(--text-2); cursor: pointer;
-  transition: all 0.14s; width: 100%; text-align: left;
+  font-size: 14px; font-weight: 700;
+  background: none; border: 1px solid transparent; color: #0a0a0a; cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s, box-shadow 0.14s;
+  width: 100%; text-align: left;
   position: relative;
   z-index: 1;
 }
-.pipe-item:hover { background: rgba(255,255,255,0.3); color: var(--text-0); }
+.pipe-item:hover { background: rgba(255,255,255,0.3); color: #0a0a0a; }
 .pipe-item.active {
   background: rgba(255,255,255,0.94);
-  color: var(--text-0);
+  color: #0a0a0a;
   border-color: rgba(27, 41, 64, 0.05);
   box-shadow: 0 8px 18px rgba(19, 33, 56, 0.045);
 }
-.pipe-item.done { color: var(--success); }
+.pipe-item.done { color: var(--accent-text); }
 .pipe-item-sub {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  padding: 7px 10px;
+  padding: 9px 12px;
   position: relative;
-  min-height: 42px;
+  min-height: 46px;
 }
 
 .pipe-item-sub:not(:last-child)::after {
@@ -6234,32 +6295,32 @@ watch(() => route.params.episodeNumber, () => {
 }
 
 .pipe-icon {
-  width: 17px; height: 17px; border-radius: 999px;
+  width: 20px; height: 20px; border-radius: 999px;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(246,248,252,0.98); border: 1px solid rgba(18,25,42,0.08);
-  color: #aab4c6; flex-shrink: 0; transition: all 0.15s;
+  background: #f5f7fb; border: 1px solid rgba(18,25,42,0.12);
+  color: #0a0a0a; flex-shrink: 0; transition: all 0.15s;
   position: relative;
   z-index: 1;
 }
-.pipe-item.active .pipe-icon { background: rgba(19, 51, 121, 0.07); border-color: rgba(19, 51, 121, 0.1); color: var(--accent-text); }
-.pipe-item.done .pipe-icon { background: rgba(45, 122, 69, 0.96); border-color: rgba(45,122,69,0.18); color: #fff; }
+.pipe-item.active .pipe-icon { background: rgba(19, 51, 121, 0.1); border-color: rgba(19, 51, 121, 0.16); color: var(--accent-text); }
+.pipe-item.done .pipe-icon { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
 .icon-active { background: var(--accent-dark) !important; border-color: var(--accent-dark) !important; color: #fff !important; }
-.icon-done { background: var(--success) !important; border-color: var(--success) !important; color: #fff !important; }
+.icon-done { background: var(--accent-dark) !important; border-color: var(--accent-dark) !important; color: #fff !important; }
 
-.pipe-label { flex: 1; font-size: 11.5px; }
-.pipe-copy { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pipe-label { flex: 1; font-size: 14px; font-weight: 700; line-height: 1.35; }
+.pipe-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .pipe-sub {
-  font-size: 8.5px;
+  font-size: 11px;
   line-height: 1.35;
-  color: var(--text-3);
-  font-weight: 500;
+  color: #2e2e2e;
+  font-weight: 600;
 }
 .pipe-badge {
   font-size: 9px; font-weight: 700; padding: 1px 5px;
-  border-radius: 99px; background: var(--bg-3); color: var(--text-3);
+  border-radius: 99px; background: var(--bg-3); color: var(--text-1);
   font-family: var(--font-mono);
 }
-.pipe-badge.badge-done { background: var(--success-bg); color: var(--success); }
+.pipe-badge.badge-done { background: var(--accent-bg); color: var(--accent-text); }
 .pipe-spinner { width: 10px; height: 10px; border: 1.5px solid var(--accent-bg); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
 /* Sidebar Bottom */
@@ -6282,7 +6343,7 @@ watch(() => route.params.episodeNumber, () => {
   height: 8px;
   border-radius: 999px;
   border: none;
-  background: rgba(45, 122, 69, 0.22);
+  background: rgba(53, 95, 206, 0.28);
   cursor: pointer;
   transition: transform 0.14s, background 0.14s, box-shadow 0.14s;
 }
@@ -6294,24 +6355,24 @@ watch(() => route.params.episodeNumber, () => {
   box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14);
 }
 .sidebar-jump-dot.done {
-  background: var(--success);
+  background: var(--accent-dark);
 }
 .sidebar-jump-dot.active.done {
   background: #1e3f8a;
 }
 .progress-wrap { display: flex; flex-direction: column; gap: 5px; }
 .progress-head { display: flex; justify-content: space-between; }
-.progress-label { font-size: 10.5px; color: var(--text-3); font-weight: 500; }
-.progress-val { font-size: 10.5px; color: var(--text-2); font-family: var(--font-mono); font-weight: 600; }
+.progress-label { font-size: 12px; color: #0a0a0a; font-weight: 700; }
+.progress-val { font-size: 12px; color: #0a0a0a; font-family: var(--font-mono); font-weight: 700; }
 .progress-track { height: 6px; background: rgba(194, 207, 227, 0.92); border-radius: 99px; overflow: hidden; }
 .progress-fill { height: 100%; background: var(--accent-gradient); border-radius: 99px; transition: width 0.5s var(--ease-out); }
 .refresh-btn {
   width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 8px; font-size: 11.5px; color: var(--text-2);
-  background: rgba(255,255,255,0.86); border: 1px solid rgba(27, 41, 64, 0.08); border-radius: 999px;
+  padding: 9px; font-size: 13px; font-weight: 700; color: #0a0a0a;
+  background: #fff; border: 1px solid rgba(27, 41, 64, 0.08); border-radius: 999px;
   cursor: pointer; transition: all 0.15s;
 }
-.refresh-btn:hover { background: #fff; color: var(--text-0); }
+.refresh-btn:hover { background: #fff; color: #0a0a0a; }
 
 /* ===== Main Content ===== */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; min-height: 0; border-radius: 30px; }
@@ -6330,36 +6391,36 @@ watch(() => route.params.episodeNumber, () => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
-  padding: 0 11px;
+  height: 34px;
+  padding: 0 13px;
   border-radius: 999px;
   border: 1px solid rgba(27, 41, 64, 0.08);
-  background: rgba(255,255,255,0.7);
-  color: var(--text-2);
-  font-size: 11px;
-  font-weight: 600;
+  background: #fff;
+  color: #0a0a0a;
+  font-size: 13px;
+  font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 .stage-subnav-item:hover {
   background: #fff;
-  color: var(--text-0);
+  color: #0a0a0a;
 }
 .stage-subnav-item.active {
-  background: rgba(19, 51, 121, 0.08);
-  border-color: rgba(19, 51, 121, 0.12);
+  background: rgba(19, 51, 121, 0.1);
+  border-color: rgba(19, 51, 121, 0.16);
   color: #1e3f8a;
 }
 .stage-subnav-item.done {
-  color: var(--text-1);
+  color: var(--accent-text);
 }
 .stage-subnav-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--success);
-  box-shadow: 0 0 0 4px rgba(45, 122, 69, 0.1);
+  background: var(--accent-dark);
+  box-shadow: 0 0 0 4px rgba(76, 125, 255, 0.12);
 }
 
 /* Toolbar */
@@ -6438,10 +6499,10 @@ watch(() => route.params.episodeNumber, () => {
 .bubble-dots { display: flex; gap: 7px; padding: 0 4px; }
 .bubble-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: rgba(143, 160, 184, 0.4); cursor: pointer; transition: all 0.15s;
+  background: rgba(53, 95, 206, 0.28); cursor: pointer; transition: all 0.15s;
   border: none;
 }
-.bubble-dot.done { background: var(--success); }
+.bubble-dot.done { background: var(--accent-dark); }
 .bubble-dot.current { background: var(--accent-dark); transform: scale(1.2); box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14); }
 
 /* Extract grid */
@@ -6620,7 +6681,7 @@ watch(() => route.params.episodeNumber, () => {
 .shot-item.active .shot-num { background: var(--accent); color: #fff; }
 .shot-status { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
 .shot-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bg-3); flex-shrink: 0; }
-.shot-dot.has-img { background: var(--success); }
+.shot-dot.has-img { background: var(--accent-dark); }
 .shot-dot.has-video { background: var(--info); }
 .shot-dot.has-dialogue { background: var(--warning); }
 .shot-body { }
@@ -7220,7 +7281,7 @@ watch(() => route.params.episodeNumber, () => {
 .frame-thumb:hover .frame-re { display: flex; }
 .frame-scroll { flex: 1; overflow-y: auto; padding: 10px 12px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bg-3); flex-shrink: 0; }
-.dot.ok { background: var(--success); }
+.dot.ok { background: var(--accent-dark); }
 .dot.pending {
   background: var(--accent-dark);
   box-shadow: 0 0 0 3px rgba(76, 125, 255, 0.14);
@@ -7336,7 +7397,7 @@ watch(() => route.params.episodeNumber, () => {
 }
 .prod-overlay-badge {
   position: absolute; bottom: 5px; right: 5px; font-size: 10px; font-weight: 600;
-  background: var(--success); color: #fff; padding: 1px 5px; border-radius: 3px;
+  background: var(--accent-dark); color: #fff; padding: 1px 5px; border-radius: 3px;
 }
 .prod-info { padding: 10px 12px 8px; }
 .prod-desc { font-size: 12px; line-height: 1.4; }
@@ -7908,6 +7969,11 @@ watch(() => route.params.episodeNumber, () => {
   font-weight: 700;
   color: var(--text-1);
   font-family: var(--font-display);
+}
+.image-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .image-viewer-body {
   display: flex;

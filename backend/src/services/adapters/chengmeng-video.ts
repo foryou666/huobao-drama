@@ -76,6 +76,8 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
         record.prompt || '',
         mode === 'references' ? images.length : 0,
         videos.length,
+        audios.length,
+        refs,
       ),
       values,
     }

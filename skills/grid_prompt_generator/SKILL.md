@@ -21,14 +21,14 @@ description: 图片提示词生成指南 — 角色、场景、宫格图三类�
 
 ### 模板结构
 ```
-[appearance], [personality/temperament], [role], [cinematic portrait], [high quality], [consistent art style], [no text, no watermark]
+[外貌描述]，电影级人物定妆照。真人电影角色定妆照，白色纯背景，左侧为面部特写，右侧为全身三视图（正面、侧面、背面），人物完整入画，无遮挡，站姿自然
 ```
 
 ### 生成规则
 - 以 `appearance`（外貌描述）为核心
 - `personality` 决定气质基调（内敛/张扬/神秘等）
 - `role` 决定服装和道具风格
-- 必须包含 `cinematic portrait` + `consistent art style`
+- 必须保留四视图定妆照构图，禁止改成单人肖像或插画
 - 避免出现文字、签名、水印
 
 ---
@@ -39,14 +39,14 @@ description: 图片提示词生成指南 — 角色、场景、宫格图三类�
 
 ### 模板结构
 ```
-[location], [time period], [lighting atmosphere], [scene description], [cinematic scene], [high quality], [consistent art style], [no text, no watermark]
+[地点/光线/氛围/陈设]，真人实拍场景设定图，完整展示场景空间结构、前景、中景、后景关系，固定陈设清晰，主视觉区域明确，不出现人物，不出现动物，不出现动态主体，适合作为后续分镜、镜头承接、场景一致性锁定参考图
 ```
 
 ### 生成规则
 - 以 `location`（地点）为基础
 - `time` 决定光线色调（白天/夜晚/黄昏）
-- 场景氛围词：atmospheric, moody, warm, cold 等
-- 必须包含 `cinematic scene` + `consistent art style`
+- 必须保留场景设定图模板后缀
+- 严禁出现人物、动物、动态主体
 - 避免出现文字、签名、水印
 
 ---

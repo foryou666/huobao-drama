@@ -6,6 +6,24 @@
         <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；参考图上传默认入库，可从参考图库复用</p>
       </div>
       <div class="studio-header-actions">
+        <div class="studio-scope-toggle">
+          <button
+            type="button"
+            class="studio-scope-btn"
+            :class="{ active: viewScope === 'mine' }"
+            @click="setViewScope('mine')"
+          >
+            只看本人
+          </button>
+          <button
+            type="button"
+            class="studio-scope-btn"
+            :class="{ active: viewScope === 'all' }"
+            @click="setViewScope('all')"
+          >
+            查看全部
+          </button>
+        </div>
         <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
@@ -68,6 +86,15 @@
             <div class="studio-card-status">
               <span class="tag" :class="statusTagClass(item.status)">{{ statusLabel(item.status) }}</span>
             </div>
+            <button
+              v-if="playableUrl(item)"
+              type="button"
+              class="studio-card-download"
+              title="下载视频"
+              @click.stop="downloadItem(item)"
+            >
+              ↓
+            </button>
           </div>
 
           <div class="studio-card-body">
@@ -77,6 +104,14 @@
               <span v-if="item.is_manual" class="tag">手动</span>
               <span v-if="item.drama_title" class="dim">{{ item.drama_title }}</span>
               <span v-if="!item.storyboard_exists && item.storyboard_id" class="tag tag-warn">分镜已删</span>
+              <button
+                v-if="playableUrl(item)"
+                type="button"
+                class="studio-card-download-link"
+                @click.stop="downloadItem(item)"
+              >
+                下载
+              </button>
             </div>
           </div>
         </article>
@@ -135,6 +170,15 @@
             </div>
             <pre class="studio-detail-prompt">{{ detailItem.prompt || '—' }}</pre>
             <div class="studio-detail-actions">
+              <button
+                v-if="playableUrl(detailItem)"
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="detailDownloading"
+                @click="downloadDetail"
+              >
+                {{ detailDownloading ? '下载中…' : '下载视频' }}
+              </button>
               <button type="button" class="btn btn-sm" @click="reuseDetail">复用到输入框</button>
               <button type="button" class="btn btn-sm" @click="copyPrompt(detailItem.prompt)">复制提示词</button>
               <NuxtLink
@@ -157,6 +201,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, videoAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
+import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 
 const route = useRoute()
@@ -170,7 +215,9 @@ const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
 const pagination = ref({ limit: 30, offset: 0, total: 0, has_more: false })
 const filterDramaId = ref(String(route.query.drama_id || ''))
 const filterStatus = ref('all')
+const viewScope = ref('mine')
 const detailItem = ref(null)
+const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
 let pollTimer = null
@@ -308,17 +355,59 @@ async function copyPrompt(text) {
   }
 }
 
-function buildQuery(offset = 0) {
-  return {
-    drama_id: filterDramaId.value ? Number(filterDramaId.value) : undefined,
-    status: filterStatus.value === 'all' ? undefined : filterStatus.value,
-    limit: pagination.value.limit,
-    offset,
+function videoDownloadName(item) {
+  return buildVideoDownloadFilename({
+    id: item?.id,
+    dramaTitle: item?.drama_title,
+    episodeNumber: item?.episode_number,
+    storyboardNumber: item?.storyboard_number,
+    title: item?.storyboard_title,
+  })
+}
+
+async function downloadItem(item) {
+  const raw = playableUrl(item)
+  if (!raw) return
+  try {
+    await downloadMediaFile(raw, videoDownloadName(item))
+    toast.success('开始下载')
+  } catch (e) {
+    toast.error(e?.message || '下载失败')
   }
 }
 
-async function loadLedger({ append = false, offset = 0 } = {}) {
-  const res = await videoAPI.ledger(buildQuery(offset))
+async function downloadDetail() {
+  if (!detailItem.value || detailDownloading.value) return
+  detailDownloading.value = true
+  try {
+    await downloadItem(detailItem.value)
+  } finally {
+    detailDownloading.value = false
+  }
+}
+
+function buildQuery(offset = 0, limit = pagination.value.limit) {
+  return {
+    drama_id: filterDramaId.value ? Number(filterDramaId.value) : undefined,
+    status: filterStatus.value === 'all' ? undefined : filterStatus.value,
+    limit,
+    offset,
+    mine_only: viewScope.value === 'mine',
+  }
+}
+
+function setViewScope(scope) {
+  if (viewScope.value === scope) return
+  viewScope.value = scope
+  reload()
+}
+
+async function loadLedger({ append = false, offset = 0, refreshVisible = false } = {}) {
+  const pageLimit = refreshVisible
+    ? Math.min(Math.max(items.value.length, pagination.value.limit), 100)
+    : pagination.value.limit
+  const pageOffset = refreshVisible ? 0 : offset
+  const res = await videoAPI.ledger(buildQuery(pageOffset, pageLimit))
   const nextItems = (res?.items || []).map(normalizeItem)
   items.value = append ? [...items.value, ...nextItems] : nextItems
   stats.value = res?.stats || stats.value
@@ -329,6 +418,14 @@ async function loadLedger({ append = false, offset = 0 } = {}) {
     ...(item.reference_images || []).map(ref => ref.path),
   ]).filter(Boolean)
   await prefetchMediaUrls(mediaPaths)
+}
+
+async function refreshLedger() {
+  if (!items.value.length) {
+    await loadLedger({ offset: 0 })
+    return
+  }
+  await loadLedger({ refreshVisible: true })
 }
 
 async function reload() {
@@ -344,7 +441,8 @@ async function loadMore() {
   if (!pagination.value.has_more || loadingMore.value) return
   loadingMore.value = true
   try {
-    await loadLedger({ append: true, offset: items.value.length })
+    const nextOffset = pagination.value.offset + pagination.value.limit
+    await loadLedger({ append: true, offset: nextOffset })
   } finally {
     loadingMore.value = false
   }
@@ -376,7 +474,7 @@ async function pollGeneration(generationId) {
     await sleep(5000)
     try {
       const res = await videoAPI.get(generationId)
-      await reload()
+      await refreshLedger()
       if (res?.status === 'completed') {
         toast.success('视频生成完成')
         return
@@ -398,9 +496,9 @@ function sleep(ms) {
 function startPolling() {
   stopPolling()
   pollTimer = setInterval(async () => {
-    if (!hasActiveTasks.value) return
+    if (!hasActiveTasks.value || loadingMore.value) return
     try {
-      await loadLedger({ offset: 0 })
+      await refreshLedger()
     } catch {
       // ignore
     }
@@ -463,6 +561,32 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.studio-scope-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.studio-scope-btn {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.studio-scope-btn.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
 }
 
 .studio-filter-select {
@@ -603,6 +727,46 @@ onUnmounted(() => {
   position: absolute;
   top: 8px;
   right: 8px;
+}
+
+.studio-card-download {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.72);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.studio-card:hover .studio-card-download {
+  opacity: 1;
+}
+
+.studio-card-download-link {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.studio-card-download-link:hover {
+  text-decoration: underline;
+}
+
+.studio-card-download:hover {
+  background: rgba(59, 130, 246, 0.92);
 }
 
 .studio-card-body {

@@ -38,7 +38,7 @@ import media from './routes/media.js'
 import teams from './routes/teams.js'
 import { applyCreditPricingDefaultsIfNeeded } from './services/credits.js'
 import { migrateDefaultTeamIfNeeded } from './services/teams.js'
-import { migrateChengmengBaseUrlIfNeeded } from './services/chengmeng-migrate.js'
+import { migrateChengmengBaseUrlIfNeeded, migrateChengmengApiKeyIfNeeded } from './services/chengmeng-migrate.js'
 import { resumeProcessingVideoTasks } from './services/video-generation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -125,6 +125,7 @@ const host = process.env.HOST || '0.0.0.0'
 applyCreditPricingDefaultsIfNeeded()
 migrateDefaultTeamIfNeeded()
 migrateChengmengBaseUrlIfNeeded()
+migrateChengmengApiKeyIfNeeded()
 resumeProcessingVideoTasks()
 
 function getLanAddresses() {

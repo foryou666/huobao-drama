@@ -11,21 +11,32 @@ export function stripChengmengInlineTags(prompt) {
   return String(prompt || '').trim()
     .replace(/@图片\s*(\d+)/gi, '图片$1')
     .replace(/@素材\s*(\d+)/gi, '素材$1')
+    .replace(/@音频\s*(\d+)/gi, '音频$1')
 }
 
-export function buildChengmengTagPrefix(imageCount, videoCount = 0) {
+export function normalizeChengmengAudioLabels(prompt) {
+  return String(prompt || '').replace(/音色\s*(\d+)/gi, '音频$1')
+}
+
+export function buildChengmengTagPrefix(imageCount, videoCount = 0, audioCount = 0) {
   const imageTags = Array.from({ length: Math.max(0, imageCount) }, (_, i) => `@图片${i + 1}`)
   const videoTags = Array.from({ length: Math.max(0, videoCount) }, (_, i) => `@素材${i + 1}`)
-  const tags = [...imageTags, ...videoTags]
+  const audioTags = Array.from({ length: Math.max(0, audioCount) }, (_, i) => `@音频${i + 1}`)
+  const tags = [...imageTags, ...videoTags, ...audioTags]
   return tags.length ? `${tags.join(' ')} ` : ''
 }
 
-export function estimateChengmengPromptLength(prompt, imageCount, videoCount = 0) {
-  return buildChengmengTagPrefix(imageCount, videoCount).length + stripChengmengInlineTags(prompt).length
+export function estimateChengmengPromptLength(prompt, imageCount, videoCount = 0, audioCount = 0) {
+  return buildChengmengTagPrefix(imageCount, videoCount, audioCount).length
+    + stripChengmengInlineTags(normalizeChengmengAudioLabels(prompt)).length
 }
 
 export function countChengmengReferenceImages(contentRefs = []) {
   return contentRefs.filter(item =>
     item?.type === 'image' && item?.role !== 'first_frame' && item?.role !== 'last_frame',
   ).length
+}
+
+export function countChengmengReferenceAudios(contentRefs = []) {
+  return contentRefs.filter(item => item?.type === 'audio').length
 }

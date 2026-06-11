@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+frontend/dist-backups/
 
 # IDE
 .idea/
@@ -34,6 +35,7 @@ data/*.bak*
 data/static/
 data/storage/
 data/logs/
+data/backups/
 # Keep committed seed snapshot for developer sync
 !data/seed/
 !data/seed/**

@@ -1476,17 +1476,17 @@ onMounted(() => {
 .settings-layout { display: flex; height: 100%; background: var(--bg-base); }
 
 .settings-nav {
-  width: 220px; flex-shrink: 0; padding: 16px 10px; border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 14px; background: var(--bg-1);
+  width: 240px; flex-shrink: 0; padding: 16px 10px; border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 14px; background: var(--bg-0);
 }
 .nav-group { display: flex; flex-direction: column; gap: 4px; }
 .nav-group-label {
-  font-size: 10px; font-weight: 700; color: var(--text-3);
-  letter-spacing: 0.12em; text-transform: uppercase; padding: 0 10px 4px;
+  font-size: 11px; font-weight: 800; color: var(--text-0);
+  letter-spacing: 0.06em; text-transform: uppercase; padding: 0 10px 4px;
 }
 .nav-item {
-  display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: 13px;
-  border: none; background: none; color: var(--text-2); cursor: pointer;
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 15px;
+  border: none; background: none; color: var(--text-0); font-weight: 600; cursor: pointer;
   border-radius: var(--radius); transition: all 0.12s; text-align: left; width: 100%;
 }
 .nav-item:hover { background: var(--bg-hover); color: var(--text-0); }

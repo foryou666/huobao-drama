@@ -2,6 +2,7 @@
   <NuxtLayout>
     <NuxtPage />
   </NuxtLayout>
+  <AppVersionBadge />
   <Toaster position="top-right" :duration="3000" />
 </template>
 

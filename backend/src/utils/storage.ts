@@ -118,31 +118,74 @@ export function readImageAsDataUrl(relativePath: string): string {
   return `data:${mimeType};base64,${buffer.toString('base64')}`
 }
 
+export interface CompressImageOptions {
+  maxWidth?: number
+  maxHeight?: number
+  quality?: number
+  maxBytes?: number
+}
+
+const IMAGE_FILE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
+
+export function isLocalImageFile(absPath: string): boolean {
+  return IMAGE_FILE_EXTS.has(path.extname(absPath).toLowerCase())
+}
+
+/** 压缩本地图片为 JPEG，供第三方 API / OSS 上传使用 */
+export async function compressLocalImageFile(
+  absPath: string,
+  options: CompressImageOptions = {},
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  if (!isLocalImageFile(absPath)) return null
+  if (!fs.existsSync(absPath)) return null
+
+  const maxWidth = options.maxWidth ?? 1920
+  const maxHeight = options.maxHeight ?? 1920
+  let quality = options.quality ?? 78
+  const maxBytes = options.maxBytes ?? 18 * 1024 * 1024
+
+  let lastBuffer: Buffer | null = null
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const resized = sharp(absPath).rotate().resize({
+      width: maxWidth,
+      height: maxHeight,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    const metadata = await resized.metadata()
+    const output = metadata.hasAlpha
+      ? await resized.flatten({ background: '#ffffff' }).jpeg({ quality, mozjpeg: true }).toBuffer()
+      : await resized.jpeg({ quality, mozjpeg: true }).toBuffer()
+    lastBuffer = output
+    if (output.length <= maxBytes) {
+      return { buffer: output, contentType: 'image/jpeg' }
+    }
+    quality = Math.max(48, quality - 14)
+  }
+
+  return lastBuffer
+    ? { buffer: lastBuffer, contentType: 'image/jpeg' }
+    : null
+}
+
 export async function readImageAsCompressedDataUrl(
   relativePath: string,
-  options: {
-    maxWidth?: number
-    maxHeight?: number
-    quality?: number
-  } = {},
+  options: CompressImageOptions = {},
 ): Promise<string> {
   const filePath = getAbsolutePath(relativePath)
   const maxWidth = options.maxWidth ?? 768
   const maxHeight = options.maxHeight ?? 768
   const quality = options.quality ?? 68
 
-  const resized = sharp(filePath).rotate().resize({
-    width: maxWidth,
-    height: maxHeight,
-    fit: 'inside',
-    withoutEnlargement: true,
+  const compressed = await compressLocalImageFile(filePath, {
+    maxWidth,
+    maxHeight,
+    quality,
+    maxBytes: options.maxBytes,
   })
-  const metadata = await resized.metadata()
-  const output = metadata.hasAlpha
-    ? await resized.flatten({ background: '#ffffff' }).jpeg({ quality, mozjpeg: true }).toBuffer()
-    : await resized.jpeg({ quality, mozjpeg: true }).toBuffer()
-  const mimeType = 'image/jpeg'
-  return `data:${mimeType};base64,${output.toString('base64')}`
+  if (!compressed) throw new Error(`无法压缩图片: ${relativePath}`)
+  const mimeType = compressed.contentType
+  return `data:${mimeType};base64,${compressed.buffer.toString('base64')}`
 }
 
 export function parseDataUrl(dataUrl: string): { mimeType: string; data: string } | null {

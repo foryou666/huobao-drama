@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, created, badRequest } from '../utils/response.js'
-import { generateVideo } from '../services/video-generation.js'
+import { generateVideo, refreshVideoFromProvider } from '../services/video-generation.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getAuthUser } from '../middleware/auth.js'
@@ -81,6 +81,7 @@ app.post('/', async (c) => {
       aspectRatio: body.aspect_ratio,
       configId,
       creditTransactionId: billed.charge.transactionId,
+      userId: getAuthUser(c).id,
     })
 
     const [record] = db.select().from(schema.videoGenerations)
@@ -125,6 +126,10 @@ app.get('/ledger', async (c) => {
   const keyword = c.req.query('keyword') || undefined
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
   const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
+  const mineOnlyRaw = c.req.query('mine_only')
+  const mineOnly = mineOnlyRaw == null || mineOnlyRaw === ''
+    ? true
+    : !['0', 'false', 'no'].includes(String(mineOnlyRaw).toLowerCase())
 
   const result = listVideoLedger({
     user,
@@ -135,6 +140,7 @@ app.get('/ledger', async (c) => {
     keyword,
     limit,
     offset,
+    mineOnly,
   })
   return success(c, result)
 })
@@ -152,6 +158,18 @@ app.get('/', async (c) => {
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
 
   return success(c, rows.map(row => toSnakeCase(row)))
+})
+
+// POST /videos/:id/refresh — 用任务绑定的 Key 向服务商查询并补下载
+app.post('/:id/refresh', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return badRequest(c, 'invalid id')
+  try {
+    const row = await refreshVideoFromProvider(id)
+    return success(c, row ? toSnakeCase(row) : null)
+  } catch (err: any) {
+    return badRequest(c, err.message)
+  }
 })
 
 // GET /videos/:id

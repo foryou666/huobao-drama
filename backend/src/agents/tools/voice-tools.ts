@@ -7,6 +7,10 @@ import { db, schema } from '../../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
+import {
+  assertCharacterInEpisode,
+  getEpisodeCharacters,
+} from '../../utils/episode-entity-links.js'
 
 export function createVoiceTools(episodeId: number, dramaId: number) {
   function getEpisodeAudioProvider() {
@@ -18,11 +22,10 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
 
   const getCharacters = createTool({
     id: 'get_characters',
-    description: 'Get all characters for the current drama with their current voice assignments.',
+    description: 'Get all characters linked to the current episode with their current voice assignments.',
     inputSchema: z.object({}),
     execute: async () => {
-      const chars = db.select().from(schema.characters)
-        .where(eq(schema.characters.dramaId, dramaId)).all()
+      const chars = getEpisodeCharacters(episodeId, dramaId)
       const payload = {
         characters: chars.map(c => ({
           id: c.id,
@@ -84,6 +87,8 @@ export function createVoiceTools(episodeId: number, dramaId: number) {
       reason: z.string().optional().describe('Why this voice fits'),
     }),
     execute: async ({ character_id, voice_id, reason }) => {
+      const scopeErr = assertCharacterInEpisode(episodeId, dramaId, character_id)
+      if (scopeErr) return { error: scopeErr }
       const provider = getEpisodeAudioProvider() || 'minimax'
       logTaskProgress('VoiceTool', 'assign-begin', { episodeId, dramaId, characterId: character_id, voiceId: voice_id, provider, reason })
       db.update(schema.characters)

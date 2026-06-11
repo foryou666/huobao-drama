@@ -1,5 +1,21 @@
 const devApiTarget = process.env.NUXT_DEV_API_TARGET || 'http://localhost:5679'
 
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url))
+const pkg = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8'))
+const buildMetaPath = join(rootDir, 'app/generated/build-meta.json')
+let buildTime = ''
+if (existsSync(buildMetaPath)) {
+  try {
+    buildTime = JSON.parse(readFileSync(buildMetaPath, 'utf8')).buildTime || ''
+  } catch {
+    buildTime = ''
+  }
+}
+
 export default defineNuxtConfig({
   srcDir: 'app/',
   ssr: false,
@@ -36,4 +52,10 @@ export default defineNuxtConfig({
     },
   },
   compatibilityDate: '2025-05-15',
+  runtimeConfig: {
+    public: {
+      appVersion: pkg.version || '0.0.0',
+      buildTime: buildTime || (process.env.NODE_ENV === 'development' ? 'dev' : ''),
+    },
+  },
 })

@@ -323,6 +323,8 @@ export const videoGenerations = sqliteTable('video_generations', {
   taskId: text('task_id'),
   errorMsg: text('error_msg'),
   creditTransactionId: integer('credit_transaction_id'),
+  configId: integer('config_id'),
+  userId: integer('user_id'),
   width: integer('width'),
   height: integer('height'),
   createdAt: text('created_at').notNull(),

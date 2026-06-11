@@ -437,6 +437,30 @@ ensureColumn('assets', 'source_id', 'INTEGER')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')
 ensureColumn('image_generations', 'credit_transaction_id', 'INTEGER')
 ensureColumn('video_generations', 'credit_transaction_id', 'INTEGER')
+ensureColumn('video_generations', 'user_id', 'INTEGER')
+ensureColumn('video_generations', 'config_id', 'INTEGER')
+try {
+  sqlite.exec(`
+    UPDATE video_generations
+    SET config_id = (
+      SELECT id FROM ai_service_configs
+      WHERE service_type = 'video' AND provider = 'chengmeng'
+      ORDER BY id ASC
+      LIMIT 1
+    )
+    WHERE config_id IS NULL AND provider = 'chengmeng'
+  `)
+} catch { /* ignore backfill errors */ }
+try {
+  sqlite.exec(`
+    UPDATE video_generations
+    SET user_id = (
+      SELECT user_id FROM credit_transactions
+      WHERE credit_transactions.id = video_generations.credit_transaction_id
+    )
+    WHERE user_id IS NULL AND credit_transaction_id IS NOT NULL
+  `)
+} catch { /* ignore backfill errors */ }
 ensureColumn('characters', 'oss_object_key', 'TEXT')
 ensureColumn('scenes', 'oss_object_key', 'TEXT')
 

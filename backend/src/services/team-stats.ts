@@ -28,6 +28,7 @@ export interface MemberActionBreakdown {
 
 export interface MemberPeriodStats {
   credits_consumed: number
+  credits_refunded: number
   credits_granted: number
   activity_count: number
   dramas_touched: number
@@ -109,7 +110,7 @@ function bumpDaily(map: Map<string, DailyWorkload>, iso: string, patch: Partial<
     agent_runs: 0,
   }
   if (patch.activities) row.activities += patch.activities
-  if (patch.credits_consumed) row.credits_consumed += patch.credits_consumed
+  if (patch.credits_consumed != null) row.credits_consumed += patch.credits_consumed
   if (patch.images) row.images += patch.images
   if (patch.videos) row.videos += patch.videos
   if (patch.agent_runs) row.agent_runs += patch.agent_runs
@@ -150,6 +151,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
       date_to: range.date_to,
       summary: {
         total_consumed: 0,
+        total_refunded: 0,
         total_granted: 0,
         total_activities: 0,
         active_members: 0,
@@ -188,6 +190,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
     const actionMap = new Map<string, MemberActionBreakdown>()
 
     let creditsConsumed = 0
+    let creditsRefunded = 0
     let creditsGranted = 0
     let images = 0
     let videos = 0
@@ -210,6 +213,20 @@ export function getTeamStats(opts: TeamStatsOptions) {
           credits: 0,
         }
         entry.credits += spent
+        actionMap.set(tx.action, entry)
+      } else if (tx.type === 'refund') {
+        const refunded = Math.max(0, tx.amount)
+        creditsRefunded += refunded
+        creditsConsumed -= refunded
+        bumpDaily(memberDaily, tx.createdAt, { credits_consumed: -refunded })
+        bumpDaily(teamDaily, tx.createdAt, { credits_consumed: -refunded })
+        const entry = actionMap.get(tx.action) || {
+          action: tx.action,
+          label: pricing.get(tx.action) || tx.action,
+          count: 0,
+          credits: 0,
+        }
+        entry.credits -= refunded
         actionMap.set(tx.action, entry)
       } else if (tx.type === 'grant') {
         creditsGranted += Math.max(0, tx.amount)
@@ -259,6 +276,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
       last_active_at: lastActiveAt,
       period: {
         credits_consumed: creditsConsumed,
+        credits_refunded: creditsRefunded,
         credits_granted: creditsGranted,
         activity_count: memberActs.length,
         dramas_touched: dramaIds.size,
@@ -279,6 +297,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
 
   const summary = memberRows.reduce((acc, row) => {
     acc.total_consumed += row.period.credits_consumed
+    acc.total_refunded += row.period.credits_refunded
     acc.total_granted += row.period.credits_granted
     acc.total_activities += row.period.activity_count
     if (row.period.activity_count > 0) acc.active_members += 1
@@ -288,6 +307,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
     return acc
   }, {
     total_consumed: 0,
+    total_refunded: 0,
     total_granted: 0,
     total_activities: 0,
     active_members: 0,

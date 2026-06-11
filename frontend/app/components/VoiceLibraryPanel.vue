@@ -3,7 +3,7 @@
     <div class="voice-library-bar">
       <div>
         <p class="voice-library-title">{{ title }}</p>
-        <p class="dim voice-library-desc">上传角色音色参考 MP3，时长须 3~10 秒；可在视频生成时作为音色参考（最多 3 个）</p>
+        <p class="dim voice-library-desc">上传角色音色参考 MP3，时长须 3~10 秒；生成视频时自动取每段前 3 秒发给接口（最多 3 个）</p>
       </div>
       <button type="button" class="btn btn-sm btn-primary" :disabled="uploading" @click="triggerUpload">
         {{ uploading ? '上传中…' : '上传音色' }}
