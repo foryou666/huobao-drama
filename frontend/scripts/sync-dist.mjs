@@ -57,6 +57,13 @@ function isBrokenSpaHtml(html) {
     || html.includes('node_modules/nuxt/dist/app/entry.js')
 }
 
+function isMissingSpaEntry(html, assets) {
+  const entry = assets.js.replace(/^\//, '')
+  return !html.includes(`src="${assets.js}"`)
+    && !html.includes(`src="/${entry}"`)
+    && !html.includes(`href="${assets.js}"`)
+}
+
 function patchSpaHtml(html, assets) {
   const title = html.match(/<title>[^<]*<\/title>/)?.[0] || '<title>红果短剧</title>'
   const nuxtConfig = html.match(/<script>window\.__NUXT__=[\s\S]*?<\/script>/)?.[0] || ''
@@ -83,7 +90,7 @@ function patchHtmlFiles(dir, assets) {
     const full = path.join(dir, name)
     if (name.endsWith('.html')) {
       const html = readFileSync(full, 'utf8')
-      if (!isBrokenSpaHtml(html)) continue
+      if (!isBrokenSpaHtml(html) && !isMissingSpaEntry(html, assets)) continue
       writeFileSync(full, patchSpaHtml(html, assets))
       patched += 1
       continue

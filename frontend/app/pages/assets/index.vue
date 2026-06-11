@@ -78,6 +78,34 @@
         <div class="asset-body">
           <div class="asset-name">{{ item.name }}</div>
           <div class="asset-meta dim">{{ dramaTitle(item.drama_id || item.dramaId) }}</div>
+          <CharacterMediaStrip
+            v-if="activeType === 'character' && resolveCharacterMedia(item)"
+            :media="resolveCharacterMedia(item)"
+            layout="outfits"
+            compact
+            expandable
+            :max-visible="12"
+            :clickable="!!(item.url || item.local_path || item.localPath)"
+            @preview="(img) => openCharacterMediaPreview(item, img)"
+          />
+          <EntityViewMediaStrip
+            v-if="activeType === 'scene' && resolveSceneMedia(item)"
+            :media="resolveSceneMedia(item)"
+            theme="scene"
+            compact
+            :max-visible="12"
+            :clickable="!!(item.url || item.local_path || item.localPath)"
+            @preview="(img) => openEntityMediaPreview(item, img)"
+          />
+          <EntityViewMediaStrip
+            v-if="activeType === 'prop' && resolvePropMedia(item)"
+            :media="resolvePropMedia(item)"
+            theme="prop"
+            compact
+            :max-visible="12"
+            :clickable="!!(item.url || item.local_path || item.localPath)"
+            @preview="(img) => openEntityMediaPreview(item, img)"
+          />
           <div v-if="item.description" class="asset-meta dim truncate">{{ item.description }}</div>
         </div>
         <div class="asset-foot">
@@ -175,6 +203,10 @@ import { dramaAPI, assetAPI } from '~/composables/useApi'
 import { ASSET_CATEGORIES, assetCategoryLabel } from '~/utils/asset-categories.js'
 import { mediaDisplayUrl, normalizeMediaPath } from '~/utils/media-url.js'
 import GridMediaImage from '~/components/GridMediaImage.vue'
+import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
+import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
+import { characterImageTagLabel, resolveOutfitPreviewsFromMedia } from '~/utils/character-image-variants.js'
+import { resolveViewPreviewsFromMedia } from '~/utils/entity-view-media.js'
 import { toast } from 'vue-sonner'
 
 const GRID_PAGE_SIZE = 48
@@ -220,7 +252,7 @@ const filteredAssets = computed(() => {
     if (item.type !== activeType.value) return false
     if (dramaId) {
       const itemDramaId = item.drama_id ?? item.dramaId ?? null
-      if (itemDramaId != null && itemDramaId !== dramaId) return false
+      if (itemDramaId !== dramaId) return false
     }
     if (!q) return true
     return String(item.name || '').toLowerCase().includes(q)
@@ -254,14 +286,91 @@ function countByType(type) {
     if (item.type !== type) return false
     if (!dramaId) return true
     const itemDramaId = item.drama_id ?? item.dramaId ?? null
-    return itemDramaId == null || itemDramaId === dramaId
+    return itemDramaId === dramaId
   }).length
+}
+
+function enrichEntityMedia(media, primaryTag) {
+  if (!media?.preview_images?.length) return null
+  return {
+    ...media,
+    view_previews: resolveViewPreviewsFromMedia(media),
+  }
+}
+
+function resolveCharacterMedia(item) {
+  const media = item?.character_media || item?.characterMedia
+  if (media?.preview_images?.length) {
+    return {
+      ...media,
+      outfit_previews: resolveOutfitPreviewsFromMedia(media),
+    }
+  }
+  const url = item?.url || item?.local_path || item?.localPath
+  if (!url) return null
+  return {
+    outfit_count: 0,
+    candidate_count: 0,
+    transform_count: 0,
+    image_count: 1,
+    primary_url: url,
+    outfit_previews: [],
+    preview_images: [{
+      url,
+      label: '角色图',
+      tag: '角色图',
+      tag_type: 'primary',
+      source: 'primary',
+    }],
+  }
+}
+
+function resolveSceneMedia(item) {
+  const media = enrichEntityMedia(item?.scene_media || item?.sceneMedia)
+  if (media) return media
+  const url = item?.url || item?.local_path || item?.localPath
+  if (!url) return null
+  return {
+    view_count: 1,
+    image_count: 1,
+    primary_url: url,
+    view_previews: [{ view_id: 'hero', label: '主视角', url }],
+    preview_images: [{ url, label: '主视角', tag: '主视角', view_id: 'hero', is_primary: true }],
+  }
+}
+
+function resolvePropMedia(item) {
+  const media = enrichEntityMedia(item?.prop_media || item?.propMedia)
+  if (media) return media
+  const url = item?.url || item?.local_path || item?.localPath
+  if (!url) return null
+  return {
+    view_count: 1,
+    image_count: 1,
+    primary_url: url,
+    view_previews: [{ view_id: 'hero', label: '主图', url }],
+    preview_images: [{ url, label: '主图', tag: '主图', view_id: 'hero', is_primary: true }],
+  }
 }
 
 function openAssetPreview(item) {
   const raw = item?.url || item?.local_path || item?.localPath
   if (!raw) return
   openImageViewer(mediaDisplayUrl(raw), item.name)
+}
+
+function openCharacterMediaPreview(item, img) {
+  const raw = img?.url || item?.url || item?.local_path || item?.localPath
+  if (!raw) return
+  const title = `${item.name} · ${img?.tag || characterImageTagLabel(img, { short: true }) || '角色图'}`
+  openImageViewer(mediaDisplayUrl(raw), title)
+}
+
+function openEntityMediaPreview(item, img) {
+  const raw = img?.url || item?.url || item?.local_path || item?.localPath
+  if (!raw) return
+  const title = `${item.name} · ${img?.label || img?.tag || '图片'}`
+  openImageViewer(mediaDisplayUrl(raw), title)
 }
 
 function openImageViewer(src, title = '') {
@@ -498,6 +607,7 @@ onMounted(async () => {
   gap: 12px;
 }
 .asset-card { overflow: hidden; }
+.asset-body :deep(.char-media-strip-root) { margin-top: 6px; }
 .asset-cover {
   position: relative;
   aspect-ratio: 3 / 4;

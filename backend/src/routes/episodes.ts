@@ -157,26 +157,22 @@ app.delete('/:id', async (c) => {
   return success(c)
 })
 
-// GET /episodes/:id/characters — characters linked to this episode
+// GET /episodes/:id/characters — 项目内全部角色（角色为项目级资产，各集共享）
 app.get('/:id/characters', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
   repairEpisodeCharacterLinks(episodeId, access.drama!.id)
-  const links = db.select().from(schema.episodeCharacters)
-    .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
-  const charIds = new Set(links.map(l => l.characterId))
-  for (const id of getStoryboardCharacterIdsForEpisode(episodeId)) charIds.add(id)
-  if (!charIds.size) return success(c, [])
   const allChars = db.select().from(schema.characters).all()
-  const result = [...charIds]
+  const dramaChars = allChars
+    .filter(ch => ch.dramaId === access.drama!.id && !ch.deletedAt)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'))
+  const referencedIds = new Set(getStoryboardCharacterIdsForEpisode(episodeId))
+  const referencedDeleted = [...referencedIds]
     .map(id => allChars.find(ch => ch.id === id))
-    .filter((ch): ch is NonNullable<typeof ch> => !!ch && !ch.deletedAt)
-  // 分镜仍引用但已软删的角色：保留返回以便视频参考图可展示名称与造型
-  const referencedDeleted = [...charIds]
-    .map(id => allChars.find(ch => ch.id === id))
-    .filter((ch): ch is NonNullable<typeof ch> => !!ch && !!ch.deletedAt && !result.some(r => r.id === ch.id))
-  return success(c, toSnakeCaseArray([...result, ...referencedDeleted]))
+    .filter((ch): ch is NonNullable<typeof ch> =>
+      !!ch && !!ch.deletedAt && !dramaChars.some(item => item.id === ch.id))
+  return success(c, toSnakeCaseArray([...dramaChars, ...referencedDeleted]))
 })
 
 // GET /episodes/:id/scenes — 项目内全部场景（场景为项目级资产，各集共享）

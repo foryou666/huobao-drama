@@ -61,6 +61,7 @@ function applyCharacterImageCompletion(record: typeof schema.imageGenerations.$i
       label: resolveOutfitLabel(record),
       url: localPath,
       costumeAssetId: record.propId ?? null,
+      setAsDefault: true,
     })
   } else if (record.imageType === 'character_variant') {
     appendCharacterImageVariant(record.characterId, localPath, record.style || null)

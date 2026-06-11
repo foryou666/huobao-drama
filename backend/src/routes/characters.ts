@@ -19,8 +19,13 @@ import {
   listCharacterTransformPresets,
 } from '../utils/character-image-transforms.js'
 import {
+  appendCharacterOutfitImage,
+  findCharacterOutfit,
   findCharacterOutfitByAssetId,
+  listCharacterOutfits,
+  removeCharacterOutfitCandidate,
   resolveCharacterImageSource,
+  setCharacterOutfitDefault,
 } from '../utils/character-image-variants.js'
 import { buildOutfitChangePrompt, slugifyOutfitId } from '../utils/character-outfit-prompts.js'
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
@@ -175,6 +180,115 @@ app.post('/:id/generate-voice-sample', async (c) => {
     logTaskError('VoiceSample', 'generate', { characterId: id, error: err.message })
     return badRequest(c, `TTS 生成失败: ${err.message}`)
   }
+})
+
+// POST /characters/:id/outfits/:outfitId/candidates — 上传服装备选图
+app.post('/:id/outfits/:outfitId/candidates', async (c) => {
+  const id = Number(c.req.param('id'))
+  const outfitId = String(c.req.param('outfitId') || '').trim()
+  if (!outfitId) return badRequest(c, 'outfitId is required')
+
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+
+  const body = await c.req.parseBody()
+  const file = body['file']
+  if (!file || !(file instanceof File)) return badRequest(c, 'file is required')
+  if (!isUploadableImage(file)) return badRequest(c, '仅支持 JPG / PNG / WebP / GIF 等图片文件')
+
+  const label = String(body['label'] || findCharacterOutfit(char.referenceImages, outfitId)?.label || '服装').trim()
+  const candidateLabel = String(body['candidate_label'] || body['candidateLabel'] || '').trim() || undefined
+  const setAsDefault = String(body['set_as_default'] ?? body['setAsDefault'] ?? 'true').toLowerCase() !== 'false'
+  const costumeAssetIdRaw = body['costume_asset_id'] ?? body['costumeAssetId']
+  const costumeAssetId = costumeAssetIdRaw != null && String(costumeAssetIdRaw).trim() !== ''
+    ? Number(costumeAssetIdRaw)
+    : undefined
+
+  try {
+    const buffer = await file.arrayBuffer()
+    const savedPath = await saveUploadedFile(buffer, 'characters', file.name)
+    const outfits = appendCharacterOutfitImage(id, {
+      outfitId,
+      label,
+      url: savedPath,
+      costumeAssetId: Number.isFinite(costumeAssetId) ? costumeAssetId : undefined,
+      candidateLabel,
+      setAsDefault,
+    })
+    try {
+      await syncCharacterPrimaryImage(id, savedPath)
+    } catch (ossErr: any) {
+      logTaskWarn('CharacterOutfitUpload', 'oss-sync-failed', {
+        characterId: id,
+        outfitId,
+        path: savedPath,
+        error: ossErr?.message || String(ossErr),
+      })
+    }
+    syncCharacterAsset(id)
+    const outfit = outfits.find(item => item.outfit_id === outfitId) || null
+    logActivity(getAuthUser(c), {
+      action: 'character.image.outfit_candidate',
+      summary: `上传服装备选：${char.name} · ${label}`,
+      resourceType: 'character',
+      resourceId: id,
+      dramaId: char.dramaId,
+      metadata: { outfit_id: outfitId, path: savedPath },
+    })
+    return success(c, { outfit, outfits })
+  } catch (err: any) {
+    return badRequest(c, err.message || '上传失败')
+  }
+})
+
+// PUT /characters/:id/outfits/:outfitId/default — 将备选图设为服装定稿
+app.put('/:id/outfits/:outfitId/default', async (c) => {
+  const id = Number(c.req.param('id'))
+  const outfitId = String(c.req.param('outfitId') || '').trim()
+  const body = await c.req.json()
+  const candidateId = String(body.candidate_id || body.candidateId || '').trim()
+  if (!candidateId) return badRequest(c, 'candidate_id is required')
+
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+
+  const outfit = setCharacterOutfitDefault(id, outfitId, candidateId)
+  if (!outfit) return badRequest(c, '服装或备选图不存在')
+  syncCharacterAsset(id)
+  const [updated] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  logActivity(getAuthUser(c), {
+    action: 'character.image.outfit_default',
+    summary: `设置服装定稿：${char.name} · ${outfit.label}`,
+    resourceType: 'character',
+    resourceId: id,
+    dramaId: char.dramaId,
+    metadata: { outfit_id: outfitId, candidate_id: candidateId },
+  })
+  return success(c, { outfit, outfits: listCharacterOutfits(updated?.referenceImages) })
+})
+
+// DELETE /characters/:id/outfits/:outfitId/candidates/:candidateId
+app.delete('/:id/outfits/:outfitId/candidates/:candidateId', async (c) => {
+  const id = Number(c.req.param('id'))
+  const outfitId = String(c.req.param('outfitId') || '').trim()
+  const candidateId = String(c.req.param('candidateId') || '').trim()
+  if (!candidateId) return badRequest(c, 'candidateId is required')
+
+  const [char] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  if (!char) return badRequest(c, 'Character not found')
+
+  const outfit = removeCharacterOutfitCandidate(id, outfitId, candidateId)
+  syncCharacterAsset(id)
+  const [updated] = db.select().from(schema.characters).where(eq(schema.characters.id, id)).all()
+  logActivity(getAuthUser(c), {
+    action: 'character.image.outfit_candidate_delete',
+    summary: `删除服装备选：${char.name}`,
+    resourceType: 'character',
+    resourceId: id,
+    dramaId: char.dramaId,
+    metadata: { outfit_id: outfitId, candidate_id: candidateId },
+  })
+  return success(c, { outfit, outfits: listCharacterOutfits(updated?.referenceImages) })
 })
 
 // POST /characters/:id/upload-image — 手动上传角色形象

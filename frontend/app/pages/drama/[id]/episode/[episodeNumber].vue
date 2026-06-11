@@ -803,25 +803,16 @@
                     </label>
                     <label v-if="selectedSb.scene_id || selectedSb.sceneId" class="field">
                       <span class="field-label">场景视角</span>
-                      <div class="scene-angle-options">
-                        <button
-                          v-for="img in getSceneImagesForStoryboard(selectedSb)"
-                          :key="`${selectedSb.id}:scene:${img.angle_id}`"
-                          type="button"
-                          class="scene-angle-option"
-                          :class="{
-                            active: !img.readonly && isStoryboardSceneAngleSelected(selectedSb, img.angle_id),
-                            missing: !img.url,
-                            'scene-angle-blocking': img.readonly,
-                          }"
-                          :title="img.readonly ? `${img.label}（只读，点击预览）` : img.label"
-                          @click="onStoryboardSceneImageClick(selectedSb, img)"
-                        >
-                          <img v-if="img.url" :src="displayUrl(img.url)" :alt="img.label" />
-                          <span v-else class="scene-angle-empty">{{ img.label }}</span>
-                          <span class="scene-angle-label">{{ img.label }}</span>
-                        </button>
-                      </div>
+                      <EntityViewMediaStrip
+                        v-if="getSceneMediaForStoryboard(selectedSb)"
+                        :media="getSceneMediaForStoryboard(selectedSb)"
+                        theme="scene"
+                        compact
+                        :max-visible="12"
+                        clickable
+                        :is-view-active="(view) => !view.readonly && isStoryboardSceneAngleSelected(selectedSb, view.view_id)"
+                        @preview="(img) => onStoryboardSceneViewClick(selectedSb, img)"
+                      />
                     </label>
                     <label class="field">
                       <span class="field-label">地点</span>
@@ -1066,38 +1057,100 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                     <span class="asset-cover-upload-text">{{ isPendingCharUpload(c.id) ? '上传中…' : '点击上传形象' }}</span>
                   </label>
-                  <span class="asset-cover-badge" :class="(c.image_url || c.imageUrl) ? 'is-ready' : (isPendingCharImage(c.id) ? 'is-pending' : '')">{{ (c.image_url || c.imageUrl) ? '已生成' : (isPendingCharImage(c.id) ? '生成中' : '待生成') }}</span>
+                  <span class="asset-cover-badge" :class="(c.image_url || c.imageUrl) ? 'is-ready' : (isPendingCharImage(c.id) ? 'is-pending' : '')">
+                    {{ isPendingCharImage(c.id) ? '生成中' : characterCoverBadgeText(c) }}
+                  </span>
                 </div>
                 <div class="asset-body">
                   <div class="asset-name">{{ c.name }}</div>
                   <div class="asset-meta dim">{{ c.role || '角色' }}</div>
-                  <div v-if="getCharacterImages(c).length" class="char-image-variants">
-                    <div
-                      v-for="img in getCharacterImages(c)"
-                      :key="`${c.id}:${img.url}`"
-                      class="char-image-variant"
-                    >
-                      <button
-                        type="button"
-                        class="char-image-variant-thumb"
-                        @click.stop="openImageViewer(displayUrl(img.url), `${c.name} · ${variantLabel(img)}`)"
+                  <CharacterMediaStrip
+                    v-if="getCharacterMediaForChar(c)"
+                    :char="c"
+                    :media="getCharacterMediaForChar(c)"
+                    layout="outfits"
+                    compact
+                    expandable
+                    :max-visible="12"
+                    clickable
+                    @preview="(img) => img.url && openImageViewer(displayUrl(img.url), `${c.name} · ${characterImageTagLabel(img)}`)"
+                  />
+                  <div v-if="charHasImage(c)" class="char-outfit-section">
+                    <div class="char-outfit-section-head">
+                      <span class="char-transform-label">服装造型</span>
+                      <label
+                        class="btn btn-sm asset-upload-btn"
+                        :class="{ 'is-disabled': isPendingNewOutfitUpload(c.id) }"
                       >
-                        <img :src="displayUrl(img.url)" :alt="variantLabel(img)" />
-                      </button>
-                      <span class="char-image-variant-label">{{ variantLabel(img) }}</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          hidden
+                          :disabled="isPendingNewOutfitUpload(c.id)"
+                          @change="uploadNewOutfit(c, $event)"
+                        />
+                        {{ isPendingNewOutfitUpload(c.id) ? '上传中' : '上传新服装' }}
+                      </label>
                     </div>
+                    <p v-if="!getCharacterOutfits(c).length" class="dim char-outfit-empty-hint">
+                      无需 AI 生成也可直接上传：每人可有多套服装（如日常、宫装、战场），每套可保留多张备选并设为正稿。
+                    </p>
                   </div>
                   <div v-if="getCharacterOutfits(c).length" class="char-outfit-list">
                     <div v-for="outfit in getCharacterOutfits(c)" :key="outfit.outfit_id" class="char-outfit-block">
                       <div class="char-outfit-head">
-                        <button
-                          type="button"
-                          class="char-outfit-thumb"
-                          @click.stop="openImageViewer(displayUrl(outfit.url), `${c.name} · ${outfit.label}`)"
+                        <div class="char-outfit-head-text">
+                          <span class="char-outfit-name">{{ outfit.label }}</span>
+                          <span class="dim char-outfit-meta">定稿用于风格转换；可保留多张备选</span>
+                        </div>
+                      </div>
+                      <div class="char-outfit-candidates">
+                        <div
+                          v-for="candidate in outfit.candidates || []"
+                          :key="`${outfit.outfit_id}:${candidate.id}`"
+                          class="char-outfit-candidate"
                         >
-                          <img :src="displayUrl(outfit.url)" :alt="outfit.label" />
-                        </button>
-                        <span class="char-outfit-name">{{ outfit.label }}</span>
+                          <button
+                            type="button"
+                            class="char-outfit-thumb"
+                            :class="{ 'is-default': isOutfitCandidateDefault(outfit, candidate) }"
+                            @click.stop="openImageViewer(displayUrl(candidate.url), `${c.name} · ${outfit.label} · ${candidate.label || '备选'}`)"
+                          >
+                            <img :src="displayUrl(candidate.url)" :alt="candidate.label || outfit.label" />
+                            <span v-if="isOutfitCandidateDefault(outfit, candidate)" class="char-outfit-default-badge">定稿</span>
+                          </button>
+                          <div class="char-outfit-candidate-meta">
+                            <span class="char-outfit-candidate-label">{{ candidate.label || '备选' }}</span>
+                            <div class="char-outfit-candidate-actions">
+                              <button
+                                v-if="!isOutfitCandidateDefault(outfit, candidate)"
+                                type="button"
+                                class="btn btn-sm"
+                                @click.stop="setCharacterOutfitDefault(c.id, outfit.outfit_id, candidate.id)"
+                              >
+                                设为正稿
+                              </button>
+                              <button
+                                v-if="(outfit.candidates || []).length > 1"
+                                type="button"
+                                class="btn btn-sm danger"
+                                @click.stop="removeCharacterOutfitCandidate(c.id, outfit.outfit_id, candidate.id)"
+                              >
+                                删除
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <label class="char-outfit-upload-btn" :class="{ 'is-disabled': isPendingOutfitUpload(c.id, outfit.outfit_id) }">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            hidden
+                            :disabled="isPendingOutfitUpload(c.id, outfit.outfit_id)"
+                            @change="uploadOutfitCandidate(c.id, outfit.outfit_id, outfit.label, $event, { setAsDefault: false })"
+                          />
+                          {{ isPendingOutfitUpload(c.id, outfit.outfit_id) ? '上传中' : '追加上传' }}
+                        </label>
                       </div>
                       <div class="char-transform-row char-outfit-transform">
                         <span class="char-transform-label">Seedance</span>
@@ -1222,6 +1275,15 @@
                 <div class="asset-body">
                   <div class="asset-name">{{ s.location }}</div>
                   <div class="asset-meta dim">{{ s.time || '—' }}</div>
+                  <EntityViewMediaStrip
+                    v-if="getSceneMediaForScene(s)"
+                    :media="getSceneMediaForScene(s)"
+                    theme="scene"
+                    compact
+                    :max-visible="12"
+                    clickable
+                    @preview="(img) => img.url && openImageViewer(displayUrl(img.url), `${s.location} · ${img.label}`)"
+                  />
                   <label class="asset-prompt-field">
                     <span class="asset-prompt-label">图片提示词</span>
                     <textarea
@@ -1292,30 +1354,17 @@
                       />
                     </div>
                   </div>
-                  <div v-if="listSceneImagesWithStoryboardBlockings(s, sbs, getBlockingImage).length > 1" class="scene-angle-preview-row">
-                    <div
-                      v-for="img in listSceneImagesWithStoryboardBlockings(s, sbs, getBlockingImage)"
-                      :key="`${s.id}:preview:${img.angle_id}`"
-                      class="scene-angle-preview-item"
+                  <div v-if="hasSceneAngleRegenActions(s)" class="scene-angle-regen-row">
+                    <button
+                      v-for="img in listSceneRegenTargets(s)"
+                      :key="`${s.id}:regen:${img.angle_id}`"
+                      type="button"
+                      class="btn btn-sm scene-angle-regen-btn"
+                      :disabled="sceneAngleDisabled(s) || isPendingSceneAngle(s.id, img.angle_id)"
+                      @click="openSceneAngleRegen(s, img)"
                     >
-                      <button
-                        type="button"
-                        class="scene-angle-preview"
-                        @click="img.url && openImageViewer(displayUrl(img.url), `${s.location} · ${img.label}`)"
-                      >
-                        <img v-if="img.url" :src="displayUrl(img.url)" :alt="img.label" />
-                        <span>{{ img.label }}</span>
-                      </button>
-                      <button
-                        v-if="img.angle_id !== 'hero' && !img.readonly"
-                        type="button"
-                        class="btn btn-sm scene-angle-regen-btn"
-                        :disabled="sceneAngleDisabled(s) || isPendingSceneAngle(s.id, img.angle_id)"
-                        @click="openSceneAngleRegen(s, img)"
-                      >
-                        {{ isPendingSceneAngle(s.id, img.angle_id) ? '生成中' : '调整' }}
-                      </button>
-                    </div>
+                      {{ isPendingSceneAngle(s.id, img.angle_id) ? '生成中' : `调整·${img.label}` }}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1902,7 +1951,7 @@
                     <div v-if="getStoryboardCharacterIds(sb).length" class="video-char-image-panel">
                       <div class="video-bind-row">
                         <span class="prod-prompt-label">角色参考图</span>
-                        <span class="dim video-char-image-hint">横向选择各角色造型</span>
+                        <span class="dim video-char-image-hint">按服装选造型，点击可展开备选图</span>
                       </div>
                       <div class="video-char-image-strip">
                         <div
@@ -1911,20 +1960,19 @@
                           class="video-char-image-segment"
                         >
                           <span class="video-char-image-name">{{ getCharacterName(charId) }}</span>
-                          <div class="video-char-image-options">
-                            <button
-                              v-for="img in getCharacterImagesById(charId)"
-                              :key="`${charId}:${img.url}`"
-                              type="button"
-                              class="video-char-image-option"
-                              :class="{ active: isStoryboardCharacterImageSelected(sb, charId, img.url) }"
-                              :title="variantLabel(img)"
-                              @click="setStoryboardCharacterImage(sb, charId, img.url)"
-                            >
-                              <img :src="gridUrl(img.url)" :alt="variantLabel(img)" loading="lazy" decoding="async" />
-                              <span>{{ variantLabel(img) }}</span>
-                            </button>
-                          </div>
+                          <CharacterMediaStrip
+                            v-if="getCharacterById(charId)"
+                            :char="getCharacterById(charId)"
+                            layout="outfits"
+                            compact
+                            :show-summary="false"
+                            :max-visible="12"
+                            expandable
+                            pick-default-on-click
+                            clickable
+                            :is-active="(url) => isStoryboardCharacterImageSelected(sb, charId, url)"
+                            @preview="(img) => setStoryboardCharacterImage(sb, charId, img.url)"
+                          />
                         </div>
                       </div>
                     </div>
@@ -1933,13 +1981,30 @@
                       <select
                         class="input video-scene-select"
                         :value="sb.scene_id || sb.sceneId || ''"
-                        @change="updateField(sb, 'scene_id', $event.target.value ? Number($event.target.value) : null)"
+                        @change="onStoryboardSceneChange(sb, $event.target.value ? Number($event.target.value) : null)"
                       >
                         <option value="">未绑定场景</option>
                         <option v-for="scene in scenes" :key="scene.id" :value="scene.id">
                           {{ scene.location }} · {{ scene.time || '未设时间' }}
                         </option>
                       </select>
+                    </div>
+                    <div v-if="sb.scene_id || sb.sceneId" class="video-scene-image-panel">
+                      <div class="video-bind-row">
+                        <span class="prod-prompt-label">场景参考图</span>
+                        <span class="dim video-scene-image-hint">按视角选择场景图</span>
+                      </div>
+                      <EntityViewMediaStrip
+                        v-if="getSceneMediaForStoryboard(sb)"
+                        :media="getSceneMediaForStoryboard(sb)"
+                        theme="scene"
+                        compact
+                        :show-summary="false"
+                        :max-visible="12"
+                        clickable
+                        :is-view-active="(view) => !view.readonly && isStoryboardSceneAngleSelected(sb, view.view_id)"
+                        @preview="(img) => onStoryboardSceneViewClick(sb, img)"
+                      />
                     </div>
                     <div class="video-blocking-panel">
                       <div class="video-bind-row">
@@ -2529,7 +2594,23 @@ import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceAudios, countChengm
 import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
-import { listCharacterImages, listCharacterOutfits, parseStoryboardCharacterImageRefs, resolveCharacterImageUrl, variantLabel, charTransformKey, charOutfitKey } from '~/utils/character-image-variants.js'
+import {
+  listCharacterImages,
+  listCharacterOutfits,
+  isOutfitCandidateDefault,
+  characterCoverBadgeText,
+  characterImageTagLabel,
+  parseStoryboardCharacterImageRefs,
+  resolveCharacterImageUrl,
+  variantLabel,
+  charTransformKey,
+  charOutfitKey,
+  slugifyOutfitId,
+} from '~/utils/character-image-variants.js'
+import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
+import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
+import { summarizeSceneMedia, buildSceneMediaFromImages } from '~/utils/entity-view-media.js'
+import { summarizeCharacterMedia } from '~/utils/character-image-variants.js'
 import {
   SCENE_ANGLE_PRESETS,
   SCENE_ANGLE_SHEET_ID,
@@ -2669,6 +2750,8 @@ const pendingCharImageIds = ref([])
 const pendingCharUploadIds = ref([])
 const pendingCharTransformKeys = ref([])
 const pendingCharOutfitKeys = ref([])
+const pendingCharOutfitUploadKeys = ref([])
+const pendingNewOutfitUploadIds = ref([])
 const pendingSceneImageIds = ref([])
 const pendingSceneUploadIds = ref([])
 const pendingSceneAngleKeys = ref([])
@@ -2765,7 +2848,15 @@ function isPendingCharOutfit(charId, outfitKey) {
 }
 
 function charHasImage(char) {
-  return !!(char?.image_url || char?.imageUrl)
+  return !!(char?.image_url || char?.imageUrl || char?.local_path || char?.localPath)
+    || getCharacterOutfits(char).length > 0
+}
+
+function getCharacterMediaForChar(char) {
+  if (!char) return null
+  const images = getCharacterImages(char)
+  if (!images.length) return null
+  return summarizeCharacterMedia(char)
 }
 
 function charTransformDisabled(char, source = 'primary') {
@@ -4751,6 +4842,87 @@ async function uploadCharImage(charId, event) {
   }
 }
 
+async function setCharacterOutfitDefault(charId, outfitId, candidateId) {
+  try {
+    await characterAPI.setOutfitDefault(charId, outfitId, candidateId)
+    toast.success('已设为服装定稿')
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '设置定稿失败')
+  }
+}
+
+async function removeCharacterOutfitCandidate(charId, outfitId, candidateId) {
+  try {
+    await characterAPI.deleteOutfitCandidate(charId, outfitId, candidateId)
+    toast.success('备选图已删除')
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  }
+}
+
+async function uploadOutfitCandidate(charId, outfitId, outfitLabel, event, options = {}) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  const uploadKey = outfitUploadKey(charId, outfitId)
+  if (isPendingOutfitUpload(charId, outfitId)) return
+  pendingCharOutfitUploadKeys.value.push(uploadKey)
+  try {
+    await characterAPI.uploadOutfitCandidate(charId, outfitId, file, {
+      label: outfitLabel,
+      candidate_label: options.candidateLabel,
+      set_as_default: options.setAsDefault !== false,
+    })
+    toast.success(options.setAsDefault === false ? '已追加上传备选图' : '服装图已上传')
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingCharOutfitUploadKeys.value = pendingCharOutfitUploadKeys.value.filter(item => item !== uploadKey)
+    if (event?.target) event.target.value = ''
+  }
+}
+
+async function uploadNewOutfit(char, event) {
+  if (!charHasImage(char)) {
+    toast.warning('请先上传或生成角色基准图')
+    return
+  }
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  const name = window.prompt('请输入服装名称（如：日常、宫装、战场）', '日常')?.trim()
+  if (!name) {
+    if (event?.target) event.target.value = ''
+    return
+  }
+  const outfitId = slugifyOutfitId(name)
+  if (isPendingNewOutfitUpload(char.id)) return
+  pendingNewOutfitUploadIds.value.push(char.id)
+  try {
+    await characterAPI.uploadOutfitCandidate(char.id, outfitId, file, {
+      label: name,
+      candidate_label: '定稿',
+      set_as_default: true,
+    })
+    toast.success(`「${name}」服装已上传`)
+    await refresh()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingNewOutfitUploadIds.value = pendingNewOutfitUploadIds.value.filter(id => id !== char.id)
+    if (event?.target) event.target.value = ''
+  }
+}
+
 async function generateCharOutfit(charId, asset, customPrompt) {
   const char = chars.value.find(item => item.id === charId)
   if (!char) return
@@ -4808,7 +4980,7 @@ async function pollCharImageGeneration(generationId, charId, transformKey, outfi
         genTimer.endTask(charTimerKey(charId))
         if (transformKey) genTimer.endTask(charTransformTimerKey(transformKey))
         if (outfitKey) genTimer.endTask(charOutfitTimerKey(outfitKey))
-        toast.success(outfitKey ? '换装图已添加' : transformKey ? '角色变体图已添加' : '角色图已更新')
+        toast.success(outfitKey ? '换装图已加入备选并设为定稿' : transformKey ? '角色变体图已添加' : '角色图已更新')
         return
       }
       if (res?.status === 'failed') {
@@ -4966,6 +5138,34 @@ function getSceneImagesForStoryboard(sb) {
   const scene = scenes.value.find(item => item.id === sceneId)
   if (!scene) return []
   return listSceneImagesForStoryboard(scene, sb, getBlockingImage)
+}
+
+function getSceneMediaForScene(scene) {
+  if (!scene) return null
+  const media = summarizeSceneMedia(scene)
+  return media?.view_previews?.length ? media : null
+}
+
+function getSceneMediaForStoryboard(sb) {
+  const images = getSceneImagesForStoryboard(sb)
+  if (!images.length) return null
+  return buildSceneMediaFromImages(images)
+}
+
+function listSceneRegenTargets(scene) {
+  return listSceneImages(scene).filter(img =>
+    img.angle_id !== 'hero' && img.url && !String(img.angle_id).startsWith('ref_'),
+  )
+}
+
+function hasSceneAngleRegenActions(scene) {
+  return listSceneRegenTargets(scene).length > 0
+}
+
+function onStoryboardSceneViewClick(sb, img) {
+  const full = getSceneImagesForStoryboard(sb).find(item => item.angle_id === (img.view_id || img.angle_id))
+    || { angle_id: img.view_id || img.angle_id, url: img.url, label: img.label, readonly: img.readonly }
+  onStoryboardSceneImageClick(sb, full)
 }
 
 function onStoryboardSceneImageClick(sb, img) {
@@ -5227,8 +5427,24 @@ function getCharacterImages(char) {
   return listCharacterImages(char)
 }
 
+function getCharacterById(charId) {
+  return chars.value.find(item => item.id === charId) || null
+}
+
 function getCharacterOutfits(char) {
   return listCharacterOutfits(char)
+}
+
+function outfitUploadKey(charId, outfitId) {
+  return `${charId}:${outfitId}`
+}
+
+function isPendingOutfitUpload(charId, outfitId) {
+  return pendingCharOutfitUploadKeys.value.includes(outfitUploadKey(charId, outfitId))
+}
+
+function isPendingNewOutfitUpload(charId) {
+  return pendingNewOutfitUploadIds.value.includes(charId)
 }
 
 function getCharacterImagesById(charId) {
@@ -6887,6 +7103,7 @@ watch(() => route.params.episodeNumber, () => {
   transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
 }
 .asset-card:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08); }
+.asset-card .asset-body :deep(.char-media-strip-root) { margin-top: 6px; }
 .asset-cover { position: relative; aspect-ratio: 1; background: var(--bg-2); overflow: hidden; }
 .asset-cover.wide { aspect-ratio: 16/9; }
 .asset-cover img { width: 100%; height: 100%; object-fit: cover; }
@@ -7001,13 +7218,28 @@ watch(() => route.params.episodeNumber, () => {
 }
 .char-image-variant-thumb img { width: 56px; height: 56px; object-fit: cover; display: block; }
 .char-image-variant-label { font-size: 9px; color: var(--text-dim); text-align: center; line-height: 1.2; }
+.char-outfit-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.char-outfit-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.char-outfit-empty-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 0 0 4px;
+}
 .char-outfit-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border);
 }
 .char-outfit-block {
   display: flex;
@@ -7019,10 +7251,29 @@ watch(() => route.params.episodeNumber, () => {
 }
 .char-outfit-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
+.char-outfit-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.char-outfit-meta { font-size: 10px; line-height: 1.3; }
+.char-outfit-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+.char-outfit-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 72px;
+}
 .char-outfit-thumb {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -7030,7 +7281,61 @@ watch(() => route.params.episodeNumber, () => {
   background: none;
   cursor: pointer;
 }
-.char-outfit-thumb img { width: 48px; height: 48px; object-fit: cover; display: block; }
+.char-outfit-thumb.is-default {
+  border-color: rgba(59, 130, 246, 0.65);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+}
+.char-outfit-thumb img { width: 72px; height: 72px; object-fit: cover; display: block; }
+.char-outfit-default-badge {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.9);
+  color: #fff;
+  font-size: 9px;
+  line-height: 1.2;
+}
+.char-outfit-candidate-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.char-outfit-candidate-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.2;
+}
+.char-outfit-candidate-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.char-outfit-candidate-actions .btn {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 9px;
+}
+.char-outfit-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: center;
+  padding: 6px;
+}
+.char-outfit-upload-btn.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .char-outfit-name { font-size: 11px; font-weight: 600; }
 .char-outfit-transform { margin-top: 0; padding-top: 0; border-top: none; }
 
@@ -7124,12 +7429,30 @@ watch(() => route.params.episodeNumber, () => {
   font-size: 10px;
   line-height: 1.2;
 }
-.video-char-image-panel {
+.video-char-image-panel,
+.video-scene-image-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 8px 0 4px;
   border-top: 1px dashed var(--border);
+}
+.video-scene-image-hint { font-size: 10px; }
+.video-scene-image-panel :deep(.entity-view-grid) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  grid-template-columns: none;
+}
+.video-scene-image-panel :deep(.entity-view-card) {
+  flex-shrink: 0;
+  width: 56px;
+}
+.scene-angle-regen-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
 }
 .video-char-image-hint { font-size: 10px; }
 .video-char-image-strip {
@@ -7140,65 +7463,61 @@ watch(() => route.params.episodeNumber, () => {
 }
 .video-char-image-segment {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   min-width: 0;
   max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(76, 125, 255, 0.04);
+  border: 1px solid rgba(76, 125, 255, 0.1);
 }
 .video-char-image-name {
   flex-shrink: 0;
   font-size: 11px;
   font-weight: 700;
   color: var(--text-2);
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(76, 125, 255, 0.08);
-  border: 1px solid rgba(76, 125, 255, 0.14);
-  max-width: 72px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  align-self: flex-start;
 }
-.video-char-image-options {
+.video-char-image-segment :deep(.char-media-strip-root) {
+  min-width: 0;
+  flex: 1;
+}
+.video-char-image-segment :deep(.char-outfit-grid) {
   display: flex;
   flex-wrap: nowrap;
+  overflow-x: auto;
   gap: 6px;
+  padding-bottom: 2px;
+  grid-template-columns: none;
+}
+.video-char-image-segment :deep(.char-outfit-card) {
+  flex-shrink: 0;
+  width: 56px;
+  background: rgba(255, 255, 255, 0.88);
+}
+.video-char-image-segment :deep(.char-outfit-card.active) {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14);
+}
+.video-char-image-segment :deep(.char-outfit-expanded) {
+  width: 100%;
+  margin-top: 4px;
+}
+.video-char-image-segment :deep(.char-media-strip) {
+  flex-wrap: nowrap;
   overflow-x: auto;
   min-width: 0;
   padding-bottom: 2px;
 }
-.video-char-image-option {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  width: 52px;
+.video-char-image-segment :deep(.char-media-chip) {
   flex-shrink: 0;
-  padding: 3px;
-  border: 1.5px solid rgba(27, 41, 64, 0.1);
-  border-radius: 10px;
   background: rgba(255, 255, 255, 0.88);
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
-.video-char-image-option:hover {
-  border-color: rgba(76, 125, 255, 0.35);
-  transform: translateY(-1px);
-}
-.video-char-image-option.active {
+.video-char-image-segment :deep(.char-media-chip.active) {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14);
-}
-.video-char-image-option img { width: 44px; height: 44px; object-fit: cover; border-radius: 7px; }
-.video-char-image-option span {
-  font-size: 9px;
-  color: var(--text-3);
-  text-align: center;
-  line-height: 1.2;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .tag-warn { color: #b45309; border-color: rgba(180, 83, 9, 0.35); background: rgba(251, 191, 36, 0.08); }
 

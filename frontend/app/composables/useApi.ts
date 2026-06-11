@@ -369,8 +369,26 @@ export const characterAPI = {
       transform_type: transformType,
       ...(source && source !== 'primary' ? { source } : {}),
     }),
-  generateOutfit: (id: number, data: { episode_id: number; costume_asset_id: number; label?: string; prompt?: string }) =>
+  generateOutfit: (id: number, data: { episode_id: number; costume_asset_id: number; label?: string; prompt?: string; outfit_id?: string }) =>
     api.post(`/characters/${id}/generate-outfit`, data),
+  uploadOutfitCandidate: (
+    id: number,
+    outfitId: string,
+    file: File,
+    data?: { label?: string; candidate_label?: string; set_as_default?: boolean; costume_asset_id?: number },
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (data?.label) form.append('label', data.label)
+    if (data?.candidate_label) form.append('candidate_label', data.candidate_label)
+    if (data?.set_as_default != null) form.append('set_as_default', String(data.set_as_default))
+    if (data?.costume_asset_id != null) form.append('costume_asset_id', String(data.costume_asset_id))
+    return uploadForm(`/characters/${id}/outfits/${encodeURIComponent(outfitId)}/candidates`, form)
+  },
+  setOutfitDefault: (id: number, outfitId: string, candidateId: string) =>
+    api.put(`/characters/${id}/outfits/${encodeURIComponent(outfitId)}/default`, { candidate_id: candidateId }),
+  deleteOutfitCandidate: (id: number, outfitId: string, candidateId: string) =>
+    api.del(`/characters/${id}/outfits/${encodeURIComponent(outfitId)}/candidates/${encodeURIComponent(candidateId)}`),
   transformPresets: () => api.get('/characters/transform-presets'),
   batchImages: (ids: number[], episodeId: number) => api.post('/characters/batch-generate-images', { character_ids: ids, episode_id: episodeId }),
   del: (id: number) => api.del(`/characters/${id}`),

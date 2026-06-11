@@ -108,3 +108,49 @@ export function listMissingSceneAngleIds(scene: {
   const existing = new Set(parseSceneAngleImages(scene.referenceImages).map(item => item.angle_id))
   return angleIds.filter(id => !existing.has(id))
 }
+
+export interface EntityViewPreview {
+  view_id: string
+  label: string
+  url: string
+}
+
+export interface EntityMediaSummary {
+  view_count: number
+  image_count: number
+  primary_url: string | null
+  view_previews: EntityViewPreview[]
+  preview_images: Array<{
+    url: string
+    label: string
+    tag: string
+    view_id: string
+    is_primary?: boolean
+  }>
+}
+
+export function summarizeSceneMedia(scene: {
+  imageUrl?: string | null
+  localPath?: string | null
+  referenceImages?: string | null
+}): EntityMediaSummary {
+  const views = listSceneImages(scene)
+  const primaryUrl = views.find(item => item.angle_id === 'hero')?.url || views[0]?.url || null
+  return {
+    view_count: views.length,
+    image_count: views.length,
+    primary_url: primaryUrl,
+    view_previews: views.map(view => ({
+      view_id: view.angle_id,
+      label: view.label,
+      url: view.url,
+    })),
+    preview_images: views.map(view => ({
+      url: view.url,
+      label: view.label,
+      tag: view.angle_id === 'hero' ? '主视角' : view.label,
+      view_id: view.angle_id,
+      is_primary: view.angle_id === 'hero',
+    })),
+  }
+}

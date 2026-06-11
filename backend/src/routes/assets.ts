@@ -13,7 +13,11 @@ import {
   syncEntityFromAsset,
   resolveAssetDisplayMedia,
   upsertLibraryAsset,
+  formatSceneAssetName,
 } from '../services/asset-library.js'
+import { summarizeCharacterMedia } from '../utils/character-image-variants.js'
+import { summarizeSceneMedia } from '../utils/scene-image-variants.js'
+import { summarizePropMedia } from '../utils/prop-image-variants.js'
 import { saveUploadedFile } from '../utils/storage.js'
 import { syncCharacterPrimaryImage, syncProjectAsset, syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { isOssConfigured } from '../utils/oss-upload.js'
@@ -49,8 +53,7 @@ app.get('/', async (c) => {
   if (dramaId) {
     const id = Number(dramaId)
     if (Number.isFinite(id) && id > 0) {
-      // 项目筛选时始终保留跨项目资产（drama_id 为空）
-      rows = rows.filter(row => row.dramaId == null || row.dramaId === id)
+      rows = rows.filter(row => row.dramaId === id)
     }
   }
   if (type && isAssetCategory(type)) rows = rows.filter(row => row.type === type)
@@ -63,12 +66,54 @@ app.get('/', async (c) => {
   rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
   const enriched = rows.map((row) => {
     const media = resolveAssetDisplayMedia(row)
-    return toSnakeCase({
+    const payload: Record<string, unknown> = {
       ...row,
       url: media.url ?? row.url,
       localPath: media.localPath ?? row.localPath,
       thumbnailUrl: media.thumbnailUrl ?? row.thumbnailUrl,
-    })
+    }
+    if (row.type === 'character') {
+      let char = null as typeof schema.characters.$inferSelect | null
+      if (row.sourceType === 'character' && row.sourceId) {
+        [char] = db.select().from(schema.characters).where(eq(schema.characters.id, row.sourceId)).all()
+      } else if (row.dramaId && row.name) {
+        char = db.select().from(schema.characters)
+          .where(and(eq(schema.characters.dramaId, row.dramaId), isNull(schema.characters.deletedAt)))
+          .all()
+          .find(item => item.name === row.name) || null
+      }
+      if (char && !char.deletedAt) {
+        payload.characterMedia = summarizeCharacterMedia(char)
+      }
+    } else if (row.type === 'scene') {
+      let scene = null as typeof schema.scenes.$inferSelect | null
+      if (row.sourceType === 'scene' && row.sourceId) {
+        [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, row.sourceId)).all()
+      } else if (row.dramaId && row.name) {
+        const location = String(row.name).replace(/（[^）]+）$/, '').trim()
+        scene = db.select().from(schema.scenes)
+          .where(and(eq(schema.scenes.dramaId, row.dramaId), isNull(schema.scenes.deletedAt)))
+          .all()
+          .find(item => item.location === location || formatSceneAssetName(item.location, item.time) === row.name) || null
+      }
+      if (scene && !scene.deletedAt) {
+        payload.sceneMedia = summarizeSceneMedia(scene)
+      }
+    } else if (row.type === 'prop') {
+      let prop = null as typeof schema.props.$inferSelect | null
+      if (row.sourceType === 'prop' && row.sourceId) {
+        [prop] = db.select().from(schema.props).where(eq(schema.props.id, row.sourceId)).all()
+      } else if (row.dramaId && row.name) {
+        prop = db.select().from(schema.props)
+          .where(and(eq(schema.props.dramaId, row.dramaId), isNull(schema.props.deletedAt)))
+          .all()
+          .find(item => item.name === row.name) || null
+      }
+      if (prop && !prop.deletedAt) {
+        payload.propMedia = summarizePropMedia(prop)
+      }
+    }
+    return toSnakeCase(payload)
   })
   return success(c, enriched)
 })

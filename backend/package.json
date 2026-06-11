@@ -14,7 +14,8 @@
     "db:import": "node scripts/import-db.mjs",
     "thumbnails:backfill": "node scripts/backfill-thumbnails.mjs",
     "assets:backfill": "tsx scripts/backfill-asset-media.mjs",
-    "assets:repair-import": "node scripts/import-asset-library.mjs --repair"
+    "assets:repair-import": "node scripts/import-asset-library.mjs --repair",
+    "assets:import-drama": "tsx scripts/import-drama-project-assets.mjs"
   },
   "keywords": [],
   "author": "",
