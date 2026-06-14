@@ -13,6 +13,10 @@
               选择场景
               <span v-if="boundSceneCount" class="composer-pick-count">{{ boundSceneCount }}</span>
             </button>
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="openPropPicker">
+              选择道具
+              <span v-if="boundPropCount" class="composer-pick-count">{{ boundPropCount }}</span>
+            </button>
             <button type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
               选择音色
               <span v-if="boundVoiceCount" class="composer-pick-count">{{ boundVoiceCount }}</span>
@@ -21,7 +25,7 @@
               音色库
             </button>
           </div>
-          <div v-if="boundCharacterCount || boundSceneCount || boundVoiceCount" class="composer-bound-summary">
+          <div v-if="boundCharacterCount || boundSceneCount || boundPropCount || boundVoiceCount" class="composer-bound-summary">
             <button
               v-for="char in boundCharacters"
               :key="char.id"
@@ -41,6 +45,15 @@
               {{ sceneDisplayLabel(scene) }} ×
             </button>
             <button
+              v-for="prop in boundProps"
+              :key="prop.id"
+              type="button"
+              class="composer-bound-chip"
+              @click="unbindPropById(prop.id)"
+            >
+              {{ prop.name || `道具#${prop.id}` }} ×
+            </button>
+            <button
               v-for="(voice, vIdx) in boundVoices"
               :key="voice.path || vIdx"
               type="button"
@@ -51,11 +64,14 @@
             </button>
           </div>
         </div>
-        <span class="dim composer-project-hint">选择角色/场景/音色或上传图片；参考图栏出现图片后可在提示词输入 <kbd>@</kbd> 关联</span>
+        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方图片可左右拖动调整顺序，输入框会自动更新「图片1是…」；可用 <kbd>@</kbd> 关联</span>
       </div>
 
       <div class="composer-main">
-        <div class="composer-input-wrap">
+        <div
+          class="composer-input-wrap"
+          :class="{ 'is-prompt-expanded': isPromptComposerExpanded }"
+        >
           <div
             v-if="showRefStrip"
             class="composer-ref-stack"
@@ -72,8 +88,17 @@
                 missing: item.missing,
                 'is-first': refMode === 'first_last' && item.uploadIndex === 0,
                 'is-last': refMode === 'first_last' && item.uploadIndex === 1,
+                'is-dragging': refDragIndex === index,
+                'is-drag-over': refDropIndex === index && refDragIndex !== index,
+                'is-draggable': canDragRefStrip,
               }"
               :style="{ '--ref-index': index }"
+              :draggable="canDragRefStrip"
+              @dragstart="onRefDragStart(index, $event)"
+              @dragend="onRefDragEnd"
+              @dragover="onRefDragOver(index, $event)"
+              @dragleave="onRefDragLeave(index)"
+              @drop="onRefDrop(index, $event)"
             >
               <button
                 type="button"
@@ -81,6 +106,8 @@
                 :disabled="!item.preview && item.missing"
                 :title="item.tagLabel"
                 @click.stop="openVisualRefPreview(item)"
+                @mousedown.stop
+                @dragstart.stop
               >
                 <img v-if="item.preview" :src="item.preview" alt="" />
                 <div v-else class="composer-ref-card-empty">缺图</div>
@@ -90,6 +117,8 @@
                 class="composer-ref-card-remove"
                 title="移除"
                 @click.stop="removeVisualRef(item)"
+                @mousedown.stop
+                @dragstart.stop
               >
                 ×
               </button>
@@ -112,8 +141,10 @@
             v-model="prompt"
             class="composer-input"
             :class="{ 'composer-input--with-refs': showRefStrip }"
-            rows="6"
+            :rows="isPromptComposerExpanded ? 6 : 2"
             :placeholder="mentionableRefItems.length ? '描述视频内容；输入 @ 可关联参考图…' : (dramaLinked ? '描述视频内容…' : '描述你想生成的视频画面、动作与镜头…')"
+            @focus="onPromptFocus"
+            @blur="onPromptBlur"
             @input="onPromptInput"
             @keydown="onPromptKeydown"
             @click="onPromptInput"
@@ -143,6 +174,34 @@
 
         <div class="composer-toolbar">
           <div class="composer-options">
+            <div v-if="officialMode && officialModels.length" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">官方模型</span>
+              <button
+                v-for="model in officialModels"
+                :key="model.id"
+                type="button"
+                class="composer-pill composer-pill-model"
+                :class="{ active: fixedModel === model.id }"
+                @click="selectOfficialModel(model.id)"
+              >
+                {{ model.label }}
+              </button>
+            </div>
+
+            <div v-if="!officialMode && chengmengModels.length" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">模型</span>
+              <button
+                v-for="model in chengmengModels"
+                :key="model.id"
+                type="button"
+                class="composer-pill composer-pill-model"
+                :class="{ active: fixedModel === model.id }"
+                @click="selectOfficialModel(model.id)"
+              >
+                {{ model.label }}
+              </button>
+            </div>
+
             <label class="composer-option">
               <span class="composer-option-label">项目</span>
               <select v-model="dramaId" class="composer-select" @change="onDramaChange">
@@ -151,7 +210,7 @@
               </select>
             </label>
 
-            <div class="composer-pills">
+            <div v-if="showRefModeToggle" class="composer-pills">
               <button
                 type="button"
                 class="composer-pill"
@@ -183,7 +242,18 @@
               </button>
             </div>
 
-            <div class="composer-pills">
+            <div v-if="durationRangeEnabled" class="composer-duration-range">
+              <select
+                class="composer-select composer-duration-select"
+                :value="duration"
+                @change="onDurationSelect"
+              >
+                <option v-for="sec in durationSelectOptions" :key="sec" :value="sec">
+                  {{ sec }}s
+                </option>
+              </select>
+            </div>
+            <div v-else class="composer-pills">
               <button
                 v-for="sec in durations"
                 :key="sec"
@@ -221,10 +291,11 @@
           <button
             type="button"
             class="composer-submit"
-            :disabled="generating || !prompt.trim()"
+            :disabled="generating || !prompt.trim() || (officialMode && !fixedModel)"
             @click="submit"
           >
-            {{ generating ? '生成中…' : '生成视频' }}
+            <span>{{ generating ? '生成中…' : (officialMode ? '官方生成' : '生成视频') }}</span>
+            <span v-if="displayCreditHint && !generating" class="composer-submit-cost">{{ displayCreditHint }}</span>
           </button>
         </div>
       </div>
@@ -235,8 +306,13 @@
       :mode="entityPickerMode"
       :characters="projectChars"
       :scenes="projectScenes"
+      :drama-props="projectProps"
       :selected-character-ids="binding.character_ids"
       :selected-scene-ids="getBindingSceneIds(binding)"
+      :selected-prop-ids="binding.prop_ids"
+      :selected-character-image-refs="binding.character_image_refs"
+      :selected-scene-image-refs="binding.scene_image_refs"
+      :selected-prop-image-refs="binding.prop_image_refs"
       @close="entityPickerOpen = false"
       @confirm="onEntityPickerConfirm"
     />
@@ -296,23 +372,31 @@ import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } 
 import {
   bindCharacter,
   bindScene,
+  bindProp,
+  applyStudioPromptImageHeader,
+  applyRefStripOrderToBinding,
   buildMentionOptions,
   buildStudioContentRefs,
   buildStudioRefStripItems,
   canUnlinkStudioRef,
   createStudioBindingState,
+  ensureRefStripOrderKeys,
   formatPromptImageRefIssues,
   getBindingSceneIds,
   nextPromptImageIndex,
+  parsePromptImageLabels,
   removePromptImageLabel,
   replaceMentionWithImageLabel,
+  restoreStudioBindingsFromVideoItem,
   sceneDisplayLabel,
   toggleCharacterBinding,
   unbindCharacter,
   unbindScene,
+  unbindProp,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
 import { parseVoiceRefs, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
+import { resolveStudioDramaId, setLastStudioDramaId } from '~/utils/studio-drama-preference.js'
 import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
 
@@ -320,9 +404,35 @@ const props = defineProps({
   generating: { type: Boolean, default: false },
   dramas: { type: Array, default: () => [] },
   defaultDramaId: { type: String, default: '' },
+  /** 官方 Seedance 页：走火山方舟 API */
+  officialMode: { type: Boolean, default: false },
+  /** 官方页可选模型列表 */
+  officialModels: { type: Array, default: () => [] },
+  /** 橙盟视频页可选模型列表 */
+  chengmengModels: { type: Array, default: () => [] },
+  /** 固定官方 Seedance 配置 ID（视频生成官页面） */
+  fixedConfigId: { type: [Number, null], default: null },
+  /** 固定 Seedance 模型 ID */
+  fixedModel: { type: String, default: '' },
+  /** 有参考图时强制 adaptive 比例（官方 Seedance 2.0） */
+  forceAdaptiveAspect: { type: Boolean, default: false },
+  /** 生成按钮旁展示的积分提示 */
+  creditCostHint: { type: String, default: '' },
+  /** 按秒计费单价（官方 Seedance 页） */
+  creditCostPerSecond: { type: Number, default: null },
+  /** 可选时长下限（秒），官方页默认 4 */
+  durationMin: { type: Number, default: null },
+  /** 可选时长上限（秒），官方页默认 15 */
+  durationMax: { type: Number, default: null },
+  /** 记住当前账号上次选择的项目 */
+  rememberDramaId: { type: Boolean, default: true },
+  /** localStorage 作用域键（区分视频/官方等页面） */
+  dramaPreferenceScope: { type: String, default: 'video' },
+  /** 是否显示参考图/首尾帧切换（橙盟通道不支持首尾帧） */
+  showRefModeToggle: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['generate'])
+const emit = defineEmits(['generate', 'update:fixedModel'])
 
 const maxImages = 9
 const aspectRatios = ['9:16', '16:9']
@@ -333,12 +443,69 @@ const uploadedRefs = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
+const projectProps = ref([])
 const voiceAssets = ref([])
 const voicePickerOpen = ref(false)
 const voiceLibraryOpen = ref(false)
 const refMode = ref('reference')
+
+watch(
+  () => props.showRefModeToggle,
+  (enabled) => {
+    if (!enabled) refMode.value = 'reference'
+  },
+  { immediate: true },
+)
 const aspectRatio = ref('9:16')
 const duration = ref(15)
+
+const effectiveDurationMin = computed(() => {
+  if (props.durationMin != null) return props.durationMin
+  if (props.officialMode) return 4
+  return null
+})
+
+const effectiveDurationMax = computed(() => {
+  if (props.durationMax != null) return props.durationMax
+  if (props.officialMode) return 15
+  return null
+})
+
+const durationRangeEnabled = computed(() => {
+  const min = effectiveDurationMin.value
+  const max = effectiveDurationMax.value
+  return min != null && max != null && max >= min
+})
+
+const durationSelectOptions = computed(() => {
+  const min = effectiveDurationMin.value
+  const max = effectiveDurationMax.value
+  if (min == null || max == null || max < min) return []
+  const options = []
+  for (let sec = min; sec <= max; sec += 1) options.push(sec)
+  return options
+})
+
+function clampDuration(value) {
+  if (!durationRangeEnabled.value) return value
+  const min = effectiveDurationMin.value
+  const max = effectiveDurationMax.value
+  const parsed = Math.round(Number(value ?? max))
+  if (!Number.isFinite(parsed)) return max
+  return Math.min(max, Math.max(min, parsed))
+}
+
+function onDurationSelect(event) {
+  duration.value = clampDuration(event?.target?.value)
+}
+
+const displayCreditHint = computed(() => {
+  const perSecond = props.creditCostPerSecond
+  if (perSecond != null && Number.isFinite(Number(perSecond))) {
+    return `${Number(perSecond)} 积分/s`
+  }
+  return props.creditCostHint
+})
 const dramaId = ref('')
 const promptEl = ref(null)
 const mentionOpen = ref(false)
@@ -351,8 +518,15 @@ const referencePickerOpen = ref(false)
 const referencePickerKey = ref(0)
 const sessionReferenceAssets = ref([])
 const refStackExpanded = ref(false)
+const refDragIndex = ref(-1)
+const refDropIndex = ref(-1)
+const promptFocused = ref(false)
 
 const dramaLinked = computed(() => !!dramaId.value)
+
+const isPromptComposerExpanded = computed(() =>
+  promptFocused.value || !!prompt.value.trim() || mentionOpen.value,
+)
 
 const boundCharacters = computed(() =>
   projectChars.value.filter(char => (binding.character_ids || []).includes(char.id)),
@@ -367,6 +541,12 @@ const boundScenes = computed(() => {
 
 const boundSceneCount = computed(() => boundScenes.value.length)
 
+const boundProps = computed(() =>
+  projectProps.value.filter(prop => (binding.prop_ids || []).includes(prop.id)),
+)
+
+const boundPropCount = computed(() => boundProps.value.length)
+
 const boundVoices = computed(() => parseVoiceRefs(binding.voice_refs))
 
 const boundVoiceCount = computed(() => boundVoices.value.length)
@@ -376,6 +556,7 @@ const visualRefItems = computed(() =>
     binding,
     projectChars.value,
     projectScenes.value,
+    projectProps.value,
     uploadedRefs.value,
     gridUrl,
   ),
@@ -384,6 +565,8 @@ const visualRefItems = computed(() =>
 const showRefStrip = computed(() =>
   dramaLinked.value || visualRefItems.value.length > 0,
 )
+
+const canDragRefStrip = computed(() => visualRefItems.value.length > 1)
 
 const mentionableRefItems = computed(() =>
   visualRefItems.value.filter(item => item.path && !item.missing),
@@ -394,13 +577,47 @@ const mentionOptions = computed(() => buildMentionOptions(
   mentionQuery.value,
 ))
 
+function persistDramaPreference(id = dramaId.value) {
+  if (!props.rememberDramaId) return
+  setLastStudioDramaId(props.dramaPreferenceScope, id)
+}
+
+function applyComposerDramaId(nextId) {
+  const normalized = String(nextId || '').trim()
+  if (normalized === dramaId.value) {
+    if (normalized) loadProjectAssets(normalized)
+    return
+  }
+  if (!normalized) {
+    dramaId.value = ''
+    resetBinding()
+    mentionOpen.value = false
+    projectChars.value = []
+    projectScenes.value = []
+    projectProps.value = []
+    voiceAssets.value = []
+    return
+  }
+  dramaId.value = normalized
+  resetBinding()
+  mentionOpen.value = false
+  loadProjectAssets(normalized)
+}
+
+function syncComposerDramaFromProps() {
+  const next = resolveStudioDramaId({
+    scope: props.dramaPreferenceScope,
+    defaultDramaId: props.defaultDramaId,
+    dramas: props.dramas,
+    remember: props.rememberDramaId,
+  })
+  applyComposerDramaId(next)
+}
+
 watch(
-  () => props.defaultDramaId,
-  (id) => {
-    if (!dramaId.value && id) {
-      dramaId.value = id
-      loadProjectAssets(id)
-    }
+  () => [props.defaultDramaId, props.dramas, props.rememberDramaId, props.dramaPreferenceScope],
+  () => {
+    syncComposerDramaFromProps()
   },
   { immediate: true },
 )
@@ -500,6 +717,7 @@ async function loadProjectAssets(id) {
   if (!Number.isFinite(parsed)) {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
     resetBinding()
     return
   }
@@ -507,22 +725,26 @@ async function loadProjectAssets(id) {
     const drama = await dramaAPI.get(parsed)
     projectChars.value = drama?.characters || []
     projectScenes.value = drama?.scenes || []
+    projectProps.value = drama?.props || []
     await loadVoiceAssets()
   } catch (err) {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
     voiceAssets.value = []
     toast.error(err?.message || '加载项目素材失败')
   }
 }
 
 function onDramaChange() {
+  persistDramaPreference()
   resetBinding()
   mentionOpen.value = false
   if (dramaId.value) loadProjectAssets(dramaId.value)
   else {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
   }
 }
 
@@ -567,45 +789,130 @@ function openScenePicker() {
   entityPickerOpen.value = true
 }
 
-function onEntityPickerConfirm(result) {
-  if (result.mode === 'character') {
-    const prevIds = new Set(binding.character_ids || [])
-    const nextIds = new Set(result.characterIds || [])
-    for (const char of projectChars.value) {
-      const wasBound = prevIds.has(char.id)
-      const isBound = nextIds.has(char.id)
-      if (isBound && !wasBound) {
-        bindCharacter(binding, char.id, projectChars.value)
-      } else if (!isBound && wasBound) {
-        unbindCharacter(binding, char.id)
-        prompt.value = removePromptImageLabel(prompt.value, null, char.name)
-      }
-    }
+function openPropPicker() {
+  if (!projectProps.value.length) {
+    toast.warning('该项目暂无道具')
     return
   }
+  entityPickerMode.value = 'prop'
+  entityPickerOpen.value = true
+}
 
-  if (result.mode === 'scene') {
+function ensureRefStripOrder() {
+  const defaultItems = buildStudioRefStripItems(
+    { ...binding, ref_strip_order: [] },
+    projectChars.value,
+    projectScenes.value,
+    projectProps.value,
+    uploadedRefs.value,
+    gridUrl,
+  )
+  ensureRefStripOrderKeys(binding, defaultItems)
+}
+
+function syncPromptImageHeader() {
+  ensureRefStripOrder()
+  prompt.value = applyStudioPromptImageHeader(
+    prompt.value,
+    binding,
+    projectChars.value,
+    projectScenes.value,
+    projectProps.value,
+    uploadedRefs.value,
+  )
+}
+
+function reorderVisualRefs(fromIndex, toIndex) {
+  if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return
+  const items = [...visualRefItems.value]
+  if (fromIndex >= items.length || toIndex >= items.length) return
+  const [moved] = items.splice(fromIndex, 1)
+  items.splice(toIndex, 0, moved)
+  const reorderedUploads = applyRefStripOrderToBinding(binding, items, uploadedRefs.value)
+  uploadedRefs.value = reorderedUploads
+  syncUploadPaths()
+  syncPromptImageHeader()
+}
+
+function onRefDragStart(index, event) {
+  if (!canDragRefStrip.value) {
+    event.preventDefault()
+    return
+  }
+  refDragIndex.value = index
+  refDropIndex.value = index
+  refStackExpanded.value = true
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+function onRefDragEnd() {
+  refDragIndex.value = -1
+  refDropIndex.value = -1
+}
+
+function onRefDragOver(index, event) {
+  if (refDragIndex.value < 0) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  refDropIndex.value = index
+}
+
+function onRefDragLeave(index) {
+  if (refDropIndex.value === index) refDropIndex.value = -1
+}
+
+function onRefDrop(index, event) {
+  event.preventDefault()
+  const fromIndex = refDragIndex.value
+  onRefDragEnd()
+  reorderVisualRefs(fromIndex, index)
+}
+
+function onEntityPickerConfirm(result) {
+  if (result.mode === 'character') {
+    for (const charId of result.characterIds || []) {
+      bindCharacter(binding, charId, projectChars.value)
+    }
+    binding.character_image_refs = {
+      ...(binding.character_image_refs || {}),
+      ...(result.characterImageRefs || {}),
+    }
+  } else if (result.mode === 'scene') {
     const prevIds = new Set(getBindingSceneIds(binding))
     const nextIds = new Set(result.sceneIds || [])
     for (const scene of projectScenes.value) {
       const wasBound = prevIds.has(scene.id)
       const isBound = nextIds.has(scene.id)
       if (isBound && !wasBound) {
-        bindScene(binding, scene.id)
+        bindScene(binding, scene.id, projectScenes.value)
       } else if (!isBound && wasBound) {
         unbindScene(binding, scene.id)
-        prompt.value = removePromptImageLabel(prompt.value, null, sceneDisplayLabel(scene))
-        if (scene.location) {
-          prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
-        }
       }
     }
+    binding.scene_image_refs = { ...(result.sceneImageRefs || {}) }
+  } else if (result.mode === 'prop') {
+    const prevIds = new Set(binding.prop_ids || [])
+    const nextIds = new Set(result.propIds || [])
+    for (const prop of projectProps.value) {
+      const wasBound = prevIds.has(prop.id)
+      const isBound = nextIds.has(prop.id)
+      if (isBound && !wasBound) {
+        bindProp(binding, prop.id, projectProps.value)
+      } else if (!isBound && wasBound) {
+        unbindProp(binding, prop.id)
+      }
+    }
+    binding.prop_image_refs = { ...(result.propImageRefs || {}) }
   }
+  syncPromptImageHeader()
 }
 
 function unbindCharacterById(charId, name) {
   unbindCharacter(binding, charId)
-  prompt.value = removePromptImageLabel(prompt.value, null, name)
+  syncPromptImageHeader()
 }
 
 function isCharacterBound(charId) {
@@ -616,20 +923,20 @@ function onToggleCharacter(char) {
   const wasBound = isCharacterBound(char.id)
   const added = toggleCharacterBinding(binding, char.id, projectChars.value)
   if (!added && wasBound) {
-    prompt.value = removePromptImageLabel(prompt.value, null, char.name)
+    syncPromptImageHeader()
+  } else if (added) {
+    syncPromptImageHeader()
   }
 }
 
 function unbindSceneById(sceneId) {
-  const scene = projectScenes.value.find(item => item.id === sceneId)
   unbindScene(binding, sceneId)
-  if (scene) {
-    prompt.value = removePromptImageLabel(prompt.value, null, sceneDisplayLabel(scene))
-    if (scene.location) {
-      prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
-    }
-  }
-  prompt.value = removePromptImageLabel(prompt.value, null, '场景')
+  syncPromptImageHeader()
+}
+
+function unbindPropById(propId) {
+  unbindProp(binding, propId)
+  syncPromptImageHeader()
 }
 
 function canUnlinkRef(ref) {
@@ -637,17 +944,18 @@ function canUnlinkRef(ref) {
 }
 
 function unlinkRef(ref) {
-  const label = ref.promptLabel || ref.label
   if (ref.source === 'character' && ref.charId) {
     unbindCharacter(binding, ref.charId)
   } else if (ref.source === 'scene' || ref.sceneId) {
     unbindScene(binding, ref.sceneId)
+  } else if (ref.source === 'prop' && ref.propId) {
+    unbindProp(binding, ref.propId)
   } else if (ref.source === 'reference' && ref.url) {
     const path = normalizeMediaPath(ref.url)
     uploadedRefs.value = uploadedRefs.value.filter(item => normalizeMediaPath(item.path) !== path)
     syncUploadPaths()
   }
-  prompt.value = removePromptImageLabel(prompt.value, ref.imageIndex, label)
+  syncPromptImageHeader()
 }
 
 function syncUploadPaths() {
@@ -672,6 +980,7 @@ function addReferencePath(path, meta = {}) {
     assetId: meta.assetId || null,
   })
   syncUploadPaths()
+  syncPromptImageHeader()
   return true
 }
 
@@ -701,6 +1010,7 @@ async function onUpload(event) {
     }
   }
   if (event?.target) event.target.value = ''
+  syncPromptImageHeader()
 }
 
 function pushSessionReferenceAsset({ path, label, assetId }) {
@@ -737,15 +1047,13 @@ function onReferencePicked(item) {
   if (!addReferencePath(path, { label, assetId: asset?.id || null })) return
   referencePickerOpen.value = false
   prefetchMediaUrls([path]).catch(() => {})
+  syncPromptImageHeader()
 }
 
 function removeUpload(index) {
-  const removed = uploadedRefs.value[index]
   uploadedRefs.value = uploadedRefs.value.filter((_, i) => i !== index)
   syncUploadPaths()
-  if (removed) {
-    prompt.value = removePromptImageLabel(prompt.value, null, `参考图${index + 1}`)
-  }
+  syncPromptImageHeader()
 }
 
 function detectMention() {
@@ -764,6 +1072,14 @@ function detectMention() {
   mentionOpen.value = true
   mentionQuery.value = match[1]
   mentionStart.value = pos - match[0].length
+}
+
+function onPromptFocus() {
+  promptFocused.value = true
+}
+
+function onPromptBlur() {
+  promptFocused.value = false
 }
 
 function onPromptInput() {
@@ -827,6 +1143,22 @@ function buildSimplePromptHeader(text, count) {
   return `${header}。${body}`
 }
 
+function applyFixedOfficialPayload(payload) {
+  if (!props.officialMode && !props.fixedConfigId && !props.fixedModel) return payload
+  if (props.officialMode) payload.official = true
+  if (props.fixedConfigId) payload.config_id = props.fixedConfigId
+  if (props.fixedModel) payload.model = props.fixedModel
+  const hasRefs = !!(payload.content_refs?.length || payload.reference_image_urls?.length || payload.image_url || payload.first_frame_url)
+  if ((props.officialMode || props.forceAdaptiveAspect) && hasRefs) {
+    payload.aspect_ratio = 'adaptive'
+  }
+  return payload
+}
+
+function selectOfficialModel(modelId) {
+  emit('update:fixedModel', modelId)
+}
+
 function submit() {
   const text = prompt.value.trim()
   if (!text) {
@@ -837,22 +1169,26 @@ function submit() {
   syncUploadPaths()
 
   const payload = {
-    duration: duration.value,
+    duration: clampDuration(duration.value),
     aspect_ratio: aspectRatio.value,
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
 
   if (dramaLinked.value && refMode.value === 'reference') {
-    const issues = validateStudioPrompt(text, binding, projectChars.value, projectScenes.value)
+    syncPromptImageHeader()
+    const textForSubmit = prompt.value.trim()
+    const issues = validateStudioPrompt(textForSubmit, binding, projectChars.value, projectScenes.value, projectProps.value, uploadedRefs.value)
     if (issues.length) {
       toast.error(formatPromptImageRefIssues(issues))
       return
     }
     const { prompt: finalPrompt, contentRefs } = buildStudioContentRefs(
       binding,
-      text,
+      textForSubmit,
       projectChars.value,
       projectScenes.value,
+      projectProps.value,
+      uploadedRefs.value,
     )
     payload.prompt = finalPrompt
     if (contentRefs.length) {
@@ -866,7 +1202,7 @@ function submit() {
         payload.reference_image_urls = imageUrls
       }
     }
-    emit('generate', payload)
+    emit('generate', applyFixedOfficialPayload(payload))
     return
   }
 
@@ -904,28 +1240,64 @@ function submit() {
     payload.prompt = buildSimplePromptHeader(text, images.length)
   }
 
-  emit('generate', payload)
+  emit('generate', applyFixedOfficialPayload(payload))
 }
 
-function loadFromItem(item) {
-  prompt.value = String(item?.prompt || '')
-  aspectRatio.value = item?.aspect_ratio || item?.aspectRatio || '9:16'
-  duration.value = Number(item?.duration || 15)
-  if (item?.drama_id) {
-    dramaId.value = String(item.drama_id)
-    loadProjectAssets(dramaId.value)
-  }
-
+async function loadFromItem(item) {
   resetBinding()
-  const refs = item?.reference_images || []
-  uploadedRefs.value = refs.map(ref => ({
-    path: ref.path || ref.display_url,
-    preview: gridUrl(ref.path) || ref.display_url,
-  })).filter(ref => ref.path)
-  syncUploadPaths()
+  uploadedRefs.value = []
+
+  aspectRatio.value = item?.aspect_ratio || item?.aspectRatio || '9:16'
+  duration.value = clampDuration(Number(item?.duration || 15))
 
   const mode = item?.reference_mode || item?.referenceMode
-  refMode.value = mode === 'first_last' ? 'first_last' : 'reference'
+  refMode.value = props.showRefModeToggle && mode === 'first_last' ? 'first_last' : 'reference'
+
+  if (item?.drama_id) {
+    dramaId.value = String(item.drama_id)
+    persistDramaPreference(dramaId.value)
+    await loadProjectAssets(dramaId.value)
+  }
+
+  prompt.value = String(item?.prompt || '')
+
+  const preservedLabels = new Map(
+    parsePromptImageLabels(String(item?.prompt || '')).map(entry => [entry.index, entry.label]),
+  )
+
+  restoreStudioBindingsFromVideoItem(
+    item,
+    binding,
+    projectChars.value,
+    projectScenes.value,
+    projectProps.value,
+    {
+      normalizePath: normalizeMediaPath,
+      addUpload: (path, meta = {}) => {
+        const normalized = normalizeMediaPath(path)
+        if (!normalized) return false
+        if (uploadedRefs.value.some(entry => normalizeMediaPath(entry.path) === normalized)) {
+          return true
+        }
+        uploadedRefs.value.push({
+          path: normalized,
+          preview: meta.preview || gridUrl(normalized),
+          label: meta.label || null,
+        })
+        return true
+      },
+    },
+  )
+  syncUploadPaths()
+  prompt.value = applyStudioPromptImageHeader(
+    prompt.value,
+    binding,
+    projectChars.value,
+    projectScenes.value,
+    projectProps.value,
+    uploadedRefs.value,
+    { preservedLabels },
+  )
 }
 
 function clearPrompt() {
@@ -982,12 +1354,17 @@ defineExpose({ loadFromItem, clearPrompt })
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 310px;
+  min-height: 0;
   border-radius: 14px;
   border: 1px solid var(--border);
   background: var(--bg-input);
   padding: 0;
   overflow: visible;
+  transition: min-height 0.22s ease;
+}
+
+.composer-input-wrap.is-prompt-expanded {
+  min-height: 280px;
 }
 
 .composer-ref-stack {
@@ -999,6 +1376,26 @@ defineExpose({ loadFromItem, clearPrompt })
   min-height: 78px;
   overflow: visible;
   cursor: default;
+}
+
+.composer-ref-card.is-draggable {
+  cursor: grab;
+}
+
+.composer-ref-card.is-draggable:active {
+  cursor: grabbing;
+}
+
+.composer-ref-card.is-dragging {
+  opacity: 0.45;
+  transform: scale(0.96);
+  z-index: 40;
+}
+
+.composer-ref-card.is-drag-over {
+  transform: translateY(-6px) scale(1.08);
+  box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.55), 0 10px 24px rgba(15, 23, 42, 0.2);
+  z-index: 35;
 }
 
 .composer-ref-card {
@@ -1168,7 +1565,7 @@ defineExpose({ loadFromItem, clearPrompt })
 .composer-input {
   width: 100%;
   flex: 1;
-  min-height: 220px;
+  min-height: 68px;
   max-height: 480px;
   resize: vertical;
   border: none;
@@ -1178,6 +1575,11 @@ defineExpose({ loadFromItem, clearPrompt })
   font-size: 14px;
   line-height: 1.6;
   padding: 12px 14px 14px;
+  transition: min-height 0.22s ease;
+}
+
+.composer-input-wrap.is-prompt-expanded .composer-input {
+  min-height: 168px;
 }
 
 .composer-input--with-refs {
@@ -1496,6 +1898,24 @@ defineExpose({ loadFromItem, clearPrompt })
   border: 1px solid var(--border);
 }
 
+.composer-pills-official {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 6px;
+}
+
+.composer-pills-official .composer-option-label {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+.composer-pill-model {
+  font-weight: 600;
+}
+
 .composer-pill {
   border: none;
   background: transparent;
@@ -1509,6 +1929,22 @@ defineExpose({ loadFromItem, clearPrompt })
 .composer-pill.active {
   background: var(--accent-bg);
   color: var(--accent-text);
+}
+
+.composer-duration-range {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.composer-duration-select {
+  min-width: 72px;
+  padding: 4px 24px 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
 }
 
 .composer-upload-btn {
@@ -1526,6 +1962,10 @@ defineExpose({ loadFromItem, clearPrompt })
 
 .composer-submit {
   flex-shrink: 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   border: none;
   border-radius: 999px;
   padding: 10px 22px;
@@ -1535,6 +1975,12 @@ defineExpose({ loadFromItem, clearPrompt })
   cursor: pointer;
   background: linear-gradient(135deg, #4c7dff 0%, #7c4dff 100%);
   box-shadow: 0 8px 24px rgba(76, 125, 255, 0.35);
+}
+
+.composer-submit-cost {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.88;
 }
 
 .composer-submit:disabled {
@@ -1559,8 +2005,14 @@ defineExpose({ loadFromItem, clearPrompt })
   }
   .composer-toolbar { flex-direction: column; align-items: stretch; }
   .composer-submit { width: 100%; }
+  .composer-input-wrap.is-prompt-expanded {
+    min-height: 240px;
+  }
   .composer-input {
-    min-height: 220px;
+    min-height: 60px;
+  }
+  .composer-input-wrap.is-prompt-expanded .composer-input {
+    min-height: 140px;
   }
 }
 

@@ -20,6 +20,7 @@ import {
 } from '../services/drama-shares.js'
 import { assessDramaDeletion, assessEpisodeDeletion, toDeletionInfo } from '../services/deletion-guards.js'
 import { episodeSummaryToSnakeCase, getEpisodeSummariesForDrama } from '../services/episode-summary.js'
+import { reconcileOrphanAssets } from '../services/asset-library.js'
 
 const app = new Hono()
 
@@ -226,6 +227,8 @@ app.get('/:id', async (c) => {
   if (!drama) return notFound(c, '剧本不存在')
   const denied = assertDramaTeamAccess(c, drama)
   if (denied) return denied
+
+  reconcileOrphanAssets(id)
 
   const eps = await db.select().from(schema.episodes)
     .where(eq(schema.episodes.dramaId, id))

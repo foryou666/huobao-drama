@@ -1,9 +1,12 @@
 import { resolveCharacterImageUrl } from './character-image-variants.js'
 
-export function parsePromptImageLabels(prompt) {  if (!prompt?.trim()) return []
+/** 匹配「图片1是xx」与简写「图1是xx」 */
+export const PROMPT_IMAGE_LABEL_RE = /(?:@)?(?:图片|图)\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
+
+export function parsePromptImageLabels(prompt) {
+  if (!prompt?.trim()) return []
   const items = []
-  const re = /(?:@)?图片\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
-  for (const match of prompt.matchAll(re)) {
+  for (const match of String(prompt).matchAll(PROMPT_IMAGE_LABEL_RE)) {
     const index = Number(match[1])
     const label = String(match[2] || '').trim()
     if (!Number.isFinite(index) || index <= 0 || !label) continue
@@ -19,13 +22,17 @@ function normalizeLabel(raw) {
     .trim()
 }
 
-function labelsMatch(promptLabel, candidateLabel) {
+function labelsMatch(promptLabel, candidateLabel, source) {
   const a = normalizeLabel(promptLabel)
   const b = normalizeLabel(candidateLabel)
   if (!a || !b) return false
-  if (a === b || a.includes(b) || b.includes(a)) return true
+  if (a === b) return true
+  if (source === 'character') return a.includes(b) || b.includes(a)
+  if (source === 'prop') return a.includes(b) || b.includes(a)
+  // 场景名包含短角色名（如「太后」⊂「行宫太后寝殿」）不能算匹配
+  if (source === 'scene') return a.includes(b)
   const keywords = ['车间', '全景', '场景', '首帧', '尾帧', '站位']
-  return keywords.some(kw => a.includes(kw) && b.includes(kw))
+  return keywords.some(kw => a.includes(kw) && b.includes(kw)) || a.includes(b) || b.includes(a)
 }
 
 function sceneCandidateLabel(scene) {
@@ -45,36 +52,61 @@ function getStoryboardSceneIds(sb) {
   return Number.isFinite(legacy) ? [legacy] : []
 }
 
-export function findCandidateForPromptLabel(promptLabel, candidates) {
+export function findCandidateForPromptLabel(promptLabel, candidates, usedKeys = null) {
+  const pool = usedKeys?.size
+    ? candidates.filter(candidate => !usedKeys.has(candidate.key))
+    : candidates
   const normalized = normalizeLabel(promptLabel)
   if (normalized.startsWith('参考图')) {
     const numbered = normalized.match(/^参考图(\d+)$/)
     if (numbered) {
       const refIndex = Number(numbered[1])
-      const indexed = candidates.find(candidate =>
+      const indexed = pool.find(candidate =>
         candidate.source === 'reference' && candidate.refIndex === refIndex,
       )
       if (indexed) return indexed
     }
-    const refs = candidates.filter(candidate => candidate.source === 'reference')
+    const refs = pool.filter(candidate => candidate.source === 'reference')
     if (refs.length === 1) return refs[0]
   }
 
-  const direct = candidates.find(candidate => labelsMatch(promptLabel, candidate.label))
+  const charExact = pool.find(candidate =>
+    candidate.source === 'character' && normalizeLabel(candidate.label) === normalized,
+  )
+  if (charExact) return charExact
+
+  const sceneExact = pool.find(candidate =>
+    candidate.source === 'scene' && normalizeLabel(candidate.label) === normalized,
+  )
+  if (sceneExact) return sceneExact
+
+  const propExact = pool.find(candidate =>
+    candidate.source === 'prop' && normalizeLabel(candidate.label) === normalized,
+  )
+  if (propExact) return propExact
+
+  const direct = pool.find(candidate => labelsMatch(promptLabel, candidate.label, candidate.source))
   if (direct) return direct
   if (normalized.includes('站位') || normalized.includes('blocking')) {
-    return candidates.find(candidate => candidate.source === 'blocking')
+    return pool.find(candidate => candidate.source === 'blocking')
   }
   if (normalized.includes('首帧')) {
-    return candidates.find(candidate => candidate.source === 'first_frame')
+    return pool.find(candidate => candidate.source === 'first_frame')
   }
   if (normalized.includes('尾帧')) {
-    return candidates.find(candidate => candidate.source === 'last_frame')
+    return pool.find(candidate => candidate.source === 'last_frame')
   }
+  const sceneMatches = pool.filter(candidate =>
+    candidate.source === 'scene' && labelsMatch(promptLabel, candidate.label, candidate.source),
+  )
+  if (sceneMatches.length) return sceneMatches[0]
+
   if (normalized.includes('车间') || normalized.includes('场景')) {
-    return candidates.find(candidate => candidate.source === 'scene')
+    return pool.find(candidate => candidate.source === 'scene')
   }
-  return candidates.find(candidate => candidate.source === 'character' && labelsMatch(promptLabel, candidate.label))
+  return pool.find(candidate =>
+    candidate.source === 'character' && labelsMatch(promptLabel, candidate.label, candidate.source),
+  )
 }
 
 export function buildVideoImageCatalog(sb, prompt, chars, scenes, helpers) {
@@ -82,7 +114,7 @@ export function buildVideoImageCatalog(sb, prompt, chars, scenes, helpers) {
   return displayItems
     .filter(item => item.type === 'image')
     .map((item, index) => ({
-      index: index + 1,
+      index: item.imageIndex ?? index + 1,
       label: item.label,
       promptLabel: item.promptLabel,
       url: item.url,
@@ -95,11 +127,10 @@ export function buildVideoImageCatalog(sb, prompt, chars, scenes, helpers) {
 
 export function findCatalogEntryByPromptRef(index, label, catalog) {
   const entry = catalog.find(item => item.index === index)
-  if (!entry) return null
-  const normalized = normalizeLabel(label)
+  if (!entry?.url) return null
   if (labelsMatch(label, entry.label) || labelsMatch(label, entry.promptLabel || '')) return entry
-  if (normalized.includes('参考图') && entry.source === 'reference') return entry
-  return null
+  if (entry.promptLabel && normalizeLabel(entry.promptLabel) === normalizeLabel(label)) return entry
+  return entry
 }
 
 export function assignDisplayImageIndices(items) {
@@ -122,9 +153,11 @@ export function buildReferenceCandidates(
   getCharacterImageRefs,
   getBlockingImage,
   resolveSceneImage,
+  helpers,
 ) {
   const items = []
   const characterImageRefs = getCharacterImageRefs?.(sb) || {}
+  const propsList = helpers?.getProps?.() || []
   const first = getFirstFrame(sb)
   if (first) items.push({ key: `first:${sb.id}`, source: 'first_frame', label: '首帧', url: first })
   const last = getLastFrame(sb)
@@ -155,6 +188,18 @@ export function buildReferenceCandidates(
       label: char.name,
       url: resolveCharacterImageUrl(char, characterImageRefs),
       charId: char.id,
+    })
+  }
+
+  for (const propId of (helpers?.getStoryboardPropIds?.(sb) || [])) {
+    const prop = propsList.find(item => item.id === propId)
+    if (!prop) continue
+    items.push({
+      key: `prop:${prop.id}`,
+      source: 'prop',
+      label: prop.name || `道具#${prop.id}`,
+      url: helpers?.resolvePropImage?.(prop, sb) || prop.image_url || prop.imageUrl || null,
+      propId: prop.id,
     })
   }
 
@@ -194,9 +239,14 @@ export function buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helper
     getCharacterImageRefs,
     helpers.getBlockingImage,
     helpers.resolveSceneImage,
+    helpers,
   )
   const referenceCandidates = candidates.filter(candidate =>
-    candidate.source === 'blocking' || candidate.source === 'scene' || candidate.source === 'character' || candidate.source === 'reference',
+    candidate.source === 'blocking'
+    || candidate.source === 'scene'
+    || candidate.source === 'character'
+    || candidate.source === 'prop'
+    || candidate.source === 'reference',
   )
   const used = new Set()
   const items = []
@@ -213,11 +263,13 @@ export function buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helper
         label: match?.label || label,
         typeLabel: match?.source === 'blocking' ? '站位'
           : match?.source === 'character' ? '角色'
-          : match?.source === 'scene' ? '场景' : '参考图',
+          : match?.source === 'scene' ? '场景'
+          : match?.source === 'prop' ? '道具' : '参考图',
         promptLabel: label,
         imageIndex: index,
         charId: match?.charId,
         sceneId: match?.sceneId,
+        propId: match?.propId,
         missing: !match?.url,
       })
     }
@@ -256,9 +308,11 @@ export function buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helper
         typeLabel: candidate.source === 'blocking' ? '站位'
           : candidate.source === 'character' ? '角色'
           : candidate.source === 'scene' ? '场景'
+          : candidate.source === 'prop' ? '道具'
           : candidate.label || '参考图',
         charId: candidate.charId,
         sceneId: candidate.sceneId,
+        propId: candidate.propId,
         missing: !candidate.url,
       })
     }
@@ -275,9 +329,11 @@ export function buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helper
         typeLabel: candidate.source === 'blocking' ? '站位'
           : candidate.source === 'character' ? '角色'
           : candidate.source === 'scene' ? '场景'
+          : candidate.source === 'prop' ? '道具'
           : candidate.label || '参考图',
         charId: candidate.charId,
         sceneId: candidate.sceneId,
+        propId: candidate.propId,
         missing: !candidate.url,
         extra: true,
       })
@@ -338,19 +394,31 @@ export function buildOrderedVideoContentRefs(sb, prompt, chars, scenes, helpers)
     getCharacterImageRefs,
     helpers.getBlockingImage,
     helpers.resolveSceneImage,
+    helpers,
   )
   const referenceCandidates = candidates.filter(candidate =>
-    candidate.source === 'blocking' || candidate.source === 'scene' || candidate.source === 'character' || candidate.source === 'reference',
+    candidate.source === 'blocking'
+    || candidate.source === 'scene'
+    || candidate.source === 'character'
+    || candidate.source === 'prop'
+    || candidate.source === 'reference',
   )
   const items = []
   const usedKeys = new Set()
   const usedUrls = new Set()
 
-  const pushImage = (candidate, role) => {
+  const pushImage = (candidate, role, opts = {}) => {
     const url = String(candidate.url || '').trim().replace(/^\/+/, '')
     const urlKey = normalizeRefUrlKey(url)
-    if (!url || !candidate.key || usedKeys.has(candidate.key) || usedUrls.has(urlKey)) return
-    usedKeys.add(candidate.key)
+    const key = candidate.key || (opts.promptIndex != null ? `prompt:${opts.promptIndex}` : '')
+    if (!url || !key) return
+
+    const slotKey = opts.promptIndex != null ? `prompt:${opts.promptIndex}` : key
+    if (usedKeys.has(slotKey)) return
+    // 按提示词序号绑定时，允许不同角色/场景引用相同 URL（避免 5 图变 4 图）
+    if (opts.promptIndex == null && usedUrls.has(urlKey)) return
+
+    usedKeys.add(slotKey)
     usedUrls.add(urlKey)
     items.push({ type: 'image', url, role, label: candidate.label })
   }
@@ -363,18 +431,42 @@ export function buildOrderedVideoContentRefs(sb, prompt, chars, scenes, helpers)
   const catalog = buildVideoImageCatalog(sb, prompt, chars, scenes, helpers)
 
   if (promptLabels.length) {
+    const displayItems = buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helpers)
+      .filter(item => item.type === 'image')
+    const usedCandidateKeys = new Set()
+
     for (const { index, label } of promptLabels) {
+      const byIndex = displayItems.find(item => item.imageIndex === index && item.url)
+      if (byIndex) {
+        pushImage({
+          key: byIndex.key || `prompt:${index}`,
+          url: byIndex.url,
+          label: byIndex.promptLabel || byIndex.label || label,
+        }, 'reference_image', { promptIndex: index })
+        if (byIndex.key) usedCandidateKeys.add(byIndex.key)
+        continue
+      }
+
       const catalogEntry = findCatalogEntryByPromptRef(index, label, catalog)
       if (catalogEntry?.url) {
         pushImage({
-          key: catalogEntry.key,
+          key: catalogEntry.key || `prompt:${index}`,
           url: catalogEntry.url,
-          label: catalogEntry.label,
-        }, 'reference_image')
+          label: catalogEntry.promptLabel || catalogEntry.label || label,
+        }, 'reference_image', { promptIndex: index })
+        if (catalogEntry.key) usedCandidateKeys.add(catalogEntry.key)
         continue
       }
-      const match = findCandidateForPromptLabel(label, referenceCandidates)
-      if (match) pushImage(match, 'reference_image')
+
+      const match = findCandidateForPromptLabel(label, referenceCandidates, usedCandidateKeys)
+      if (match?.url) {
+        pushImage({
+          key: match.key || `prompt:${index}`,
+          url: match.url,
+          label: match.label || label,
+        }, 'reference_image', { promptIndex: index })
+        usedCandidateKeys.add(match.key)
+      }
     }
   } else {
     for (const candidate of referenceCandidates) {
@@ -412,12 +504,17 @@ export function validatePromptImageRefs(prompt, sb, chars, scenes, helpers) {
     helpers.resolveSceneImage,
   )
   const catalog = buildVideoImageCatalog(sb, prompt, chars, scenes, helpers)
+  const displayItems = buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helpers)
+    .filter(item => item.type === 'image')
   const issues = []
   for (const { index, label } of promptLabels) {
+    const byIndex = displayItems.find(item => item.imageIndex === index)
     const catalogEntry = findCatalogEntryByPromptRef(index, label, catalog)
-    const match = catalogEntry
-      ? { url: catalogEntry.url, label: catalogEntry.label }
-      : findCandidateForPromptLabel(label, candidates)
+    const match = byIndex?.url
+      ? { url: byIndex.url, label: byIndex.promptLabel || byIndex.label }
+      : catalogEntry
+        ? { url: catalogEntry.url, label: catalogEntry.label }
+        : findCandidateForPromptLabel(label, candidates)
     if (!String(match?.url || '').trim()) {
       issues.push({
         index,
@@ -433,7 +530,7 @@ export function formatPromptImageRefIssues(issues) {
   if (!issues.length) return ''
   const parts = issues.map((issue) => {
     if (issue.reason === 'not_found') {
-      return `图片${issue.index}（${issue.label}）未绑定对应角色/场景`
+      return `图片${issue.index}（${issue.label}）未绑定对应角色/场景/道具`
     }
     return `图片${issue.index}（${issue.label}）缺少参考图，请先生成或上传`
   })

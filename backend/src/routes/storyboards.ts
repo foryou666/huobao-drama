@@ -70,7 +70,34 @@ function getStoryboardCharacterIds(storyboardId: number) {
     .map(link => link.characterId)
 }
 
-function validateStoryboardBindings(episodeId: number, sceneId: number | null | undefined, characterIds: number[] | undefined) {
+function syncStoryboardProps(storyboardId: number, propIds: number[]) {
+  db.delete(schema.storyboardProps)
+    .where(eq(schema.storyboardProps.storyboardId, storyboardId))
+    .run()
+
+  const uniqueIds = [...new Set((propIds || []).filter(Boolean))]
+  if (!uniqueIds.length) return
+
+  for (const propId of uniqueIds) {
+    db.insert(schema.storyboardProps).values({
+      storyboardId,
+      propId,
+    }).run()
+  }
+}
+
+function getStoryboardPropIds(storyboardId: number) {
+  return db.select().from(schema.storyboardProps)
+    .where(eq(schema.storyboardProps.storyboardId, storyboardId)).all()
+    .map(link => link.propId)
+}
+
+function validateStoryboardBindings(
+  episodeId: number,
+  sceneId: number | null | undefined,
+  characterIds: number[] | undefined,
+  propIds?: number[] | undefined,
+) {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
   if (!ep) throw new Error('Episode not found')
 
@@ -87,6 +114,16 @@ function validateStoryboardBindings(episodeId: number, sceneId: number | null | 
   if (invalidCharacterIds.length) {
     throw new Error('character_ids 必须来自当前集已关联角色')
   }
+
+  const dramaPropIds = new Set(
+    db.select().from(schema.props).where(eq(schema.props.dramaId, ep.dramaId)).all()
+      .filter(row => !row.deletedAt)
+      .map(row => row.id),
+  )
+  const invalidPropIds = (propIds || []).filter(id => !dramaPropIds.has(id))
+  if (invalidPropIds.length) {
+    throw new Error('prop_ids 必须来自当前项目道具')
+  }
 }
 
 // POST /storyboards
@@ -100,7 +137,7 @@ app.post('/', async (c) => {
     characterIds: body.character_ids,
   })
   logTaskPayload('StoryboardAPI', 'create body', body)
-  validateStoryboardBindings(body.episode_id, body.scene_id, body.character_ids)
+  validateStoryboardBindings(body.episode_id, body.scene_id, body.character_ids, body.prop_ids)
   const res = db.insert(schema.storyboards).values({
     episodeId: body.episode_id,
     storyboardNumber: body.storyboard_number || 1,
@@ -114,6 +151,7 @@ app.post('/', async (c) => {
     updatedAt: ts,
   }).run()
   syncStoryboardCharacters(Number(res.lastInsertRowid), body.character_ids || [])
+  syncStoryboardProps(Number(res.lastInsertRowid), body.prop_ids || [])
   const [result] = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.id, Number(res.lastInsertRowid))).all()
   logTaskSuccess('StoryboardAPI', 'create', {
@@ -124,6 +162,7 @@ app.post('/', async (c) => {
   return created(c, {
     ...toSnakeCase(result),
     character_ids: getStoryboardCharacterIds(result.id),
+    prop_ids: getStoryboardPropIds(result.id),
   })
 })
 
@@ -149,6 +188,7 @@ app.put('/:id', async (c) => {
     bgm_prompt: 'bgmPrompt', sound_effect: 'soundEffect',
     reference_images: 'referenceImages',
     character_image_refs: 'characterImageRefs',
+    prop_image_refs: 'propImageRefs',
     voice_refs: 'voiceRefs',
     blocking_image: 'blockingImage',
     blocking_layout: 'blockingLayout',
@@ -165,6 +205,8 @@ app.put('/:id', async (c) => {
         updates.referenceImages = JSON.stringify(body.reference_images)
       } else if (snakeKey === 'character_image_refs' && body.character_image_refs && typeof body.character_image_refs === 'object') {
         updates.characterImageRefs = JSON.stringify(body.character_image_refs)
+      } else if (snakeKey === 'prop_image_refs' && body.prop_image_refs && typeof body.prop_image_refs === 'object') {
+        updates.propImageRefs = JSON.stringify(body.prop_image_refs)
       } else if (snakeKey === 'voice_refs' && Array.isArray(body.voice_refs)) {
         updates.voiceRefs = JSON.stringify(body.voice_refs.slice(0, 3))
       } else if (snakeKey === 'blocking_layout' && body.blocking_layout && typeof body.blocking_layout === 'object') {
@@ -184,6 +226,7 @@ app.put('/:id', async (c) => {
     storyboard.episodeId,
     'scene_id' in body ? body.scene_id : storyboard.sceneId,
     'character_ids' in body ? body.character_ids : getStoryboardCharacterIds(id),
+    'prop_ids' in body ? body.prop_ids : getStoryboardPropIds(id),
   )
 
   let historyEntry = null
@@ -199,10 +242,12 @@ app.put('/:id', async (c) => {
 
   db.update(schema.storyboards).set(updates).where(eq(schema.storyboards.id, id)).run()
   if ('character_ids' in body) syncStoryboardCharacters(id, body.character_ids || [])
+  if ('prop_ids' in body) syncStoryboardProps(id, body.prop_ids || [])
   logTaskSuccess('StoryboardAPI', 'update', {
     storyboardId: id,
     updatedFields: Object.keys(updates),
     characterIds: body.character_ids,
+    propIds: body.prop_ids,
   })
   return success(c, historyEntry ? { history: historyEntry } : undefined)
 })
@@ -673,6 +718,7 @@ app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   logTaskStart('StoryboardAPI', 'delete', { storyboardId: id })
   db.delete(schema.storyboardCharacters).where(eq(schema.storyboardCharacters.storyboardId, id)).run()
+  db.delete(schema.storyboardProps).where(eq(schema.storyboardProps.storyboardId, id)).run()
   db.delete(schema.storyboards).where(eq(schema.storyboards.id, id)).run()
   logTaskSuccess('StoryboardAPI', 'delete', { storyboardId: id })
   return success(c)

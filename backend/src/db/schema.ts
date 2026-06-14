@@ -134,6 +134,7 @@ export const storyboards = sqliteTable('storyboards', {
   sceneAngleId: text('scene_angle_id'),
   referenceImages: text('reference_images'),
   characterImageRefs: text('character_image_refs'),
+  propImageRefs: text('prop_image_refs'),
   voiceRefs: text('voice_refs'),
   videoUrl: text('video_url'),
   ttsAudioUrl: text('tts_audio_url'),
@@ -189,6 +190,13 @@ export const storyboardCharacters = sqliteTable('storyboard_characters', {
   characterId: integer('character_id').notNull(),
 }, (table) => ({
   pk: primaryKey({ columns: [table.storyboardId, table.characterId] }),
+}))
+
+export const storyboardProps = sqliteTable('storyboard_props', {
+  storyboardId: integer('storyboard_id').notNull(),
+  propId: integer('prop_id').notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.storyboardId, table.propId] }),
 }))
 
 export const videoPromptHistory = sqliteTable('video_prompt_history', {

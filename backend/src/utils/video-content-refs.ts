@@ -6,6 +6,9 @@ import {
   resolveCharacterImageForStoryboard,
 } from './character-image-variants.js'
 import { resolveSceneImageForStoryboard } from './scene-image-variants.js'
+import {
+  resolvePropImageForStoryboard,
+} from './prop-image-variants.js'
 
 export interface PromptImageLabel {
   index: number
@@ -14,11 +17,12 @@ export interface PromptImageLabel {
 
 export interface ReferenceCandidate {
   key: string
-  source: 'first_frame' | 'last_frame' | 'blocking' | 'scene' | 'character' | 'reference'
+  source: 'first_frame' | 'last_frame' | 'blocking' | 'scene' | 'character' | 'prop' | 'reference'
   label: string
   url?: string | null
   charId?: number
   sceneId?: number
+  propId?: number
 }
 
 function parseReferenceImages(raw?: string | null): string[] {
@@ -37,10 +41,16 @@ function getStoryboardCharacterIds(storyboardId: number): number[] {
     .map(row => row.characterId)
 }
 
+function getStoryboardPropIds(storyboardId: number): number[] {
+  return db.select().from(schema.storyboardProps)
+    .where(eq(schema.storyboardProps.storyboardId, storyboardId)).all()
+    .map(row => row.propId)
+}
+
 export function parsePromptImageLabels(prompt?: string | null): PromptImageLabel[] {
   if (!prompt?.trim()) return []
   const items: PromptImageLabel[] = []
-  const re = /(?:@)?图片\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
+  const re = /(?:@)?(?:图片|图)\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
   for (const match of prompt.matchAll(re)) {
     const index = Number(match[1])
     const label = String(match[2] || '').trim()
@@ -59,11 +69,14 @@ function normalizeLabel(raw: string) {
     .trim()
 }
 
-function labelsMatch(promptLabel: string, candidateLabel: string) {
+function labelsMatch(promptLabel: string, candidateLabel: string, source?: ReferenceCandidate['source']) {
   const a = normalizeLabel(promptLabel)
   const b = normalizeLabel(candidateLabel)
   if (!a || !b) return false
-  if (a === b || a.includes(b) || b.includes(a)) return true
+  if (a === b) return true
+  if (source === 'character') return a.includes(b) || b.includes(a)
+  if (source === 'prop') return a.includes(b) || b.includes(a)
+  if (source === 'scene') return a.includes(b)
 
   const pairs: [string, string][] = [
     ['车间', '车间'],
@@ -72,30 +85,52 @@ function labelsMatch(promptLabel: string, candidateLabel: string) {
     ['首帧', '首帧'],
     ['尾帧', '尾帧'],
   ]
-  return pairs.some(([kw]) => a.includes(kw) && b.includes(kw))
+  return pairs.some(([kw]) => a.includes(kw) && b.includes(kw)) || a.includes(b) || b.includes(a)
 }
 
 export function findCandidateForPromptLabel(
   promptLabel: string,
   candidates: ReferenceCandidate[],
+  usedKeys?: Set<string> | null,
 ): ReferenceCandidate | undefined {
-  const direct = candidates.find(candidate => labelsMatch(promptLabel, candidate.label))
+  const pool = usedKeys?.size
+    ? candidates.filter(candidate => !usedKeys.has(candidate.key))
+    : candidates
+
+  const charExact = pool.find(candidate =>
+    candidate.source === 'character' && normalizeLabel(candidate.label) === normalizeLabel(promptLabel),
+  )
+  if (charExact) return charExact
+
+  const sceneExact = pool.find(candidate =>
+    candidate.source === 'scene' && normalizeLabel(candidate.label) === normalizeLabel(promptLabel),
+  )
+  if (sceneExact) return sceneExact
+
+  const propExact = pool.find(candidate =>
+    candidate.source === 'prop' && normalizeLabel(candidate.label) === normalizeLabel(promptLabel),
+  )
+  if (propExact) return propExact
+
+  const direct = pool.find(candidate => labelsMatch(promptLabel, candidate.label, candidate.source))
   if (direct) return direct
 
   if (normalizeLabel(promptLabel).includes('站位') || normalizeLabel(promptLabel).includes('blocking')) {
-    return candidates.find(candidate => candidate.source === 'blocking')
+    return pool.find(candidate => candidate.source === 'blocking')
   }
   if (normalizeLabel(promptLabel).includes('首帧')) {
-    return candidates.find(candidate => candidate.source === 'first_frame')
+    return pool.find(candidate => candidate.source === 'first_frame')
   }
   if (normalizeLabel(promptLabel).includes('尾帧')) {
-    return candidates.find(candidate => candidate.source === 'last_frame')
+    return pool.find(candidate => candidate.source === 'last_frame')
   }
   if (normalizeLabel(promptLabel).includes('车间') || normalizeLabel(promptLabel).includes('场景')) {
-    return candidates.find(candidate => candidate.source === 'scene')
+    return pool.find(candidate => candidate.source === 'scene')
   }
 
-  return candidates.find(candidate => candidate.source === 'character' && labelsMatch(promptLabel, candidate.label))
+  return pool.find(candidate =>
+    candidate.source === 'character' && labelsMatch(promptLabel, candidate.label, candidate.source),
+  )
 }
 
 export function buildReferenceCandidates(
@@ -155,6 +190,19 @@ export function buildReferenceCandidates(
     })
   }
 
+  const props = db.select().from(schema.props).where(eq(schema.props.dramaId, dramaId)).all()
+  for (const propId of getStoryboardPropIds(sb.id)) {
+    const prop = props.find(row => row.id === propId)
+    if (!prop) continue
+    items.push({
+      key: `prop:${prop.id}`,
+      source: 'prop',
+      label: prop.name || `道具#${prop.id}`,
+      url: resolvePropImageForStoryboard(prop, sb),
+      propId: prop.id,
+    })
+  }
+
   for (const ref of parseReferenceImages(sb.referenceImages)) {
     items.push({
       key: `ref:${ref}`,
@@ -200,6 +248,7 @@ export function buildOrderedStoryboardContentRefs(
     candidate.source === 'blocking'
     || candidate.source === 'scene'
     || candidate.source === 'character'
+    || candidate.source === 'prop'
     || candidate.source === 'reference',
   )
 
@@ -245,6 +294,7 @@ export function buildPromptImageIndexMap(
     candidate.source === 'blocking'
     || candidate.source === 'scene'
     || candidate.source === 'character'
+    || candidate.source === 'prop'
     || candidate.source === 'reference',
   )
   const map = new Map<string, number>()
@@ -290,7 +340,7 @@ export function formatPromptImageRefIssues(issues: PromptImageRefIssue[]): strin
   if (!issues.length) return ''
   const parts = issues.map((issue) => {
     if (issue.reason === 'not_found') {
-      return `图片${issue.index}（${issue.label}）未绑定对应角色/场景`
+      return `图片${issue.index}（${issue.label}）未绑定对应角色/场景/道具`
     }
     return `图片${issue.index}（${issue.label}）缺少参考图，请先生成或上传`
   })

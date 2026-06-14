@@ -212,6 +212,13 @@ app.get('/:episode_id/storyboards', async (c) => {
     arr.push(link.characterId)
     charIdsByStoryboard.set(link.storyboardId, arr)
   }
+  const propLinks = db.select().from(schema.storyboardProps).all()
+  const propIdsByStoryboard = new Map<number, number[]>()
+  for (const link of propLinks) {
+    const arr = propIdsByStoryboard.get(link.storyboardId) || []
+    arr.push(link.propId)
+    propIdsByStoryboard.set(link.storyboardId, arr)
+  }
 
   const episodeCharIds = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
@@ -227,6 +234,7 @@ app.get('/:episode_id/storyboards', async (c) => {
     return {
       ...toSnakeCase(row),
       character_ids: resolvedIds,
+      prop_ids: propIdsByStoryboard.get(row.id) || [],
       characters: charsForEpisode
         .filter(ch => resolvedIds.includes(ch.id))
         .map(ch => toSnakeCase(ch)),

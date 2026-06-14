@@ -30,3 +30,37 @@ export function listPropImages(prop) {
   }
   return items
 }
+
+export function resolvePropImageUrl(prop, refs = {}) {
+  const propId = Number(prop?.id)
+  const selected = Number.isFinite(propId) ? refs[propId] : null
+  if (selected) return normalizePath(selected)
+  const images = listPropImages(prop)
+  return images.find(img => img.view_id === 'hero')?.url || images[0]?.url || ''
+}
+
+export function parseStoryboardPropImageRefs(sb) {
+  const raw = sb?.prop_image_refs ?? sb?.propImageRefs
+  if (!raw) return {}
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return Object.fromEntries(
+      Object.entries(raw)
+        .map(([key, value]) => [Number(key), normalizePath(String(value || ''))])
+        .filter(([key, value]) => Number.isFinite(key) && value),
+    )
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parseStoryboardPropImageRefs({ prop_image_refs: parsed })
+      }
+    } catch { /* ignore */ }
+  }
+  return {}
+}
+
+export function resolvePropImageForStoryboard(prop, storyboard) {
+  const refs = parseStoryboardPropImageRefs(storyboard)
+  return normalizePath(resolvePropImageUrl(prop, refs)) || ''
+}

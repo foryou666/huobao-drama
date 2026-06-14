@@ -10,7 +10,7 @@ import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuc
 import type { VideoContentRef } from '../utils/seedance-content.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/video-content-refs.js'
-import { isChengmengProvider, isChengmengBalanceError } from '../constants/chengmeng.js'
+import { isChengmengProvider, isChengmengBalanceError, CHENGMENG_VIDEO_MODELS } from '../constants/chengmeng.js'
 import {
   normalizeChengmengContentRefs,
   normalizeChengmengReferenceUrls,
@@ -21,6 +21,26 @@ import {
 } from '../utils/chengmeng-content.js'
 import { failVideoGeneration } from '../utils/generation-failure.js'
 import { normalizeSeedanceRatio } from '../utils/video-aspect-ratio.js'
+
+function formatVideoProviderError(status: number, errText: string, provider?: string): string {
+  let message = ''
+  try {
+    const parsed = JSON.parse(errText)
+    message = String(parsed?.error?.message || parsed?.message || '').trim()
+    const code = String(parsed?.error?.code || parsed?.code || '').trim()
+    if (status === 401 || code === 'AuthenticationError') {
+      if (provider === 'volcengine') {
+        return '火山方舟 API Key 无效或未配置，请在「设置 → AI 配置」中更新「火山方舟 Seedance-视频」的 API Key'
+      }
+      return message || 'API 认证失败，请检查服务配置中的 API Key'
+    }
+    if (message) return message
+  } catch {
+    // ignore JSON parse errors
+  }
+  const snippet = errText.replace(/\s+/g, ' ').trim().slice(0, 240)
+  return snippet ? `API error ${status}: ${snippet}` : `API error ${status}`
+}
 
 interface GenerateVideoParams {
   storyboardId?: number
@@ -43,9 +63,9 @@ interface GenerateVideoParams {
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   const ts = now()
   const config = params.configId
-    ? getConfigById(params.configId)
+    ? getConfigById(params.configId, { includeInactive: true })
     : getActiveConfig('video')
-  if (!config) throw new Error('No active video AI config')
+  if (!config) throw new Error('No video AI config available')
   const configId = config.id ?? params.configId ?? null
 
   if (params.storyboardId) {
@@ -71,6 +91,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const defaultAspect = params.dramaId ? getDramaImageAspectRatio(params.dramaId) : '16:9'
   const rawAspect = params.aspectRatio || defaultAspect
   const useChengmeng = isChengmengProvider(config.provider)
+  const storedModel = useChengmeng
+    ? (params.model || CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST)
+    : (params.model || config.model)
   const aspectRatio = useChengmeng
     ? normalizeChengmengAspectRatio(rawAspect, defaultAspect)
     : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
@@ -92,7 +115,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     storyboardId: params.storyboardId,
     dramaId: params.dramaId,
     prompt: params.prompt,
-    model: params.model || config.model,
+    model: storedModel,
     provider: config.provider,
     referenceMode: params.referenceMode || 'none',
     imageUrl: params.imageUrl,
@@ -215,7 +238,7 @@ async function processVideoGeneration(id: number, config: AIConfig, options?: { 
 
     if (!resp.ok) {
       const errText = await resp.text()
-      throw new Error(`API error ${resp.status}: ${errText}`)
+      throw new Error(formatVideoProviderError(resp.status, errText, config.provider))
     }
     const result = await resp.json() as any
 

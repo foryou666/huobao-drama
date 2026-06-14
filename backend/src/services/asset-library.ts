@@ -240,10 +240,12 @@ export function syncPropAsset(propId: number) {
 }
 
 /** 将手动/导入资产合并为与项目实体绑定的同步资产，避免两侧各存一份 */
-function finalizeEntityAssetLink(pickedAssetId: number, entityType: 'scene' | 'character', entityId: number) {
+function finalizeEntityAssetLink(pickedAssetId: number, entityType: 'scene' | 'character' | 'prop', entityId: number) {
   const syncedId = entityType === 'scene'
     ? syncSceneAsset(entityId)
-    : syncCharacterAsset(entityId)
+    : entityType === 'character'
+      ? syncCharacterAsset(entityId)
+      : syncPropAsset(entityId)
   if (syncedId && syncedId !== pickedAssetId) {
     db.update(schema.assets)
       .set({ deletedAt: now(), updatedAt: now() })
@@ -294,6 +296,24 @@ function pushAssetToCharacter(characterId: number, input: {
   const name = String(input.name || '').trim()
   if (name) updates.name = name
   db.update(schema.characters).set(updates).where(eq(schema.characters.id, characterId)).run()
+}
+
+function pushAssetToProp(propId: number, input: {
+  url?: string | null
+  description?: string | null
+  name?: string | null
+}) {
+  const ts = now()
+  const updates: Record<string, unknown> = { updatedAt: ts }
+  const url = normalizePath(input.url)
+  if (url) {
+    updates.imageUrl = url
+    updates.localPath = url
+  }
+  if (input.description !== undefined) updates.description = input.description
+  const name = String(input.name || '').trim()
+  if (name) updates.name = name
+  db.update(schema.props).set(updates).where(eq(schema.props.id, propId)).run()
 }
 
 /** 手动添加的角色资产同步为项目角色实体 */
@@ -401,7 +421,58 @@ export function ensureSceneFromManualSceneAsset(input: {
   return sceneId
 }
 
-/** 资产库 → 项目：将未绑定实体的手动/导入资产同步到项目角色/场景 */
+/** 手动添加的道具资产同步为项目道具实体，便于在视频生成页选择 */
+export function ensurePropFromManualPropAsset(input: {
+  dramaId: number
+  name: string
+  description?: string | null
+  url?: string | null
+  localPath?: string | null
+  assetId?: number
+}) {
+  const dramaId = Number(input.dramaId)
+  if (!Number.isFinite(dramaId) || dramaId <= 0) return null
+
+  const name = String(input.name || '').trim()
+  if (!name) return null
+
+  const ts = now()
+  const url = normalizePath(input.url || input.localPath)
+
+  const existing = db.select().from(schema.props)
+    .where(and(eq(schema.props.dramaId, dramaId), isNull(schema.props.deletedAt)))
+    .all()
+    .find(item => item.name === name)
+
+  let propId: number
+  if (existing) {
+    propId = existing.id
+    const updates: Record<string, unknown> = { updatedAt: ts }
+    if (url) {
+      updates.imageUrl = url
+      updates.localPath = url
+    }
+    if (input.description) updates.description = input.description
+    db.update(schema.props).set(updates).where(eq(schema.props.id, propId)).run()
+  } else {
+    const res = db.insert(schema.props).values({
+      dramaId,
+      name,
+      description: input.description || null,
+      prompt: input.description || null,
+      imageUrl: url,
+      localPath: url,
+      createdAt: ts,
+      updatedAt: ts,
+    }).run()
+    propId = Number(res.lastInsertRowid)
+  }
+
+  if (input.assetId) finalizeEntityAssetLink(input.assetId, 'prop', propId)
+  return propId
+}
+
+/** 资产库 → 项目：将未绑定实体的手动/导入资产同步到项目角色/场景/道具 */
 export function reconcileOrphanAssets(dramaId: number) {
   const assets = db.select().from(schema.assets).where(
     and(
@@ -426,6 +497,16 @@ export function reconcileOrphanAssets(dramaId: number) {
       reconciled += 1
     } else if (asset.type === 'character') {
       ensureCharacterFromManualCharacterAsset({
+        dramaId,
+        name: String(asset.name || '').trim(),
+        description: asset.description,
+        url: asset.url,
+        localPath: asset.localPath,
+        assetId: asset.id,
+      })
+      reconciled += 1
+    } else if (asset.type === 'prop') {
+      ensurePropFromManualPropAsset({
         dramaId,
         name: String(asset.name || '').trim(),
         description: asset.description,
@@ -461,6 +542,12 @@ export function syncEntityFromAsset(assetId: number) {
     return { type: 'character' as const, id: asset.sourceId }
   }
 
+  if (asset.sourceType === 'prop' && asset.sourceId) {
+    pushAssetToProp(asset.sourceId, entityPatch)
+    syncPropAsset(asset.sourceId)
+    return { type: 'prop' as const, id: asset.sourceId }
+  }
+
   if (!asset.dramaId) return null
 
   if (asset.type === 'scene') {
@@ -485,6 +572,18 @@ export function syncEntityFromAsset(assetId: number) {
       assetId: asset.id,
     })
     return characterId ? { type: 'character' as const, id: characterId } : null
+  }
+
+  if (asset.type === 'prop') {
+    const propId = ensurePropFromManualPropAsset({
+      dramaId: asset.dramaId,
+      name: String(asset.name || '').trim(),
+      description,
+      url,
+      localPath: url,
+      assetId: asset.id,
+    })
+    return propId ? { type: 'prop' as const, id: propId } : null
   }
 
   return null

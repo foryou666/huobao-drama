@@ -20,7 +20,7 @@ import {
   normalizeChengmengAspectRatio,
   normalizeChengmengDuration,
   normalizeChengmengResolution,
-  parseChengmengModelIds,
+  resolveChengmengModelIds,
   type ChengmengVideoMode,
 } from '../../utils/chengmeng-content.js'
 import { parseVideoContentRefs } from '../../utils/seedance-content.js'
@@ -29,7 +29,7 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
   provider = 'chengmeng'
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
-    const { modelId, groupId } = parseChengmengModelIds(config)
+    const { modelId, groupId } = resolveChengmengModelIds(config, record.model)
     const refs = parseVideoContentRefs(record.referencePayload)
     const settings = config.settings || {}
     const aspectRatio = normalizeChengmengAspectRatio(record.aspectRatio)

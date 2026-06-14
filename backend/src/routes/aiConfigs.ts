@@ -184,9 +184,13 @@ app.get('/seedance-models', (c) => {
   })
 })
 
-// GET /ai-configs?service_type=text
+// GET /ai-configs?service_type=text — 工作台可读；完整列表仅管理员
 app.get('/', async (c) => {
   const serviceType = c.req.query('service_type')
+  if (!serviceType) {
+    const denied = denyUnlessAdmin(c)
+    if (denied) return denied
+  }
   let rows = db.select().from(schema.aiServiceConfigs).all()
   if (serviceType) rows = rows.filter(r => r.serviceType === serviceType)
 

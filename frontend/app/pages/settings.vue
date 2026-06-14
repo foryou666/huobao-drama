@@ -8,7 +8,7 @@
           {{ t.label }}
         </button>
       </div>
-      <div class="nav-advanced">
+      <div v-if="isAdmin" class="nav-advanced">
         <label class="advanced-toggle">
           <span>Agent 高级配置</span>
           <input type="checkbox" v-model="showAdvanced" />
@@ -16,7 +16,7 @@
         </label>
         <p class="advanced-note">仅展开 Agent 配置与 Skills。工作台功能和分镜字段保持默认可见。</p>
       </div>
-      <div v-if="showAdvanced" class="nav-group">
+      <div v-if="showAdvanced && isAdmin" class="nav-group">
         <div class="nav-group-label">高级</div>
         <button v-for="t in advancedTabs" :key="t.id" :class="['nav-item', { active: tab === t.id }]" @click="tab = t.id">
           <component :is="t.icon" :size="14" />
@@ -28,7 +28,7 @@
     <div class="settings-content">
 
       <!-- ===== AI 服务配置 ===== -->
-      <div v-if="tab === 'ai'" class="settings-scroll">
+      <div v-if="tab === 'ai' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
@@ -118,7 +118,7 @@
       </div>
 
       <!-- ===== Agent 配置 ===== -->
-      <div v-else-if="tab === 'agents'" class="settings-scroll">
+      <div v-else-if="tab === 'agents' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
@@ -180,7 +180,7 @@
       </div>
 
       <!-- ===== Skills 编辑 ===== -->
-      <div v-else-if="tab === 'skills'" class="skills-layout">
+      <div v-else-if="tab === 'skills' && isAdmin" class="skills-layout">
         <!-- Agent 左侧列表 -->
         <aside class="skills-agent-list">
           <div class="skills-agent-title">Agent 列表</div>
@@ -270,22 +270,28 @@
       </div>
 
       <!-- ===== 积分管理 ===== -->
-      <div v-if="tab === 'credits'" class="settings-scroll">
+      <div v-if="tab === 'credits' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">积分管理</h2>
           <p class="settings-desc">配置各操作的积分单价，并为团队成员充值。后续可按 1 元 = 100 积分 对接充值。</p>
         </div>
         <section class="setup-panel card">
           <div class="setup-title">操作定价</div>
+          <p class="dim setup-pricing-hint">「视频生成」「官方 Seedance」填<strong>每秒</strong>积分；「橙盟视频」填<strong>每条</strong>积分；其余为单次积分。</p>
           <table class="user-table">
             <thead>
-              <tr><th>操作</th><th>说明</th><th>单价（积分）</th><th></th></tr>
+              <tr><th>操作</th><th>说明</th><th>单价</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="item in creditPricing" :key="item.action">
                 <td>{{ item.label }}</td>
                 <td class="dim">{{ item.description }}</td>
-                <td><input v-model.number="item.cost" class="input input-sm" type="number" min="0" step="1" /></td>
+                <td>
+                  <div class="pricing-input-row">
+                    <input v-model.number="item.cost" class="input input-sm" type="number" min="0" step="1" />
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                  </div>
+                </td>
                 <td><button type="button" class="btn btn-sm" @click="savePricing(item)">保存</button></td>
               </tr>
             </tbody>
@@ -393,7 +399,7 @@
       </div>
 
       <!-- ===== 用户管理 ===== -->
-      <div v-if="tab === 'users'" class="settings-scroll">
+      <div v-if="tab === 'users' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">用户管理</h2>
           <p class="settings-desc">创建团队成员账号。普通用户可制作项目；管理员可修改全局设置。</p>
@@ -584,15 +590,18 @@ watch([isAdmin, canManageTeam], () => {
   if (!isAdmin.value && canManageTeam.value) tab.value = 'team'
 }, { immediate: true })
 const baseTabs = computed(() => {
-  const tabs = [
-    { id: 'ai', label: 'AI 服务', icon: Cpu },
-    { id: 'team', label: '团队', icon: Building2 },
-  ]
   if (isAdmin.value) {
-    tabs.push({ id: 'credits', label: '积分', icon: Coins })
-    tabs.push({ id: 'users', label: '用户', icon: Users })
+    return [
+      { id: 'ai', label: 'AI 服务', icon: Cpu },
+      { id: 'team', label: '团队', icon: Building2 },
+      { id: 'credits', label: '积分', icon: Coins },
+      { id: 'users', label: '用户', icon: Users },
+    ]
   }
-  return tabs
+  if (canManageTeam.value) {
+    return [{ id: 'team', label: '团队', icon: Building2 }]
+  }
+  return []
 })
 const canManageMembers = computed(() => canManageTeam.value || isAdmin.value)
 const canRenameTeam = computed(() => canManageMembers.value)
@@ -601,7 +610,9 @@ const advancedTabs = [
   { id: 'skills', label: 'Skills', icon: FileText },
 ]
 watch(showAdvanced, (v) => {
-  if (!v && tab.value !== 'ai' && tab.value !== 'team') tab.value = 'ai'
+  if (!v && tab.value !== 'ai' && tab.value !== 'team') {
+    tab.value = isAdmin.value ? 'ai' : 'team'
+  }
 })
 
 // ===== AI Service Configs =====
@@ -694,7 +705,7 @@ const providerPresets = {
       label: '橙盟 Seedance 2.0 9图过人脸',
       baseUrl: 'https://api.chengmeng.site',
       models: ['31', '15'],
-      hint: 'Base URL 填 https://api.chengmeng.site；model_id=31, group_id=15；勿用 cpolar 临时隧道',
+      hint: 'Base URL 填 https://api.chengmeng.site；默认 model_id=31（Fast）/ group_id=15；视频生成页可选 32（Seedance 2.0 标准版）',
       defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
     },
     vidu: { label: 'Vidu 推荐', baseUrl: 'https://api.vidu.com', models: ['viduq3-turbo'] },
@@ -1237,6 +1248,14 @@ async function loadCreditPricing() {
   }
 }
 
+function pricingUnit(action) {
+  if (action === 'video.generate.chengmeng' || action === 'video.generate.chengmeng_seedance2') return '积分/条'
+  if (action === 'video.generate' || action === 'video.generate.seedance2' || action === 'video.generate.seedance2_fast') {
+    return '积分/秒'
+  }
+  return '积分/次'
+}
+
 async function savePricing(item) {
   try {
     await creditsAPI.updatePricing(item.action, {
@@ -1268,6 +1287,10 @@ async function grantCredits() {
 }
 
 watch(tab, (value) => {
+  if (!isAdmin.value && value !== 'team') {
+    tab.value = 'team'
+    return
+  }
   if (value === 'credits' && isAdmin.value) {
     loadCreditPricing()
     loadTeamUsers()
@@ -1434,10 +1457,16 @@ async function createTeamUser() {
 }
 
 onMounted(() => {
-  loadCfgs()
-  loadAgents()
-  loadAllSkills()
-  if (isAdmin.value) loadTeamUsers()
+  if (isAdmin.value) {
+    loadCfgs()
+    loadAgents()
+    loadAllSkills()
+    loadTeamUsers()
+  }
+  if (canManageMembers.value) {
+    refreshTeams()
+    loadTeamMembers()
+  }
 })
 </script>
 
@@ -1472,6 +1501,23 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
 }
 .user-table th { color: var(--text-3); font-size: 12px; font-weight: 500; }
+
+.setup-pricing-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pricing-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pricing-unit {
+  font-size: 12px;
+  white-space: nowrap;
+}
 
 .settings-layout { display: flex; height: 100%; background: var(--bg-base); }
 

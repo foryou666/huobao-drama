@@ -8,6 +8,8 @@ import {
   listCreditTransactions,
   updateCreditPricing,
 } from '../services/credits.js'
+import { db, schema } from '../db/index.js'
+import { eq } from 'drizzle-orm'
 import { logActivity } from '../services/activity.js'
 import { resolveAuditScope } from '../services/team-audit.js'
 
@@ -60,9 +62,15 @@ app.post('/grant', requireAdmin, async (c) => {
   const admin = getAuthUser(c)
   const result = grantCredits(userId, amount, admin.id, body.summary)
   if (!result.ok) return badRequest(c, result.message || '充值失败')
+  const [targetUser] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+  const targetName = targetUser?.displayName || targetUser?.username
+  const grantSummary = body.summary
+    || (targetName
+      ? `为用户 #${userId}（${targetName}）充值 ${amount} 积分`
+      : `为用户 #${userId} 充值 ${amount} 积分`)
   logActivity(admin, {
     action: 'credits.grant',
-    summary: body.summary || `为用户 #${userId} 充值 ${amount} 积分`,
+    summary: grantSummary,
     resourceType: 'user',
     resourceId: userId,
     metadata: { amount, balance: result.balance },

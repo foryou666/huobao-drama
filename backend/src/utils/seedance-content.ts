@@ -40,6 +40,7 @@ export function parseVideoContentRefs(raw: string | null | undefined): VideoCont
 export function normalizeSeedance2PromptText(prompt: string): string {
   return String(prompt || '')
     .replace(/@图片\s*(\d+)/gi, '图片$1')
+    .replace(/@图\s*(\d+)/gi, '图$1')
     .replace(/@Image\s*(\d+)/gi, '图片$1')
     .replace(/@视频\s*(\d+)/gi, '视频$1')
     .replace(/@音频\s*(\d+)/gi, '音频$1')
@@ -49,7 +50,7 @@ export function enrichPromptWithReferenceLabels(prompt: string, refs: VideoConte
   const text = normalizeVideoPromptFraming(normalizeSeedance2PromptText(String(prompt || '').trim()))
   if (!refs.length) return text
 
-  if (/图片\s*\d|视频\s*\d|音频\s*\d/i.test(text)) {
+  if (/图片\s*\d|图\s*\d|视频\s*\d|音频\s*\d/i.test(text)) {
     return text
   }
 

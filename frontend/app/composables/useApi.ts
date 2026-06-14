@@ -483,6 +483,8 @@ export const gridAPI = {
 }
 export const videoAPI = {
   generate: (d: any) => api.post('/videos', d),
+  officialOptions: () => api.get('/videos/official-options'),
+  chengmengOptions: () => api.get('/videos/chengmeng-options'),
   get: (id: number) => api.get(`/videos/${id}`),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
@@ -498,6 +500,8 @@ export const videoAPI = {
     limit?: number
     offset?: number
     mine_only?: boolean
+    provider?: string
+    models?: string
   }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
@@ -506,6 +510,8 @@ export const videoAPI = {
     if (params?.keyword) query.set('keyword', params.keyword)
     if (params?.limit) query.set('limit', String(params.limit))
     if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.provider) query.set('provider', params.provider)
+    if (params?.models) query.set('models', params.models)
     if (params?.mine_only === false) query.set('mine_only', '0')
     else if (params?.mine_only !== undefined) query.set('mine_only', '1')
     return api.get(`/videos/ledger${query.size ? `?${query.toString()}` : ''}`)
@@ -641,6 +647,8 @@ export const ACTION_LABELS: Record<string, string> = {
   'storyboard.blocking': '场景站位图',
   'image.generate': '生成镜头图',
   'video.generate': '生成视频',
+  'video.generate.seedance2': '官方 Seedance 2.0 视频',
+  'video.generate.seedance2_fast': '官方 Seedance 2.0 Fast 视频',
   'video.generate.chengmeng': '橙盟 9图过人脸视频',
   'grid.generate': '生成宫格图',
   'grid.prompt': '宫格提示词',

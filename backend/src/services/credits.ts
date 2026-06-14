@@ -1,10 +1,35 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, type CreditAction } from '../constants/credit-actions.js'
+import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction } from '../constants/credit-actions.js'
 import { now } from '../utils/response.js'
 import { getAppMeta, setAppMeta } from '../db/index.js'
 
 const CREDIT_PRICING_MIGRATION_KEY = 'credit_pricing_defaults_v2'
+const SEEDANCE_PER_SECOND_MIGRATION_KEY = 'credit_pricing_seedance_per_second_v1'
+
+/** 将官方 Seedance 定价从「按次总价」迁移为「每秒单价」（仅当单价 ≥500 时视为旧数据） */
+export function migrateSeedancePricingToPerSecond() {
+  if (getAppMeta(SEEDANCE_PER_SECOND_MIGRATION_KEY)) return
+  const ts = now()
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+  ]) {
+    const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+    if (!row || row.cost < 500) continue
+    const perSecond = Math.max(1, Math.round(row.cost / VIDEO_BILLING_SECONDS))
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    db.update(schema.creditPricing)
+      .set({
+        cost: perSecond,
+        description: def?.description || row.description,
+        updatedAt: ts,
+      })
+      .where(eq(schema.creditPricing.action, action))
+      .run()
+  }
+  setAppMeta(SEEDANCE_PER_SECOND_MIGRATION_KEY, ts)
+}
 
 export interface ChargeContext {
   summary?: string
@@ -25,6 +50,7 @@ export interface ChargeResult {
 }
 
 export function seedCreditPricing() {
+  migrateSeedancePricingToPerSecond()
   const ts = now()
   for (const item of DEFAULT_CREDIT_PRICING) {
     const [existing] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, item.action)).all()

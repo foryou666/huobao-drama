@@ -289,10 +289,12 @@
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 <span>角色</span>
-                <span class="tag tag-accent">{{ chars.length }}</span>
+                <span class="tag tag-accent">{{ charSearchKeyword.trim() ? `${filteredChars.length} / ${chars.length}` : chars.length }}</span>
+                <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
               </div>
               <div class="extract-list">
-                <div v-for="c in chars" :key="c.id" class="extract-row">
+                <div v-if="charSearchKeyword.trim() && !filteredChars.length" class="extract-search-empty dim">未找到匹配「{{ charSearchKeyword.trim() }}」的角色</div>
+                <div v-for="c in filteredChars" :key="c.id" class="extract-row">
                   <div class="char-avatar">{{ c.name?.[0] || '?' }}</div>
                   <div class="extract-info">
                     <div class="extract-name-row">
@@ -309,10 +311,12 @@
               <div class="extract-card-head">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
                 <span>场景</span>
-                <span class="tag tag-accent">{{ scenes.length }}</span>
+                <span class="tag tag-accent">{{ sceneSearchKeyword.trim() ? `${filteredScenes.length} / ${scenes.length}` : scenes.length }}</span>
+                <input v-model="sceneSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
               </div>
               <div class="extract-list">
-                <div v-for="s in scenes" :key="s.id" class="extract-row">
+                <div v-if="sceneSearchKeyword.trim() && !filteredScenes.length" class="extract-search-empty dim">未找到匹配「{{ sceneSearchKeyword.trim() }}」的场景</div>
+                <div v-for="s in filteredScenes" :key="s.id" class="extract-row">
                   <div class="scene-icon">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
                   </div>
@@ -1014,7 +1018,8 @@
           <!-- Sub: Characters -->
           <div v-if="prodTab === 'chars'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ visualChars.length }} 个需生成形象角色</span>
+              <span class="dim" style="font-size:12px">{{ charSearchKeyword.trim() ? `${filteredVisualChars.length} / ${visualChars.length}` : visualChars.length }} 个需生成形象角色</span>
+              <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索角色…" />
               <span class="tag">{{ lockedImageConfigLabel }}</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <span v-if="isSeedance2VideoActive" class="tag tag-warn">Seedance 2.0 勿用真人图</span>
@@ -1043,8 +1048,12 @@
               <div class="empty-title">无需生成形象</div>
               <div class="empty-desc">当前角色均为旁白/画外音，仅保留声音即可。</div>
             </div>
+            <div v-else-if="charSearchKeyword.trim() && !filteredVisualChars.length" class="step-empty" style="padding: 28px 16px">
+              <div class="empty-title">未找到匹配角色</div>
+              <div class="empty-desc">没有名字包含「{{ charSearchKeyword.trim() }}」的角色，请换个关键词试试。</div>
+            </div>
             <div v-else class="asset-grid">
-              <div v-for="c in visualChars" :key="c.id" class="card asset-card">
+              <div v-for="c in filteredVisualChars" :key="c.id" class="card asset-card">
                 <div class="asset-cover">
                   <img
                     v-if="c.image_url || c.imageUrl"
@@ -1234,7 +1243,8 @@
           <!-- Sub: Scenes -->
           <div v-else-if="prodTab === 'scenes'" class="prod-content">
             <div class="prod-section-bar">
-              <span class="dim" style="font-size:12px">{{ scenes.length }} 个场景</span>
+              <span class="dim" style="font-size:12px">{{ sceneSearchKeyword.trim() ? `${filteredScenes.length} / ${scenes.length}` : scenes.length }} 个场景</span>
+              <input v-model="sceneSearchKeyword" class="input entity-search-input" placeholder="按名字搜索场景…" />
               <span class="tag">{{ lockedImageConfigLabel }}</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
@@ -1256,8 +1266,12 @@
                 <button type="button" class="btn btn-sm" @click="openManualEntity('scene')">手动添加场景</button>
               </div>
             </div>
+            <div v-else-if="sceneSearchKeyword.trim() && !filteredScenes.length" class="step-empty" style="padding: 28px 16px">
+              <div class="empty-title">未找到匹配场景</div>
+              <div class="empty-desc">没有名字包含「{{ sceneSearchKeyword.trim() }}」的场景，请换个关键词试试。</div>
+            </div>
             <div v-else class="asset-grid">
-              <div v-for="s in scenes" :key="s.id" class="card asset-card">
+              <div v-for="s in filteredScenes" :key="s.id" class="card asset-card">
                 <div class="asset-cover wide">
                   <img
                     v-if="s.image_url || s.imageUrl"
@@ -2006,6 +2020,47 @@
                         @preview="(img) => onStoryboardSceneViewClick(sb, img)"
                       />
                     </div>
+                    <div class="video-bind-row">
+                      <span class="prod-prompt-label">关联道具</span>
+                      <div class="video-bind-pills">
+                        <button
+                          v-for="prop in dramaProps"
+                          :key="prop.id"
+                          type="button"
+                          :class="['role-pill', { active: isStoryboardPropSelected(sb, prop.id) }]"
+                          @click="toggleStoryboardProp(sb, prop.id)"
+                        >
+                          {{ prop.name || `道具#${prop.id}` }}
+                        </button>
+                        <span v-if="!dramaProps.length" class="dim" style="font-size:11px">暂无道具，请先在资产库或项目中创建</span>
+                      </div>
+                    </div>
+                    <div v-if="getStoryboardPropIds(sb).length" class="video-char-image-panel">
+                      <div class="video-bind-row">
+                        <span class="prod-prompt-label">道具参考图</span>
+                        <span class="dim video-char-image-hint">按视角选择道具图</span>
+                      </div>
+                      <div class="video-char-image-strip">
+                        <div
+                          v-for="propId in getStoryboardPropIds(sb)"
+                          :key="`prop-img:${sb.id}:${propId}`"
+                          class="video-char-image-segment"
+                        >
+                          <span class="video-char-image-name">{{ getPropName(propId) }}</span>
+                          <EntityViewMediaStrip
+                            v-if="getPropMediaForStoryboard(propId)"
+                            :media="getPropMediaForStoryboard(propId)"
+                            theme="prop"
+                            compact
+                            :show-summary="false"
+                            :max-visible="12"
+                            clickable
+                            :is-view-active="(view) => isStoryboardPropImageSelected(sb, propId, view.url)"
+                            @preview="(img) => setStoryboardPropImage(sb, propId, img.url)"
+                          />
+                        </div>
+                      </div>
+                    </div>
                     <div class="video-blocking-panel">
                       <div class="video-bind-row">
                         <span class="prod-prompt-label">站位图</span>
@@ -2169,6 +2224,10 @@
                               <button v-if="mediaRef.missing" type="button" class="video-ref-action" @click="genSceneImg(mediaRef.sceneId)">生成</button>
                               <button type="button" class="video-ref-action danger" @click="removeVideoRefScene(sb)">解除</button>
                             </template>
+                            <template v-else-if="mediaRef.source === 'prop'">
+                              <button v-if="mediaRef.missing" type="button" class="video-ref-action" @click="toast.warning('请先生成道具图')">生成</button>
+                              <button type="button" class="video-ref-action danger" @click="removeVideoRefProp(sb, mediaRef.propId)">移除</button>
+                            </template>
                             <template v-else-if="mediaRef.source === 'reference'">
                               <button type="button" class="video-ref-action danger" @click="removeExtraReference(sb, mediaRef)">删除</button>
                             </template>
@@ -2181,7 +2240,7 @@
                           </div>
                         </div>
                       </div>
-                      <div v-else class="dim video-ref-empty-hint">绑定角色/场景或生成首帧后，其余参考素材会显示在这里</div>
+                      <div v-else class="dim video-ref-empty-hint">绑定角色/场景/道具或生成首帧后，其余参考素材会显示在这里</div>
                     </div>
                   </div>
                   <div class="prod-dots">
@@ -2609,7 +2668,7 @@ import {
 } from '~/utils/character-image-variants.js'
 import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
 import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
-import { summarizeSceneMedia, buildSceneMediaFromImages } from '~/utils/entity-view-media.js'
+import { summarizeSceneMedia, buildSceneMediaFromImages, summarizePropMedia } from '~/utils/entity-view-media.js'
 import { summarizeCharacterMedia } from '~/utils/character-image-variants.js'
 import {
   SCENE_ANGLE_PRESETS,
@@ -2625,6 +2684,11 @@ import {
   sceneAngleKey,
   sceneAngleLabel,
 } from '~/utils/scene-image-variants.js'
+import {
+  parseStoryboardPropImageRefs,
+  resolvePropImageForStoryboard,
+  resolvePropImageUrl,
+} from '~/utils/prop-image-variants.js'
 import {
   getBlockingImage,
   resolveBlockingLayout,
@@ -2669,6 +2733,8 @@ const mergeUrl = computed(() => mergeData.value?.merged_url || mergeData.value?.
 
 const scriptStep = ref(0)
 const prodTab = ref('chars')
+const charSearchKeyword = ref('')
+const sceneSearchKeyword = ref('')
 const productionPanelBlocked = computed(() => {
   if (['chars', 'scenes', 'fusion'].includes(prodTab.value)) return false
   if (!scriptContent.value) return true
@@ -3451,6 +3517,30 @@ function isNarratorCharacter(char) {
 }
 
 const visualChars = computed(() => chars.value.filter(c => !isNarratorCharacter(c)))
+
+function matchesEntityNameSearch(text, keyword) {
+  const q = String(keyword || '').trim().toLowerCase()
+  if (!q) return true
+  return String(text || '').toLowerCase().includes(q)
+}
+
+const filteredChars = computed(() => {
+  const q = charSearchKeyword.value
+  if (!q.trim()) return chars.value
+  return chars.value.filter(c => matchesEntityNameSearch(c.name, q))
+})
+
+const filteredScenes = computed(() => {
+  const q = sceneSearchKeyword.value
+  if (!q.trim()) return scenes.value
+  return scenes.value.filter(s => matchesEntityNameSearch(s.location || s.name, q))
+})
+
+const filteredVisualChars = computed(() => {
+  const q = charSearchKeyword.value
+  if (!q.trim()) return visualChars.value
+  return visualChars.value.filter(c => matchesEntityNameSearch(c.name, q))
+})
 
 const lockedImageConfigId = computed(() => episode.value?.image_config_id || episode.value?.imageConfigId || null)
 const lockedVideoConfigId = computed(() => episode.value?.video_config_id || episode.value?.videoConfigId || null)
@@ -4398,6 +4488,12 @@ function updateField(sb, field, value) {
   if (field === 'character_image_refs' && value && typeof value === 'object') {
     payload.character_image_refs = value
   }
+  if (field === 'prop_image_refs' && value && typeof value === 'object') {
+    payload.prop_image_refs = value
+  }
+  if (field === 'prop_ids' && Array.isArray(value)) {
+    payload.prop_ids = value
+  }
   storyboardAPI.update(sb.id, payload)
 }
 
@@ -4498,6 +4594,61 @@ function toggleStoryboardCharacter(sb, charId) {
     return
   }
   updateField(sb, 'character_ids', [...currentIds, charId])
+}
+
+function getStoryboardPropIds(sb) {
+  return sb?.prop_ids || sb?.propIds || []
+}
+
+function getPropById(propId) {
+  return dramaProps.value.find(item => item.id === propId)
+}
+
+function getPropName(propId) {
+  return getPropById(propId)?.name || `道具#${propId}`
+}
+
+function isStoryboardPropSelected(sb, propId) {
+  return getStoryboardPropIds(sb).includes(propId)
+}
+
+function toggleStoryboardProp(sb, propId) {
+  const currentIds = getStoryboardPropIds(sb)
+  if (currentIds.includes(propId)) {
+    removeVideoRefProp(sb, propId)
+    return
+  }
+  updateField(sb, 'prop_ids', [...currentIds, propId])
+}
+
+function getStoryboardPropImageRefs(sb) {
+  return parseStoryboardPropImageRefs(sb)
+}
+
+function getPropMediaForStoryboard(propId) {
+  const prop = getPropById(propId)
+  if (!prop) return null
+  const media = summarizePropMedia(prop)
+  return media?.preview_images?.length ? media : null
+}
+
+function isStoryboardPropImageSelected(sb, propId, url) {
+  const refs = getStoryboardPropImageRefs(sb)
+  const prop = getPropById(propId)
+  const normalized = normalizeMediaPath(url)
+  const selected = refs[propId]
+  if (selected) return normalizeMediaPath(selected) === normalized
+  return normalizeMediaPath(resolvePropImageUrl(prop, {})) === normalized
+}
+
+function setStoryboardPropImage(sb, propId, url) {
+  const refs = { ...getStoryboardPropImageRefs(sb) }
+  const prop = getPropById(propId)
+  const normalized = normalizeMediaPath(url)
+  const primary = normalizeMediaPath(resolvePropImageUrl(prop, {}))
+  if (primary === normalized) delete refs[propId]
+  else refs[propId] = normalized
+  updateField(sb, 'prop_image_refs', refs)
 }
 
 function getSceneName(sb) {
@@ -5493,6 +5644,11 @@ function getShotReferenceImages(sb) {
     const char = chars.value.find(item => item.id === charId)
     pushRef(char ? resolveCharacterImageUrl(char, characterImageRefs) : null)
   }
+  const propImageRefs = getStoryboardPropImageRefs(sb)
+  for (const propId of getStoryboardPropIds(sb)) {
+    const prop = getPropById(propId)
+    pushRef(prop ? resolvePropImageUrl(prop, propImageRefs) : null)
+  }
   for (const ref of getRefs(sb)) {
     pushRef(ref)
   }
@@ -5607,6 +5763,10 @@ function videoRefHelpers() {
     getBlockingImage,
     getStoryboardCharacterIds,
     getCharacterImageRefs: getStoryboardCharacterImageRefs,
+    getStoryboardPropIds,
+    getPropImageRefs: getStoryboardPropImageRefs,
+    getProps: () => dramaProps.value,
+    resolvePropImage: (prop, sb) => resolvePropImageForStoryboard(prop, sb),
     resolveSceneImage: (scene, sb) => resolveSceneImageForStoryboard(scene, sb),
     getTTSUrl,
     getVoiceRefs: getStoryboardVoiceRefs,
@@ -5726,6 +5886,34 @@ async function removeVideoRefCharacter(sb, charId) {
     if (promptChanged) payload.video_prompt = prompt
     await storyboardAPI.update(sb.id, payload)
     toast.success('已移除角色绑定')
+  } catch (e) {
+    toast.error(e?.message || '移除失败')
+  }
+}
+
+async function removeVideoRefProp(sb, propId) {
+  const prop = getPropById(propId)
+  const nextIds = getStoryboardPropIds(sb).filter(id => id !== propId)
+  const refs = { ...getStoryboardPropImageRefs(sb) }
+  delete refs[propId]
+  let prompt = sb.video_prompt || sb.videoPrompt || ''
+  if (prop?.name) prompt = removePromptImageLabel(prompt, null, prop.name)
+
+  sb.prop_ids = nextIds
+  sb.propIds = nextIds
+  sb.prop_image_refs = refs
+  sb.propImageRefs = refs
+  const promptChanged = prompt !== (sb.video_prompt || sb.videoPrompt || '')
+  if (promptChanged) {
+    sb.video_prompt = prompt
+    sb.videoPrompt = prompt
+  }
+
+  try {
+    const payload = { prop_ids: nextIds, prop_image_refs: refs }
+    if (promptChanged) payload.video_prompt = prompt
+    await storyboardAPI.update(sb.id, payload)
+    toast.success('已移除道具绑定')
   } catch (e) {
     toast.error(e?.message || '移除失败')
   }
@@ -6734,11 +6922,23 @@ watch(() => route.params.episodeNumber, () => {
 .extract-summary-note { padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,0.56); border: 1px solid rgba(27, 41, 64, 0.08); font-size: 11px; line-height: 1.7; color: var(--text-2); }
 .extract-card { overflow: hidden; min-height: 0; display: flex; flex-direction: column; }
 .extract-card-head {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 11px 14px; font-size: 12px; font-weight: 600;
   border-bottom: 1px solid var(--border); background: var(--bg-1);
   color: var(--text-1);
 }
+.entity-search-input {
+  flex: 1 1 120px;
+  min-width: 120px;
+  max-width: 220px;
+  margin-left: auto;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.extract-card-head .entity-search-input { max-width: 180px; }
+.prod-section-bar .entity-search-input { max-width: 200px; }
+.extract-search-empty { padding: 12px 0; font-size: 12px; text-align: center; }
 .extract-list { padding: 8px 14px; flex: 1; min-height: 0; overflow-y: auto; }
 .extract-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
 .extract-row + .extract-row { border-top: 1px solid var(--border); }

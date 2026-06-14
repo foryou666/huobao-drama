@@ -13,6 +13,20 @@ function parseReferenceImages(row: {
   referenceImageUrls?: string | null
   referencePayload?: string | null
 }) {
+  const contentRefs = parseVideoContentRefs(row.referencePayload)
+    .filter(ref => ref.type === 'image' && ref.role !== 'first_frame' && ref.role !== 'last_frame')
+
+  if (contentRefs.length) {
+    return contentRefs.map((ref) => {
+      const path = String(ref.url || '').trim().replace(/^\/+/, '')
+      return {
+        path,
+        display_url: resolveDisplayMediaUrl(path),
+        label: ref.label || null,
+      }
+    }).filter(item => item.path)
+  }
+
   const paths: string[] = []
   const push = (value?: string | null) => {
     const next = String(value || '').trim()
@@ -51,6 +65,8 @@ export interface VideoLedgerQuery {
   limit?: number
   offset?: number
   mineOnly?: boolean
+  provider?: string
+  models?: string[]
 }
 
 function buildVideoOwnerMaps() {
@@ -141,6 +157,14 @@ export function listVideoLedger(query: VideoLedgerQuery) {
   if (query.keyword?.trim()) {
     const kw = query.keyword.trim().toLowerCase()
     rows = rows.filter(r => String(r.prompt || '').toLowerCase().includes(kw))
+  }
+  if (query.provider?.trim()) {
+    const provider = query.provider.trim().toLowerCase()
+    rows = rows.filter(r => String(r.provider || '').toLowerCase() === provider)
+  }
+  if (query.models?.length) {
+    const allowed = new Set(query.models.map(item => item.trim()).filter(Boolean))
+    rows = rows.filter(r => allowed.has(String(r.model || '')))
   }
 
   const ownerMaps = query.mineOnly ? buildVideoOwnerMaps() : null

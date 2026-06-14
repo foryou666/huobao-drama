@@ -84,7 +84,7 @@ export function formatActivityLogRow(
     operator_id: meta?.operator_id ?? row.userId,
     operator_name: meta?.operator_name || u?.displayName || u?.username,
     action: row.action,
-    summary: row.summary,
+    summary: enrichActivitySummary(row.summary, userMap, row),
     resource_type: row.resourceType,
     resource_id: row.resourceId,
     drama_id: row.dramaId,
@@ -93,6 +93,62 @@ export function formatActivityLogRow(
     credit_cost: row.creditCost ?? 0,
     created_at: row.createdAt,
   }
+}
+
+const USER_REF_PATTERNS = [
+  /为用户\s*#(\d+)/g,
+  /成员\s*#(\d+)/g,
+]
+
+function extractUserIdsFromSummary(summary: string): number[] {
+  const ids = new Set<number>()
+  for (const pattern of USER_REF_PATTERNS) {
+    for (const match of summary.matchAll(pattern)) {
+      ids.add(Number(match[1]))
+    }
+  }
+  return [...ids]
+}
+
+function collectActivityReferencedUserIds(rows: typeof schema.activityLogs.$inferSelect[]): number[] {
+  const ids = new Set<number>()
+  for (const row of rows) {
+    ids.add(row.userId)
+    if (row.resourceType === 'user' && row.resourceId) ids.add(row.resourceId)
+    for (const id of extractUserIdsFromSummary(row.summary || '')) ids.add(id)
+    if (row.metadata) {
+      try {
+        const meta = JSON.parse(row.metadata) as { user_id?: number }
+        if (meta.user_id) ids.add(Number(meta.user_id))
+      } catch { /* ignore */ }
+    }
+  }
+  return [...ids]
+}
+
+function enrichActivitySummary(
+  summary: string | null | undefined,
+  userMap: Map<number, typeof schema.users.$inferSelect>,
+  row?: Pick<typeof schema.activityLogs.$inferSelect, 'resourceType' | 'resourceId' | 'metadata'>,
+): string | null {
+  if (!summary) return summary ?? null
+  let text = summary
+  const idsToEnrich = new Set(extractUserIdsFromSummary(text))
+  if (row?.resourceType === 'user' && row.resourceId) idsToEnrich.add(row.resourceId)
+  if (row?.metadata) {
+    try {
+      const meta = JSON.parse(row.metadata) as { user_id?: number }
+      if (meta.user_id) idsToEnrich.add(Number(meta.user_id))
+    } catch { /* ignore */ }
+  }
+  for (const id of idsToEnrich) {
+    if (text.includes(`#${id}（`)) continue
+    const user = userMap.get(id)
+    const name = user?.displayName || user?.username
+    if (!name) continue
+    text = text.replace(new RegExp(`#${id}(?!（)`, 'g'), `#${id}（${name}）`)
+  }
+  return text
 }
 
 function buildUserMap(userIds: number[]) {
@@ -113,8 +169,7 @@ export function listEpisodeActivityLogs(episodeId: number, opts?: { limit?: numb
       || (row.resourceType === 'episode' && row.resourceId === episodeId),
     )
   const slice = rows.slice(offset, offset + limit)
-  const userIds = [...new Set(slice.map(r => r.userId))]
-  const userMap = buildUserMap(userIds)
+  const userMap = buildUserMap(collectActivityReferencedUserIds(slice))
   return {
     items: slice.map(row => formatActivityLogRow(row, userMap)),
     total: rows.length,
@@ -139,8 +194,7 @@ export function listActivityLogs(opts: {
   }
   const rows = query.all()
   const slice = rows.slice(offset, offset + limit)
-  const userIds = [...new Set(slice.map(r => r.userId))]
-  const userMap = buildUserMap(userIds)
+  const userMap = buildUserMap(collectActivityReferencedUserIds(slice))
   return {
     items: slice.map(row => formatActivityLogRow(row, userMap)),
     total: rows.length,

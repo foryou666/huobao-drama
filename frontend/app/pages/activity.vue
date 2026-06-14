@@ -678,7 +678,14 @@ onMounted(async () => {
 
 <style scoped>
 
-.page { padding: 28px 32px; max-width: 1100px; margin: 0 auto; }
+.page {
+  padding: 28px 32px;
+  max-width: 1100px;
+  margin: 0 auto;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
 
 .page-head {
 

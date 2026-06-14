@@ -283,7 +283,7 @@ const boundScenes = computed(() => {
 const boundSceneCount = computed(() => boundScenes.value.length)
 
 const visualRefItems = computed(() =>
-  buildStudioRefStripItems(binding, projectChars.value, projectScenes.value, uploadedRefs.value, gridUrl),
+  buildStudioRefStripItems(binding, projectChars.value, projectScenes.value, [], uploadedRefs.value, gridUrl),
 )
 
 const showRefStrip = computed(() => dramaLinked.value || visualRefItems.value.length > 0)
@@ -400,16 +400,12 @@ function openScenePicker() {
 
 function onEntityPickerConfirm(result) {
   if (result.mode === 'character') {
-    const prevIds = new Set(binding.character_ids || [])
-    const nextIds = new Set(result.characterIds || [])
-    for (const char of projectChars.value) {
-      const wasBound = prevIds.has(char.id)
-      const isBound = nextIds.has(char.id)
-      if (isBound && !wasBound) bindCharacter(binding, char.id, projectChars.value)
-      else if (!isBound && wasBound) {
-        unbindCharacter(binding, char.id)
-        prompt.value = removePromptImageLabel(prompt.value, null, char.name)
-      }
+    for (const charId of result.characterIds || []) {
+      bindCharacter(binding, charId, projectChars.value)
+    }
+    binding.character_image_refs = {
+      ...(binding.character_image_refs || {}),
+      ...(result.characterImageRefs || {}),
     }
     return
   }
@@ -668,6 +664,7 @@ function submit() {
       text,
       projectChars.value,
       projectScenes.value,
+      [],
     )
     payload.prompt = finalPrompt
     const refs = collectReferencePaths(contentRefs)

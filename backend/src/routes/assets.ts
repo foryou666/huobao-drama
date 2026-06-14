@@ -9,6 +9,7 @@ import {
   applyAssetToScene,
   ensureCharacterFromManualCharacterAsset,
   ensureSceneFromManualSceneAsset,
+  ensurePropFromManualPropAsset,
   syncDramaAssets,
   syncEntityFromAsset,
   resolveAssetDisplayMedia,
@@ -161,6 +162,15 @@ app.post('/', async (c) => {
     if (characterId && imagePath) {
       await syncCharacterPrimaryImage(characterId, String(imagePath)).catch(() => {})
     }
+  } else if (type === 'prop' && body.drama_id) {
+    ensurePropFromManualPropAsset({
+      dramaId: Number(body.drama_id),
+      name: String(body.name).trim(),
+      description: body.description || null,
+      url: body.url || body.local_path || null,
+      localPath: body.local_path || body.url || null,
+      assetId: id,
+    })
   }
 
   logActivity(getAuthUser(c), {
@@ -259,6 +269,15 @@ app.post('/upload', async (c) => {
     if (characterId) {
       await syncCharacterPrimaryImage(characterId, path).catch(() => {})
     }
+  } else if (type === 'prop' && dramaId) {
+    ensurePropFromManualPropAsset({
+      dramaId,
+      name,
+      description,
+      url: path,
+      localPath: path,
+      assetId: id,
+    })
   }
 
   const [row] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()

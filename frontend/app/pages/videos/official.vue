@@ -2,8 +2,8 @@
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
-        <h1 class="studio-title">视频生成</h1>
-        <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；参考图上传默认入库，可从参考图库复用</p>
+        <h1 class="studio-title">视频生成(官)</h1>
+        <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；直连火山方舟官方 Seedance API，可选 2.0 / 2.0 Fast 模型</p>
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -51,7 +51,7 @@
     <div ref="feedRef" class="studio-feed">
       <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
       <div v-else-if="!items.length" class="studio-empty card">
-        <p>还没有视频，在底部输入描述并点击「生成视频」</p>
+        <p>还没有官方 Seedance 视频，在底部输入描述并点击「生成视频」</p>
       </div>
 
       <div v-else class="studio-grid">
@@ -104,7 +104,6 @@
               <span v-if="item.model" class="tag tag-accent">{{ modelLabel(item.model) }}</span>
               <span v-if="item.is_manual" class="tag">手动</span>
               <span v-if="item.drama_title" class="dim">{{ item.drama_title }}</span>
-              <span v-if="!item.storyboard_exists && item.storyboard_id" class="tag tag-warn">分镜已删</span>
               <button
                 v-if="playableUrl(item)"
                 type="button"
@@ -112,6 +111,14 @@
                 @click.stop="downloadItem(item)"
               >
                 下载
+              </button>
+              <button
+                v-if="isFailed(item)"
+                type="button"
+                class="studio-card-retry-link"
+                @click.stop="retryItem(item)"
+              >
+                重新生成
               </button>
             </div>
           </div>
@@ -130,17 +137,18 @@
     <div class="studio-composer-wrap">
       <VideoStudioComposer
         ref="composerRef"
+        official-mode
         :generating="generating"
         :dramas="dramas"
         :default-drama-id="filterDramaId"
-        :chengmeng-models="chengmengModels"
-        :fixed-config-id="chengmengConfigId"
-        :fixed-model="selectedChengmengModel"
-        :credit-cost-hint="selectedCreditHint"
-        :duration-min="4"
-        :duration-max="15"
-        :show-ref-mode-toggle="false"
-        @update:fixed-model="selectedChengmengModel = $event"
+        :official-models="displayModels"
+        :fixed-config-id="officialConfigId"
+        :fixed-model="selectedModel"
+        force-adaptive-aspect
+        :duration-min="officialDurationMin"
+        :duration-max="officialDurationMax"
+        :credit-cost-per-second="selectedCreditCostPerSecond"
+        @update:fixed-model="selectedModel = $event"
         @generate="onGenerate"
       />
     </div>
@@ -150,7 +158,7 @@
         <div class="studio-detail-head">
           <div>
             <h3>视频详情 #{{ detailItem.id }}</h3>
-            <p class="dim">{{ formatTime(detailItem.created_at) }}</p>
+            <p class="dim">{{ formatTime(detailItem.created_at) }} · {{ modelLabel(detailItem.model) }}</p>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="detailItem = null">关闭</button>
         </div>
@@ -191,14 +199,16 @@
                 {{ detailDownloading ? '下载中…' : '下载视频' }}
               </button>
               <button type="button" class="btn btn-sm" @click="reuseDetail">复用到输入框</button>
-              <button type="button" class="btn btn-sm" @click="copyPrompt(detailItem.prompt)">复制提示词</button>
-              <NuxtLink
-                v-if="episodeLink(detailItem)"
-                :to="episodeLink(detailItem)"
-                class="btn btn-sm"
+              <button
+                v-if="isFailed(detailItem)"
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="generating"
+                @click="retryItem(detailItem)"
               >
-                打开分镜工作台
-              </NuxtLink>
+                {{ generating ? '提交中…' : '重新生成' }}
+              </button>
+              <button type="button" class="btn btn-sm" @click="copyPrompt(detailItem.prompt)">复制提示词</button>
             </div>
           </div>
         </div>
@@ -215,11 +225,28 @@ import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 
+const OFFICIAL_MODEL_IDS = [
+  'doubao-seedance-2-0-260128',
+  'doubao-seedance-2-0-fast-260128',
+]
+
+const DEFAULT_OFFICIAL_MODEL = OFFICIAL_MODEL_IDS[1]
+
+const DEFAULT_OFFICIAL_MODELS = [
+  { id: OFFICIAL_MODEL_IDS[0], label: 'Seedance 2.0', credit_cost_per_second: null, config_id: null },
+  { id: OFFICIAL_MODEL_IDS[1], label: 'Seedance 2.0 Fast', credit_cost_per_second: null, config_id: null },
+]
+
 const route = useRoute()
 
 const loading = ref(false)
 const loadingMore = ref(false)
 const generating = ref(false)
+const officialModels = ref([])
+const officialApiKeyConfigured = ref(true)
+const officialDurationMin = ref(4)
+const officialDurationMax = ref(15)
+const selectedModel = ref(DEFAULT_OFFICIAL_MODEL)
 const items = ref([])
 const dramas = ref([])
 const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
@@ -231,36 +258,7 @@ const detailItem = ref(null)
 const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
-const chengmengModels = ref([])
-const selectedChengmengModel = ref('31')
 let pollTimer = null
-
-const CHENGMENG_MODEL_LABELS = {
-  31: 'Seedance 2.0 Fast',
-  32: 'Seedance 2.0',
-}
-
-const chengmengConfigId = computed(() => {
-  const fromModel = chengmengModels.value.find(item => item.id === selectedChengmengModel.value)
-  return fromModel?.config_id ?? chengmengModels.value[0]?.config_id ?? null
-})
-
-const selectedChengmengPricing = computed(() =>
-  chengmengModels.value.find(item => item.id === selectedChengmengModel.value)
-  || chengmengModels.value[0]
-  || null,
-)
-
-const selectedCreditHint = computed(() => {
-  const pricing = selectedChengmengPricing.value
-  if (!pricing?.credit_cost) return ''
-  return `${pricing.credit_cost} 积分/条`
-})
-
-function modelLabel(model) {
-  const key = String(model || '').trim()
-  return CHENGMENG_MODEL_LABELS[key] || key || '未知模型'
-}
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -272,6 +270,26 @@ const statusTabs = [
 const hasActiveTasks = computed(() =>
   items.value.some(item => item.status === 'processing' || item.status === 'pending'),
 )
+
+const selectedCreditCostPerSecond = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  const rate = model?.credit_cost_per_second
+  return rate != null && Number.isFinite(Number(rate)) ? Number(rate) : null
+})
+
+const displayModels = computed(() =>
+  officialModels.value.length ? officialModels.value : DEFAULT_OFFICIAL_MODELS,
+)
+
+const officialConfigId = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  return model?.config_id ?? null
+})
+
+function modelLabel(modelId) {
+  return displayModels.value.find(item => item.id === modelId)?.label
+    || (String(modelId || '').includes('fast') ? 'Seedance 2.0 Fast' : 'Seedance 2.0')
+}
 
 function statsForTab(id) {
   if (id === 'all') return stats.value.total
@@ -301,11 +319,6 @@ function normalizeItem(row) {
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
-    episode_id: row.episode_id,
-    episode_number: row.episode_number,
-    storyboard_title: row.storyboard_title || '',
-    storyboard_number: row.storyboard_number,
-    storyboard_exists: row.storyboard_exists !== false,
   }
 }
 
@@ -319,6 +332,44 @@ function displayUrl(raw) {
 
 function isProcessing(item) {
   return item.status === 'processing' || item.status === 'pending'
+}
+
+function isFailed(item) {
+  return item.status === 'failed'
+}
+
+function buildPayloadFromItem(item) {
+  const refs = (item?.reference_images || []).map((ref, idx) => ({
+    type: 'image',
+    url: ref.path,
+    label: ref.label || `参考图${idx + 1}`,
+  })).filter(ref => ref.url)
+
+  const payload = {
+    prompt: item?.prompt || '',
+    duration: Number(item?.duration || 15),
+    aspect_ratio: refs.length ? 'adaptive' : (item?.aspect_ratio || item?.aspectRatio || '9:16'),
+    drama_id: item?.drama_id ? Number(item.drama_id) : undefined,
+  }
+
+  if (refs.length) {
+    payload.content_refs = refs
+    payload.reference_mode = 'multiple'
+    payload.reference_image_urls = refs.map(ref => ref.url)
+  }
+
+  return payload
+}
+
+async function retryItem(item) {
+  if (!item || generating.value) return
+  if (item.model && OFFICIAL_MODEL_IDS.includes(item.model)) {
+    selectedModel.value = item.model
+  }
+  await composerRef.value?.loadFromItem(item)
+  detailItem.value = null
+  await nextTick()
+  await onGenerate(buildPayloadFromItem(item))
 }
 
 function statusLabel(status) {
@@ -338,6 +389,7 @@ function statusTagClass(status) {
 
 function cardRatioClass(item) {
   const ratio = item?.aspect_ratio || '9:16'
+  if (ratio === 'adaptive') return 'ratio-portrait'
   return ratio === '16:9' ? 'ratio-landscape' : 'ratio-portrait'
 }
 
@@ -352,11 +404,6 @@ function formatTime(value) {
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return value
   return d.toLocaleString('zh-CN', { hour12: false })
-}
-
-function episodeLink(item) {
-  if (!item?.storyboard_exists || !item.drama_id || item.episode_number == null) return null
-  return `/drama/${item.drama_id}/episode/${item.episode_number}`
 }
 
 function playPreview(event) {
@@ -378,6 +425,9 @@ function openDetail(item) {
 
 async function reuseDetail() {
   if (!detailItem.value) return
+  if (detailItem.value.model && OFFICIAL_MODEL_IDS.includes(detailItem.value.model)) {
+    selectedModel.value = detailItem.value.model
+  }
   await composerRef.value?.loadFromItem(detailItem.value)
   detailItem.value = null
   nextTick(() => {
@@ -399,9 +449,7 @@ function videoDownloadName(item) {
   return buildVideoDownloadFilename({
     id: item?.id,
     dramaTitle: item?.drama_title,
-    episodeNumber: item?.episode_number,
-    storyboardNumber: item?.storyboard_number,
-    title: item?.storyboard_title,
+    title: modelLabel(item?.model),
   })
 }
 
@@ -433,6 +481,8 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
+    provider: 'volcengine',
+    models: OFFICIAL_MODEL_IDS.join(','),
   }
 }
 
@@ -493,28 +543,37 @@ function setStatus(status) {
   reload()
 }
 
-async function loadChengmengOptions() {
+async function loadOfficialOptions() {
   try {
-    const res = await videoAPI.chengmengOptions()
-    chengmengModels.value = res?.models || []
-    if (chengmengModels.value.length && !chengmengModels.value.some(item => item.id === selectedChengmengModel.value)) {
-      selectedChengmengModel.value = chengmengModels.value[0].id
+    const res = await videoAPI.officialOptions()
+    officialModels.value = res?.models || []
+    officialApiKeyConfigured.value = res?.api_key_configured !== false
+    officialDurationMin.value = Number(res?.models?.[0]?.billing_seconds_min) || 4
+    officialDurationMax.value = Number(res?.models?.[0]?.billing_seconds_max) || 15
+    if (officialModels.value.length && !officialModels.value.some(item => item.id === selectedModel.value)) {
+      const fast = officialModels.value.find(item => item.id === DEFAULT_OFFICIAL_MODEL)
+      selectedModel.value = fast?.id || officialModels.value[0].id
     }
   } catch {
-    chengmengModels.value = []
+    officialModels.value = []
+    officialApiKeyConfigured.value = false
   }
 }
 
 async function onGenerate(payload) {
-  if (!selectedChengmengModel.value) {
+  if (!selectedModel.value) {
     toast.error('请选择模型')
     return
   }
-  if (!chengmengConfigId.value) {
-    await loadChengmengOptions()
+  if (!officialConfigId.value) {
+    await loadOfficialOptions()
   }
-  if (!chengmengConfigId.value) {
-    toast.error('未配置橙盟视频服务，请联系管理员')
+  if (!officialConfigId.value) {
+    toast.error('未配置火山官方 Seedance 视频服务，请联系管理员')
+    return
+  }
+  if (!officialApiKeyConfigured.value) {
+    toast.error('火山官方 API Key 未配置，请管理员在「设置 → AI 配置」中填写「火山方舟 Seedance-视频」的 API Key')
     return
   }
   generating.value = true
@@ -522,15 +581,17 @@ async function onGenerate(payload) {
   try {
     const generation = await videoAPI.generate({
       ...payload,
-      config_id: chengmengConfigId.value,
-      model: selectedChengmengModel.value,
+      official: true,
+      config_id: officialConfigId.value,
+      model: selectedModel.value,
     })
-    toast.success('视频任务已提交')
+    toast.success('官方视频任务已提交')
     filterStatus.value = 'all'
     await reload()
     void pollGeneration(generation?.id)
   } catch (err) {
     toast.error(err?.message || '生成失败')
+    await reload()
   } finally {
     const elapsed = Date.now() - startedAt
     setTimeout(() => {
@@ -551,7 +612,9 @@ async function pollGeneration(generationId) {
         return
       }
       if (res?.status === 'failed') {
-        toast.error(res?.error_msg || res?.errorMsg || '视频生成失败')
+        filterStatus.value = 'failed'
+        await reload()
+        toast.error(res?.error_msg || res?.errorMsg || '视频生成失败，可在上方列表重新生成')
         return
       }
     } catch {
@@ -584,9 +647,9 @@ function stopPolling() {
 }
 
 onMounted(async () => {
+  await loadOfficialOptions()
   const dramaRes = await dramaAPI.list()
   dramas.value = dramaRes?.items || dramaRes || []
-  await loadChengmengOptions()
   await reload()
   startPolling()
 })
@@ -597,21 +660,21 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.studio-composer-wrap {
-  flex-shrink: 0;
-  position: relative;
-  z-index: 20;
-}
-
 .studio-page {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   background:
-    radial-gradient(circle at top right, rgba(124, 77, 255, 0.08), transparent 40%),
-    radial-gradient(circle at top left, rgba(76, 125, 255, 0.08), transparent 35%),
+    radial-gradient(circle at top right, rgba(76, 125, 255, 0.1), transparent 42%),
+    radial-gradient(circle at top left, rgba(36, 180, 126, 0.08), transparent 35%),
     var(--bg-base);
+}
+
+.studio-composer-wrap {
+  flex-shrink: 0;
+  position: relative;
+  z-index: 20;
 }
 
 .studio-header {
@@ -633,6 +696,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 13px;
   color: var(--text-3);
+  max-width: 560px;
 }
 
 .studio-header-actions {
@@ -821,30 +885,6 @@ onUnmounted(() => {
   font-size: 14px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.85;
-  transition: opacity 0.15s ease, background 0.15s ease;
-}
-
-.studio-card:hover .studio-card-download {
-  opacity: 1;
-}
-
-.studio-card-download-link {
-  margin-left: auto;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.studio-card-download-link:hover {
-  text-decoration: underline;
-}
-
-.studio-card-download:hover {
-  background: rgba(59, 130, 246, 0.92);
 }
 
 .studio-card-body {
@@ -870,9 +910,22 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
-.tag-warn {
-  border-color: rgba(255, 167, 38, 0.35);
-  color: #ffb74d;
+.studio-card-download-link,
+.studio-card-retry-link {
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.studio-card-download-link {
+  color: var(--accent);
+}
+
+.studio-card-retry-link {
+  color: var(--danger, #e5484d);
 }
 
 .studio-more {

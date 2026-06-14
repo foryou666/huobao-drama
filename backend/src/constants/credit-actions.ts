@@ -1,4 +1,5 @@
-import { isChengmengProvider } from './chengmeng.js'
+import { isChengmengProvider, isChengmengSeedance2StandardModel, CHENGMENG_VIDEO_MODELS } from './chengmeng.js'
+import { SEEDANCE_MODELS, seedanceDurationBounds } from './seedance.js'
 
 /** 积分操作键 — 管理员可在设置中调整单价 */
 export const CREDIT_ACTIONS = {
@@ -12,7 +13,10 @@ export const CREDIT_ACTIONS = {
   SCENE_IMAGE: 'scene.image',
   STORYBOARD_TTS: 'storyboard.tts',
   VIDEO_GENERATE: 'video.generate',
+  VIDEO_GENERATE_SEEDANCE_2_0: 'video.generate.seedance2',
+  VIDEO_GENERATE_SEEDANCE_2_0_FAST: 'video.generate.seedance2_fast',
   VIDEO_GENERATE_CHENGMENT: 'video.generate.chengmeng',
+  VIDEO_GENERATE_CHENGMENG_SEEDANCE_2_0: 'video.generate.chengmeng_seedance2',
   GRID_GENERATE: 'grid.generate',
   GRID_PROMPT: 'grid.prompt',
   PORTRAIT_SYNC: 'portrait.sync',
@@ -38,9 +42,13 @@ export const IMAGE_CREDIT_COST = 6
 export const VIDEO_CREDITS_PER_SECOND = CREDITS_PER_YUAN
 export const VIDEO_BILLING_SECONDS = 15
 
-/** 橙盟 9图过人脸：15 秒/条，8 元/条 */
+/** 橙盟 Seedance 2.0 Fast（9图过人脸）：15 秒/条，8 元/条 */
 export const CHENGMENT_VIDEO_YUAN_PER_CLIP = 8
 export const CHENGMENT_VIDEO_CREDIT_COST = CHENGMENT_VIDEO_YUAN_PER_CLIP * CREDITS_PER_YUAN
+
+/** 橙盟 Seedance 2.0 标准版：固定 900 积分/条（9 元/条） */
+export const CHENGMENG_SEEDANCE_2_0_YUAN_PER_CLIP = 9
+export const CHENGMENG_SEEDANCE_2_0_CREDIT_COST = CHENGMENG_SEEDANCE_2_0_YUAN_PER_CLIP * CREDITS_PER_YUAN
 
 /** 默认单价（积分）。后续可按 1 元 = 100 积分 换算充值 */
 export const DEFAULT_CREDIT_PRICING: CreditActionDef[] = [
@@ -53,8 +61,11 @@ export const DEFAULT_CREDIT_PRICING: CreditActionDef[] = [
   { action: CREDIT_ACTIONS.CHARACTER_VOICE_SAMPLE, label: '角色音色试听', defaultCost: 0, description: 'TTS 音色试听（免费，仍记录操作日志）' },
   { action: CREDIT_ACTIONS.SCENE_IMAGE, label: '场景图生成', defaultCost: IMAGE_CREDIT_COST, description: '场景图生成（平台 6 积分/张）' },
   { action: CREDIT_ACTIONS.STORYBOARD_TTS, label: '镜头配音', defaultCost: 0, description: '分镜 TTS 配音（免费，仍记录操作日志）' },
-  { action: CREDIT_ACTIONS.VIDEO_GENERATE, label: '视频生成', defaultCost: VIDEO_CREDITS_PER_SECOND, description: `镜头视频生成（${VIDEO_BILLING_SECONDS} 秒/次，1 元/秒 = ${VIDEO_CREDITS_PER_SECOND} 积分/秒）` },
-  { action: CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENT, label: '橙盟 Seedance 2.0 9图过人脸', defaultCost: CHENGMENT_VIDEO_CREDIT_COST, description: `橙盟 9图过人脸视频（${VIDEO_BILLING_SECONDS} 秒/条，${CHENGMENT_VIDEO_YUAN_PER_CLIP} 元/条 = ${CHENGMENT_VIDEO_CREDIT_COST} 积分/条）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE, label: '视频生成', defaultCost: VIDEO_CREDITS_PER_SECOND, description: `镜头视频生成（${VIDEO_BILLING_SECONDS} 秒/次，${VIDEO_CREDITS_PER_SECOND} 积分/秒）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0, label: '官方 Seedance 2.0', defaultCost: VIDEO_CREDITS_PER_SECOND, description: `火山官方 doubao-seedance-2-0-260128（4–${VIDEO_BILLING_SECONDS} 秒，${VIDEO_CREDITS_PER_SECOND} 积分/秒）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST, label: '官方 Seedance 2.0 Fast', defaultCost: VIDEO_CREDITS_PER_SECOND, description: `火山官方 doubao-seedance-2-0-fast-260128（4–${VIDEO_BILLING_SECONDS} 秒，${VIDEO_CREDITS_PER_SECOND} 积分/秒）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENT, label: '橙盟 Seedance 2.0 Fast', defaultCost: CHENGMENT_VIDEO_CREDIT_COST, description: `橙盟 Seedance 2.0 Fast / 9图过人脸（${VIDEO_BILLING_SECONDS} 秒/条，${CHENGMENT_VIDEO_YUAN_PER_CLIP} 元/条 = ${CHENGMENT_VIDEO_CREDIT_COST} 积分/条）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENG_SEEDANCE_2_0, label: '橙盟 Seedance 2.0', defaultCost: CHENGMENG_SEEDANCE_2_0_CREDIT_COST, description: `橙盟 Seedance 2.0 标准版（${VIDEO_BILLING_SECONDS} 秒/条，${CHENGMENG_SEEDANCE_2_0_YUAN_PER_CLIP} 元/条 = ${CHENGMENG_SEEDANCE_2_0_CREDIT_COST} 积分/条）` },
   { action: CREDIT_ACTIONS.GRID_GENERATE, label: '宫格图生成', defaultCost: IMAGE_CREDIT_COST, description: '九宫格参考图（平台 6 积分/张）' },
   { action: CREDIT_ACTIONS.GRID_PROMPT, label: '宫格提示词', defaultCost: 0, description: '宫格 LLM 提示词生成（免费，仍记录操作日志）' },
   { action: CREDIT_ACTIONS.PORTRAIT_SYNC, label: 'Seedance 资产同步', defaultCost: 0, description: '角色 Seedance 参考资产同步（免费，仍记录操作日志）' },
@@ -67,8 +78,44 @@ export function getVideoGenerationCreditCost(seconds = VIDEO_BILLING_SECONDS, pe
   return Math.max(0, perSecond * Math.max(1, seconds))
 }
 
-export function resolveVideoCreditCharge(provider?: string | null) {
+export function resolveVideoBillingSeconds(duration?: number | null, model?: string | null): number {
+  const { min, max, defaultSec } = seedanceDurationBounds(model)
+  const parsed = Math.round(Number(duration ?? defaultSec))
+  if (!Number.isFinite(parsed)) return defaultSec
+  return Math.min(max, Math.max(min, parsed))
+}
+
+export function resolveVideoCreditCharge(
+  provider?: string | null,
+  model?: string | null,
+  duration?: number | null,
+) {
+  const normalized = String(model || '').trim()
+  if (normalized === SEEDANCE_MODELS.V2_0_FAST) {
+    const billedSeconds = resolveVideoBillingSeconds(duration, normalized)
+    return {
+      action: CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+      quantity: billedSeconds,
+      billedSeconds,
+    }
+  }
+  if (normalized === SEEDANCE_MODELS.V2_0) {
+    const billedSeconds = resolveVideoBillingSeconds(duration, normalized)
+    return {
+      action: CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0,
+      quantity: billedSeconds,
+      billedSeconds,
+    }
+  }
   if (isChengmengProvider(provider)) {
+    const chengmengModel = normalized || CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST
+    if (isChengmengSeedance2StandardModel(chengmengModel)) {
+      return {
+        action: CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENG_SEEDANCE_2_0,
+        quantity: 1,
+        billedSeconds: VIDEO_BILLING_SECONDS,
+      }
+    }
     return {
       action: CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENT,
       quantity: 1,

@@ -157,6 +157,16 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_storyboard_characters_character_id
     ON storyboard_characters (character_id);
 
+  CREATE TABLE IF NOT EXISTS storyboard_props (
+    storyboard_id INTEGER NOT NULL,
+    prop_id INTEGER NOT NULL,
+    PRIMARY KEY (storyboard_id, prop_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_storyboard_props_storyboard_id
+    ON storyboard_props (storyboard_id);
+  CREATE INDEX IF NOT EXISTS idx_storyboard_props_prop_id
+    ON storyboard_props (prop_id);
+
   CREATE TABLE IF NOT EXISTS video_prompt_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     storyboard_id INTEGER NOT NULL,
@@ -381,6 +391,7 @@ ensureColumn('episodes', 'image_config_id', 'INTEGER')
 ensureColumn('episodes', 'video_config_id', 'INTEGER')
 ensureColumn('assistant_messages', 'attachments', 'TEXT')
 ensureColumn('storyboards', 'character_image_refs', 'TEXT')
+ensureColumn('storyboards', 'prop_image_refs', 'TEXT')
 ensureColumn('storyboards', 'blocking_image', 'TEXT')
 ensureColumn('storyboards', 'blocking_layout', 'TEXT')
 ensureColumn('storyboards', 'scene_angle_id', 'TEXT')

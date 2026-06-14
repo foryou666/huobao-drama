@@ -8,7 +8,26 @@ export const CHENGMENT_DEFAULT_BASE_URL = 'https://api.chengmeng.site'
 export const CHENGMENT_DEFAULT_MODEL_ID = '31'
 export const CHENGMENT_DEFAULT_GROUP_ID = '15'
 
-export const CHENGMENT_DURATION_BOUNDS = { min: 5, max: 15, defaultSec: 15 }
+/** 橙盟 Seedance 2.0 标准版（视频生成页可选） */
+export const CHENGMENG_SEEDANCE_2_0_MODEL_ID = '32'
+
+/** 视频生成页模型选项 ID（写入 video_generations.model） */
+export const CHENGMENG_VIDEO_MODELS = {
+  SEEDANCE_2_0_FAST: CHENGMENT_DEFAULT_MODEL_ID,
+  SEEDANCE_2_0: CHENGMENG_SEEDANCE_2_0_MODEL_ID,
+} as const
+
+export function isChengmengVideoModelId(model?: string | null): boolean {
+  const normalized = String(model || '').trim()
+  return normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST
+    || normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0
+}
+
+export function isChengmengSeedance2StandardModel(model?: string | null): boolean {
+  return String(model || '').trim() === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0
+}
+
+export const CHENGMENT_DURATION_BOUNDS = { min: 4, max: 15, defaultSec: 15 }
 
 /** 橙盟参考音频：最多 3 条，总时长 ≤15 秒（Seedance 2.0 / 9图） */
 export const CHENGMENT_AUDIO_MAX_TOTAL_SECONDS = 15

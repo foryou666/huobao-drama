@@ -125,3 +125,45 @@ export function summarizePropMedia(prop: {
 }): EntityMediaSummary {
   return summarizeEntityMediaFromViews(listPropImages(prop))
 }
+
+export function parseStoryboardPropImageRefs(raw?: string | Record<string, string> | null): Record<number, string> {
+  if (!raw) return {}
+  let obj: Record<string, unknown> = {}
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    obj = raw as Record<string, unknown>
+  } else if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) obj = parsed
+    } catch {
+      return {}
+    }
+  } else {
+    return {}
+  }
+
+  const refs: Record<number, string> = {}
+  for (const [key, value] of Object.entries(obj)) {
+    const id = Number(key)
+    const url = normalizePath(String(value || ''))
+    if (Number.isFinite(id) && url) refs[id] = url
+  }
+  return refs
+}
+
+export function resolvePropImageForStoryboard(
+  prop: {
+    id?: number
+    imageUrl?: string | null
+    localPath?: string | null
+    referenceImages?: string | null
+  },
+  storyboard?: { propImageRefs?: string | null } | null,
+): string | null {
+  const refs = parseStoryboardPropImageRefs(storyboard?.propImageRefs)
+  const propId = Number(prop?.id)
+  const selected = Number.isFinite(propId) ? refs[propId] : null
+  if (selected) return selected
+  const images = listPropImages(prop)
+  return images.find(item => item.view_id === 'hero')?.url || images[0]?.url || null
+}

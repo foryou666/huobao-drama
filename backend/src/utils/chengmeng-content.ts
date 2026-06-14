@@ -7,6 +7,7 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_PROMPT_MAX_LENGTH,
+  isChengmengVideoModelId,
 } from '../constants/chengmeng.js'
 import { ensureApiTrimmedAudioPath } from './audio-trim.js'
 import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
@@ -316,4 +317,19 @@ export function parseChengmengModelIds(config: { model?: string; models?: string
     modelId: String(models[0] || CHENGMENT_DEFAULT_MODEL_ID),
     groupId: String(models[1] || CHENGMENT_DEFAULT_GROUP_ID),
   }
+}
+
+/** 任务级 model 覆盖（视频生成页可选 31 Fast / 32 标准版） */
+export function resolveChengmengModelIds(
+  config: { model?: string; models?: string[] },
+  modelOverride?: string | null,
+) {
+  const override = String(modelOverride || '').trim()
+  if (isChengmengVideoModelId(override)) {
+    return {
+      modelId: override,
+      groupId: CHENGMENT_DEFAULT_GROUP_ID,
+    }
+  }
+  return parseChengmengModelIds(config)
 }
