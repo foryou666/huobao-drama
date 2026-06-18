@@ -20,7 +20,11 @@ import {
 } from '../services/drama-shares.js'
 import { assessDramaDeletion, assessEpisodeDeletion, toDeletionInfo } from '../services/deletion-guards.js'
 import { episodeSummaryToSnakeCase, getEpisodeSummariesForDrama } from '../services/episode-summary.js'
-import { reconcileOrphanAssets } from '../services/asset-library.js'
+import {
+  enrichPropForStudio,
+  hydratePropImagesFromLinkedAssets,
+  reconcileOrphanAssets,
+} from '../services/asset-library.js'
 
 const app = new Hono()
 
@@ -229,6 +233,7 @@ app.get('/:id', async (c) => {
   if (denied) return denied
 
   reconcileOrphanAssets(id)
+  hydratePropImagesFromLinkedAssets(id)
 
   const eps = await db.select().from(schema.episodes)
     .where(eq(schema.episodes.dramaId, id))
@@ -275,7 +280,13 @@ app.get('/:id', async (c) => {
     episodes: episodesWithDeletion,
     characters: toSnakeCaseArray(chars.filter(ch => !ch.deletedAt)),
     scenes: toSnakeCaseArray(scns.filter(s => !s.deletedAt)),
-    props: toSnakeCaseArray(prps.filter(p => !p.deletedAt)),
+    props: prps.filter(p => !p.deletedAt).map((prop) => {
+      const enriched = enrichPropForStudio(prop)
+      return {
+        ...toSnakeCase(enriched),
+        prop_media: toSnakeCase(enriched.propMedia),
+      }
+    }),
     shared_teams: getSharesByDramaId(id),
     owner_team_name: getOwnerTeamName(drama.teamId),
     can_manage_shares: userCanManageDramaShares(drama, getAuthUser(c)),

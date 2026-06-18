@@ -98,11 +98,11 @@
                 <div class="config-info">
                   <div class="config-main">
                     <div class="config-line">
-                      <span class="config-provider">{{ c.provider }}</span>
-                      <span class="config-name">{{ c.name || `${c.provider}-${c.service_type}` }}</span>
+                      <span class="config-provider">{{ providerLabel(c.provider) }}</span>
+                      <span class="config-name">{{ c.name || `${providerLabel(c.provider)}-${c.service_type}` }}</span>
                     </div>
                     <span class="config-model mono truncate">{{ fmtModel(c.model) }}</span>
-                    <span class="config-base mono truncate">{{ c.base_url || '未设置 Base URL' }}</span>
+                    <span class="config-base mono truncate">{{ displayBaseUrl(c.provider, c.base_url) }}</span>
                   </div>
                 </div>
                 <span :class="['tag', c.api_key ? 'tag-success' : 'tag-error']">{{ c.api_key ? '已配置' : '无密钥' }}</span>
@@ -276,8 +276,35 @@
           <p class="settings-desc">配置各操作的积分单价，并为团队成员充值。后续可按 1 元 = 100 积分 对接充值。</p>
         </div>
         <section class="setup-panel card">
+          <div class="setup-title">视频通道对照</div>
+          <p class="dim setup-pricing-hint">以下对照表仅管理员可见，说明顶部导航通道名与实际服务商、积分定价项的对应关系。</p>
+          <table class="user-table video-channel-guide-table">
+            <thead>
+              <tr>
+                <th>导航名</th>
+                <th>实际通道</th>
+                <th>上游 / 说明</th>
+                <th>积分定价项</th>
+                <th>计费</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in videoChannelGuide" :key="row.navLabel">
+                <td class="mono">{{ row.navLabel }}</td>
+                <td>
+                  {{ row.internalName }}
+                  <span v-if="row.adminOnly" class="tag tag-accent">管理员入口</span>
+                </td>
+                <td class="dim">{{ row.upstream }} · {{ row.features }}</td>
+                <td class="dim">{{ row.pricingLabels }}</td>
+                <td>{{ row.billing }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="setup-panel card">
           <div class="setup-title">操作定价</div>
-          <p class="dim setup-pricing-hint">「视频生成」「官方 Seedance」填<strong>每秒</strong>积分；「橙盟视频」填<strong>每条</strong>积分；其余为单次积分。</p>
+          <p class="dim setup-pricing-hint">seedance通道2 相关项填<strong>每秒</strong>积分；seedance通道1/3/4 与 grok视频 填<strong>每条</strong>积分。「Seedance 2.0 VIP」为用户扣费单价（按条），与上游成本无关。</p>
           <table class="user-table">
             <thead>
               <tr><th>操作</th><th>说明</th><th>单价</th><th></th></tr>
@@ -288,7 +315,7 @@
                 <td class="dim">{{ item.description }}</td>
                 <td>
                   <div class="pricing-input-row">
-                    <input v-model.number="item.cost" class="input input-sm" type="number" min="0" step="1" />
+                    <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" />
                     <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
                   </div>
                 </td>
@@ -476,9 +503,76 @@
           <input v-model="cfgForm.api_key" class="input" type="password" :placeholder="cfgForm.provider?.startsWith('ali') ? 'sk-...（百炼控制台 API Key）' : 'sk-...'" />
           <span v-if="aliProviderHint" class="field-hint">{{ aliProviderHint }} · <a href="https://help.aliyun.com/zh/model-studio/get-api-key" target="_blank" rel="noopener">获取 API Key</a> · <a href="https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope" target="_blank" rel="noopener">OpenAI 兼容说明</a></span>
           <span v-if="chengmengProviderHint" class="field-hint">{{ chengmengProviderHint }} · <a href="https://chengmeng.site/docu" target="_blank" rel="noopener">API 文档</a></span>
+          <span v-if="aistarslabProviderHint" class="field-hint">
+            {{ aistarslabProviderHint }}
+            · <a href="https://my.feishu.cn/wiki/JP5HwMT3Vi67HDkpxgbcgQWVnYd" target="_blank" rel="noopener">接口文档</a>
+          </span>
+          <div v-if="showChengmengRemotePanel" class="aistarslab-remote-panel">
+            <div class="aistarslab-remote-head">
+              <span class="aistarslab-remote-title">可用模型与积分定价项</span>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="chengmengRemoteLoading" @click="loadChengmengRemoteConfig">
+                {{ chengmengRemoteLoading ? '加载中…' : '刷新' }}
+              </button>
+            </div>
+            <p v-if="!cfgForm.api_key?.trim() || cfgForm.api_key === '********'" class="field-hint">
+              填写 API Key 后将自动拉取可用模型；各模型积分可在「积分」页单独配置。
+            </p>
+            <p v-else-if="chengmengRemoteError" class="aistarslab-remote-error">{{ chengmengRemoteError }}</p>
+            <p v-else-if="chengmengRemoteLoading && !chengmengRemoteModels.length" class="field-hint dim">正在拉取模型列表…</p>
+            <div v-else-if="chengmengRemoteModels.length" class="aistarslab-remote-body">
+              <p v-if="chengmengRemoteMeta" class="field-hint dim">{{ chengmengRemoteMeta }}</p>
+              <ul class="aistarslab-remote-models">
+                <li v-for="model in chengmengRemoteModels" :key="model.id">
+                  <code>{{ model.model_id }}</code>
+                  <span>{{ model.label }}</span>
+                  <span class="dim">group {{ model.group_id }}</span>
+                  <span class="dim">{{ formatChengmengModelPrice(model) }}</span>
+                  <span class="dim mono">{{ model.credit_action }}</span>
+                  <span v-if="model.default_option" class="tag">默认</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+          <div v-if="showAistarslabRemotePanel" class="aistarslab-remote-panel">
+            <div class="aistarslab-remote-head">
+              <span class="aistarslab-remote-title">可用线路与模型</span>
+              <button type="button" class="btn btn-ghost btn-sm" :disabled="aistarslabRemoteLoading" @click="loadAistarslabRemoteConfig">
+                {{ aistarslabRemoteLoading ? '加载中…' : '刷新' }}
+              </button>
+            </div>
+            <p v-if="!cfgForm.api_key?.trim() || cfgForm.api_key === '********'" class="field-hint">
+              填写 API Key 后将自动拉取可用模型。
+            </p>
+            <p v-else-if="aistarslabRemoteError" class="aistarslab-remote-error">{{ aistarslabRemoteError }}</p>
+            <p v-else-if="aistarslabRemoteLoading && !aistarslabRemoteChannels.length" class="field-hint dim">正在拉取模型列表…</p>
+            <div v-else-if="aistarslabRemoteChannels.length" class="aistarslab-remote-body">
+              <p v-if="aistarslabRemoteMeta" class="field-hint dim">{{ aistarslabRemoteMeta }}</p>
+              <div v-for="channel in aistarslabRemoteChannels" :key="channel.channel" class="aistarslab-remote-channel">
+                <div class="aistarslab-remote-channel-head">
+                  <span class="tag tag-accent">线路 {{ channel.channel }}</span>
+                  <strong>{{ channel.title }}</strong>
+                  <span v-if="channel.default_option" class="tag">推荐</span>
+                </div>
+                <p v-if="channel.description" class="dim aistarslab-remote-desc">{{ channel.description }}</p>
+                <p class="dim aistarslab-remote-meta-line">
+                  {{ channel.seconds_min }}–{{ channel.seconds_max }} 秒 · {{ (channel.aspect_ratios || []).join(' / ') }}
+                </p>
+                <ul class="aistarslab-remote-models">
+                  <li v-for="model in channel.models" :key="`${channel.channel}-${model.model}`">
+                    <code>{{ model.model }}</code>
+                    <span>{{ model.label }}</span>
+                    <span class="dim">{{ formatAistarslabModelPrice(model, channel) }}</span>
+                    <code v-if="model.credit_action" class="dim">{{ model.credit_action }}</code>
+                    <span v-if="model.default_option" class="tag">默认</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </div>
         </label>
-        <label class="field"><span class="field-label">Base URL</span><input v-model="cfgForm.base_url" class="input" placeholder="https://..." /></label>
-        <div class="endpoint-hint">
+        <label v-if="cfgForm.provider !== 'aistarslab'" class="field"><span class="field-label">Base URL</span><input v-model="cfgForm.base_url" class="input" placeholder="https://..." /></label>
+        <p v-else class="field-hint dim">Base URL 由系统自动配置，无需填写。</p>
+        <div v-if="cfgForm.provider !== 'aistarslab'" class="endpoint-hint">
           <span class="dim">实际端点前缀：</span>
           <span class="mono">{{ endpointHint }}</span>
         </div>
@@ -580,6 +674,7 @@ import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
 import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
+import { VIDEO_CHANNEL_ADMIN_GUIDE } from '~/constants/video-channels.js'
 
 const { isAdmin, user } = useAuth()
 const { activeTeam, activeTeamId, canManageTeam, refreshTeams, selectTeam } = useTeam()
@@ -625,13 +720,14 @@ const cfgTestResult = ref(null)
 const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0 })
 const huobaoForm = reactive({ apiKey: '' })
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
-const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'geeknow', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
+const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
 const providerLabels = {
   ali: '阿里百炼（北京）',
   'ali-intl': '阿里百炼（新加坡）',
   'ali-us': '阿里百炼（美国）',
   chatfire: 'ChatFire',
   chengmeng: '橙盟 Seedance 2.0 9图过人脸',
+  aistarslab: 'Seedance 2.0 VIP',
   geeknow: 'GeekNow (NewAPI)',
   gemini: 'Gemini',
   minimax: 'MiniMax',
@@ -704,12 +800,30 @@ const providerPresets = {
     chengmeng: {
       label: '橙盟 Seedance 2.0 9图过人脸',
       baseUrl: 'https://api.chengmeng.site',
-      models: ['31', '15'],
-      hint: 'Base URL 填 https://api.chengmeng.site；默认 model_id=31（Fast）/ group_id=15；视频生成页可选 32（Seedance 2.0 标准版）',
+      models: ['53', '15'],
+      hint: 'Base URL 填 https://api.chengmeng.site；默认 model_id=53（Fast）/ group_id=15；视频生成页可选 32（Seedance 2.0 标准版）',
       defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
+    },
+    aistarslab: {
+      label: 'Seedance 2.0 VIP',
+      baseUrl: 'https://api.video.aistarslab.com',
+      models: ['seedance-2.0-720p-fast'],
+      hint: 'Seedance 2.0 VIP 视频通道；默认线路 12 / 模型 seedance-2.0-720p-fast',
+      defaultApiKey: 'sk_peb7RV-OP3MTALcV6sTzJewOEfTWiec2nBYf0HkRb80',
     },
     vidu: { label: 'Vidu 推荐', baseUrl: 'https://api.vidu.com', models: ['viduq3-turbo'] },
     ali: { label: '阿里推荐', baseUrl: 'https://dashscope.aliyuncs.com', models: ['wan2.6-i2v-flash'] },
+    geeknow: {
+      label: 'GeekNow Grok 视频',
+      baseUrl: 'https://geek.closeai.icu',
+      models: [
+        'grok-video-3-pro',
+        'grok-video-3-max',
+        'grok-video-1.5-pro',
+        'grok-video-1.5-max',
+      ],
+      hint: '与 GeekNow 图片共用 Base URL / API Key；Pro 固定 10s，Max 固定 15s；画幅 2:3 / 3:2 / 1:1',
+    },
   },
   audio: {
     minimax: { label: '红果音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
@@ -738,10 +852,12 @@ const endpointPrefixes = {
   'ali-us': '/compatible-mode/v1',
   vidu: '/ent/v2',
   chengmeng: '/api',
+  aistarslab: '/openapi',
 }
 
 const endpointHint = computed(() => {
   const provider = cfgForm.provider
+  if (provider === 'aistarslab') return 'OpenAPI 端点由系统自动配置'
   const base = (cfgForm.base_url || 'https://...').replace(/\/+$/, '')
   if (!provider) return '选择服务商后显示推荐端点前缀'
   if (provider.startsWith('ali') && base.includes('/compatible-mode')) {
@@ -760,6 +876,185 @@ const chengmengProviderHint = computed(() => {
   if (cfgForm.provider !== 'chengmeng' || cfgForm.service_type !== 'video') return ''
   return providerPresets.video.chengmeng?.hint || ''
 })
+
+const aistarslabProviderHint = computed(() => {
+  if (cfgForm.provider !== 'aistarslab' || cfgForm.service_type !== 'video') return ''
+  return providerPresets.video.aistarslab?.hint || ''
+})
+
+const showChengmengRemotePanel = computed(() =>
+  cfgDialog.value && cfgForm.provider === 'chengmeng' && cfgForm.service_type === 'video',
+)
+
+const showAistarslabRemotePanel = computed(() =>
+  cfgDialog.value && cfgForm.provider === 'aistarslab' && cfgForm.service_type === 'video',
+)
+
+const chengmengRemoteLoading = ref(false)
+const chengmengRemoteError = ref('')
+const chengmengRemoteModels = ref([])
+const chengmengRemoteMeta = ref('')
+let chengmengRemoteTimer = null
+
+const aistarslabRemoteLoading = ref(false)
+const aistarslabRemoteError = ref('')
+const aistarslabRemoteChannels = ref([])
+const aistarslabRemoteMeta = ref('')
+let aistarslabRemoteTimer = null
+
+function formatChengmengModelPrice(model) {
+  if (model.credit_cost_flat != null) return `${model.credit_cost_flat} 积分/条（用户扣费）`
+  if (model.base_price_yuan != null) return `上游约 ${model.base_price_yuan} 元/条`
+  return '价格待配置'
+}
+
+async function loadChengmengRemoteConfig() {
+  if (!showChengmengRemotePanel.value) return
+  const apiKey = String(cfgForm.api_key || '').trim()
+  const baseUrl = String(cfgForm.base_url || '').trim()
+  if (!apiKey || apiKey === '********') {
+    chengmengRemoteModels.value = []
+    chengmengRemoteMeta.value = ''
+    chengmengRemoteError.value = ''
+    return
+  }
+  chengmengRemoteLoading.value = true
+  chengmengRemoteError.value = ''
+  try {
+    const res = await aiConfigAPI.chengmengConfig({
+      api_key: apiKey,
+      base_url: baseUrl || undefined,
+    })
+    chengmengRemoteModels.value = res?.models || []
+    chengmengRemoteMeta.value = `共 ${chengmengRemoteModels.value.length} 个模型；积分定价项已同步到「积分」页，可按 model_id 单独调价`
+    if (Array.isArray(res?.model_ids) && res.model_ids.length) {
+      const defaultModel = chengmengRemoteModels.value.find(item => item.default_option) || chengmengRemoteModels.value[0]
+      cfgForm.modelStr = defaultModel
+        ? `${defaultModel.model_id}, ${defaultModel.group_id}`
+        : res.model_ids.join(', ')
+    }
+  } catch (err) {
+    chengmengRemoteModels.value = []
+    chengmengRemoteMeta.value = ''
+    chengmengRemoteError.value = err?.message || '拉取模型列表失败'
+  } finally {
+    chengmengRemoteLoading.value = false
+  }
+}
+
+function scheduleChengmengRemoteConfig() {
+  if (chengmengRemoteTimer) clearTimeout(chengmengRemoteTimer)
+  chengmengRemoteTimer = setTimeout(() => {
+    chengmengRemoteTimer = null
+    void loadChengmengRemoteConfig()
+  }, 500)
+}
+
+function resetChengmengRemoteConfig() {
+  if (chengmengRemoteTimer) {
+    clearTimeout(chengmengRemoteTimer)
+    chengmengRemoteTimer = null
+  }
+  chengmengRemoteLoading.value = false
+  chengmengRemoteError.value = ''
+  chengmengRemoteModels.value = []
+  chengmengRemoteMeta.value = ''
+}
+
+function formatAistarslabModelPrice(model, channel) {
+  if (model.credit_cost) {
+    const upstream = model.upstream_credit_cost
+      ? `，上游约 ${model.upstream_credit_cost}`
+      : ''
+    return `用户 ${model.credit_cost} 积分/条${upstream}`
+  }
+  if (model.fixed_total_credits) return `上游 ${model.fixed_total_credits} 积分/条`
+  if (model.credits_per_second) {
+    const sec = channel?.seconds_max || 15
+    return `上游 ${model.credits_per_second} 积分/秒（约 ${Math.round(model.credits_per_second * sec)} 积分/${sec}秒）`
+  }
+  return '价格以官网为准'
+}
+
+async function loadAistarslabRemoteConfig() {
+  if (!showAistarslabRemotePanel.value) return
+  const apiKey = String(cfgForm.api_key || '').trim()
+  const baseUrl = String(cfgForm.base_url || '').trim()
+  if (!apiKey || apiKey === '********') {
+    aistarslabRemoteChannels.value = []
+    aistarslabRemoteMeta.value = ''
+    aistarslabRemoteError.value = ''
+    return
+  }
+  aistarslabRemoteLoading.value = true
+  aistarslabRemoteError.value = ''
+  try {
+    const res = await aiConfigAPI.aistarslabConfig({
+      api_key: apiKey,
+      base_url: baseUrl || undefined,
+    })
+    const pricingByKey = Object.fromEntries(
+      (res?.models || []).map(item => [`${item.channel}:${item.model}`, item]),
+    )
+    aistarslabRemoteChannels.value = (res?.channels || []).map(channel => ({
+      ...channel,
+      models: (channel.models || []).map(model => ({
+        ...model,
+        ...(pricingByKey[`${channel.channel}:${model.model}`] || {}),
+      })),
+    }))
+    const mult = Number(res?.reference_video_multiplier)
+    const channelCount = aistarslabRemoteChannels.value.length
+    const modelCount = (res?.models || []).length
+    aistarslabRemoteMeta.value = Number.isFinite(mult) && mult > 1
+      ? `共 ${channelCount} 条线路、${modelCount} 个模型；参考视频消耗 ×${mult}；积分定价项已同步到「积分」页（默认用户价=上游×1.5，可按线路×模型单独调价）`
+      : `共 ${channelCount} 条线路、${modelCount} 个模型；积分定价项已同步到「积分」页（默认用户价=上游×1.5）`
+    if (Array.isArray(res?.model_ids) && res.model_ids.length) {
+      cfgForm.modelStr = res.model_ids.join(', ')
+    }
+  } catch (err) {
+    aistarslabRemoteChannels.value = []
+    aistarslabRemoteMeta.value = ''
+    aistarslabRemoteError.value = err?.message || '拉取模型列表失败'
+  } finally {
+    aistarslabRemoteLoading.value = false
+  }
+}
+
+function scheduleAistarslabRemoteConfig() {
+  if (aistarslabRemoteTimer) clearTimeout(aistarslabRemoteTimer)
+  aistarslabRemoteTimer = setTimeout(() => {
+    aistarslabRemoteTimer = null
+    void loadAistarslabRemoteConfig()
+  }, 500)
+}
+
+function resetAistarslabRemoteConfig() {
+  if (aistarslabRemoteTimer) {
+    clearTimeout(aistarslabRemoteTimer)
+    aistarslabRemoteTimer = null
+  }
+  aistarslabRemoteLoading.value = false
+  aistarslabRemoteError.value = ''
+  aistarslabRemoteChannels.value = []
+  aistarslabRemoteMeta.value = ''
+}
+
+watch(
+  () => [cfgDialog.value, cfgForm.provider, cfgForm.service_type, cfgForm.api_key, cfgForm.base_url],
+  () => {
+    if (!showChengmengRemotePanel.value) {
+      resetChengmengRemoteConfig()
+    } else {
+      scheduleChengmengRemoteConfig()
+    }
+    if (!showAistarslabRemotePanel.value) {
+      resetAistarslabRemoteConfig()
+      return
+    }
+    scheduleAistarslabRemoteConfig()
+  },
+)
 
 const aliTextModelHint = {
   summary: '常用：qwen-plus（均衡推荐）、qwen-max（更强）、qwen-flash / qwen-turbo（更快更省）。Agent 工具调用建议 qwen-plus 或 qwen-max；列表第一个为默认模型。',
@@ -825,9 +1120,19 @@ const modelFieldHints = {
       docUrl: 'https://www.volcengine.com/docs/82379/1520757?lang=zh',
     },
     chengmeng: {
-      summary: '填写 model_id 与 group_id（默认 31, 15）。15 秒/条，8 元/条 = 800 积分/条；prompt 自动补 @图片1；参考图需公网 URL',
+      summary: '填写 model_id 与 group_id（默认 53, 15）。15 秒/条，8 元/条 = 800 积分/条；prompt 自动补 @图片1；参考图需公网 URL',
       docLabel: '橙盟 Seedance API 文档',
       docUrl: 'https://chengmeng.site/docu',
+    },
+    aistarslab: {
+      summary: '模型 ID 见上方 API Key 区域实时列表；逗号分隔，第一个为默认。prompt 用 @图片N @视频N @音频N',
+      docLabel: '接口文档',
+      docUrl: 'https://my.feishu.cn/wiki/JP5HwMT3Vi67HDkpxgbcgQWVnYd',
+    },
+    geeknow: {
+      summary: 'Grok 视频模型：grok-video-3-pro / grok-video-3-max / grok-video-1.5-pro / grok-video-1.5-max。可与图片通道共用 Base URL 与 Key。',
+      docLabel: 'GeekNow Grok 视频 API',
+      docUrl: 'https://docs.geeknow.top/api-reference/videos/grok/overview',
     },
     ali: {
       summary: '常用：wan2.6-i2v-flash 等图生视频模型；需在百炼开通对应模型。',
@@ -855,7 +1160,7 @@ const modelFieldHint = computed(() => {
 
 const modelInputPlaceholder = computed(() => {
   const preset = providerPresets[cfgForm.service_type]?.[cfgForm.provider]
-  if (cfgForm.provider === 'chengmeng') return '31, 15（model_id, group_id）'
+  if (cfgForm.provider === 'chengmeng') return '53, 15（model_id, group_id）'
   if (preset?.models?.length) return preset.models.join(', ')
   return 'model-name'
 })
@@ -863,6 +1168,20 @@ const modelInputPlaceholder = computed(() => {
 function byType(t) { return cfgs.value.filter(c => c.service_type === t) }
 function countActive(t) { return byType(t).filter(c => c.is_active).length }
 function fmtModel(m) { return Array.isArray(m) ? m.join(', ') : m || '—' }
+function providerLabel(provider) {
+  return providerLabels[provider] || provider
+}
+function displayBaseUrl(provider, baseUrl) {
+  if (provider === 'aistarslab') return '系统默认（自动配置）'
+  return baseUrl || '未设置 Base URL'
+}
+function ensureAistarslabBaseUrl() {
+  if (cfgForm.provider !== 'aistarslab') return
+  const preset = providerPresets.video?.aistarslab
+  if (!String(cfgForm.base_url || '').trim() && preset?.baseUrl) {
+    cfgForm.base_url = preset.baseUrl
+  }
+}
 function presetsByType(type) {
   const group = providerPresets[type] || {}
   return Object.entries(group).map(([provider, preset]) => ({ provider, ...preset }))
@@ -875,6 +1194,8 @@ function applyProviderPreset(type, provider) {
   cfgForm.modelStr = preset.models.join(', ')
   cfgForm.name = `${preset.label}-${serviceMeta[type].label}`
   if (preset.defaultApiKey) cfgForm.api_key = preset.defaultApiKey
+  if (provider === 'aistarslab') scheduleAistarslabRemoteConfig()
+  if (provider === 'chengmeng') scheduleChengmengRemoteConfig()
 }
 
 async function loadCfgs() { try { cfgs.value = await aiConfigAPI.list() } catch (e) { toast.error(e.message) } }
@@ -915,6 +1236,7 @@ async function testCfgPayload(payload) {
   }
 }
 async function testDraftCfg() {
+  ensureAistarslabBaseUrl()
   await testCfgPayload({
     service_type: cfgForm.service_type,
     provider: cfgForm.provider,
@@ -935,6 +1257,7 @@ async function testExistingCfg(c) {
 }
 async function saveCfg() {
   if (!cfgForm.provider) { toast.warning('选择服务商'); return }
+  ensureAistarslabBaseUrl()
   const models = cfgForm.modelStr.split(',').map(s => s.trim()).filter(Boolean)
   try {
     if (cfgEditId.value) await aiConfigAPI.update(cfgEditId.value, { name: cfgForm.name, provider: cfgForm.provider, api_key: cfgForm.api_key, base_url: cfgForm.base_url, model: models, priority: cfgForm.priority })
@@ -1237,6 +1560,7 @@ async function saveSkill(id) {
 
 // ===== Credits =====
 const creditPricing = ref([])
+const videoChannelGuide = VIDEO_CHANNEL_ADMIN_GUIDE
 const grantForm = reactive({ user_id: null, amount: 1000, summary: '' })
 
 async function loadCreditPricing() {
@@ -1248,8 +1572,21 @@ async function loadCreditPricing() {
   }
 }
 
+const FLAT_VIDEO_PRICING_ACTIONS = new Set([
+  'video.generate.chengmeng',
+  'video.generate.chengmeng_seedance2',
+  'video.generate.grok.1_5_pro',
+  'video.generate.grok.1_5_max',
+  'video.generate.grok.3_pro',
+  'video.generate.grok.3_max',
+  'video.generate.jimeng',
+  'video.generate.aistarslab',
+])
+
 function pricingUnit(action) {
-  if (action === 'video.generate.chengmeng' || action === 'video.generate.chengmeng_seedance2') return '积分/条'
+  if (FLAT_VIDEO_PRICING_ACTIONS.has(action)) return '积分/条'
+  if (/^video\.generate\.chengmeng\.\d+$/.test(String(action || ''))) return '积分/条'
+  if (/^video\.generate\.aistarslab\.\d+\.[a-z0-9-]+$/i.test(String(action || ''))) return '积分/条'
   if (action === 'video.generate' || action === 'video.generate.seedance2' || action === 'video.generate.seedance2_fast') {
     return '积分/秒'
   }
@@ -1508,10 +1845,22 @@ onMounted(() => {
   line-height: 1.5;
 }
 
+.video-channel-guide-table td {
+  vertical-align: top;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .pricing-input-row {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.pricing-cost-input {
+  width: 140px;
+  min-width: 140px;
+  flex-shrink: 0;
 }
 
 .pricing-unit {
@@ -1856,6 +2205,78 @@ onMounted(() => {
 }
 .field-hint a:hover {
   text-decoration: underline;
+}
+
+.aistarslab-remote-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
+
+.aistarslab-remote-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.aistarslab-remote-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.aistarslab-remote-error {
+  margin: 0;
+  font-size: 12px;
+  color: #e57373;
+}
+
+.aistarslab-remote-channel + .aistarslab-remote-channel {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.aistarslab-remote-channel-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.aistarslab-remote-desc,
+.aistarslab-remote-meta-line {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aistarslab-remote-models {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
+
+.aistarslab-remote-models li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.aistarslab-remote-models code {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--bg-2);
 }
 
 @media (max-width: 900px) {

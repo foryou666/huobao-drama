@@ -3,7 +3,7 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">视频生成</h1>
-        <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；参考图上传默认入库，可从参考图库复用</p>
+        <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；支持参考图/视频/音频（@图片N @素材N @音频N），素材需公网 URL</p>
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -214,6 +214,8 @@ import { dramaAPI, videoAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
+import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
+import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
 
 const route = useRoute()
 
@@ -232,12 +234,13 @@ const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
 const chengmengModels = ref([])
-const selectedChengmengModel = ref('31')
+const selectedChengmengModel = ref('53')
 let pollTimer = null
 
 const CHENGMENG_MODEL_LABELS = {
-  31: 'Seedance 2.0 Fast',
+  53: 'Seedance 2.0 Fast',
   32: 'Seedance 2.0',
+  31: 'Seedance 2.0 Fast',
 }
 
 const chengmengConfigId = computed(() => {
@@ -259,7 +262,10 @@ const selectedCreditHint = computed(() => {
 
 function modelLabel(model) {
   const key = String(model || '').trim()
-  return CHENGMENG_MODEL_LABELS[key] || key || '未知模型'
+  return chengmengModels.value.find(item => item.id === key)?.label
+    || CHENGMENG_MODEL_LABELS[key]
+    || key
+    || '未知模型'
 }
 
 const statusTabs = [
@@ -290,7 +296,7 @@ function normalizeItem(row) {
     model: row.model,
     prompt: row.prompt || '',
     status: row.status || 'pending',
-    error_msg: row.error_msg || row.errorMsg || '',
+    error_msg: sanitizeUserFacingProviderError(row.error_msg || row.errorMsg || ''),
     duration: row.duration,
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
@@ -433,6 +439,7 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
+    provider: 'chengmeng',
   }
 }
 
@@ -496,9 +503,17 @@ function setStatus(status) {
 async function loadChengmengOptions() {
   try {
     const res = await videoAPI.chengmengOptions()
-    chengmengModels.value = res?.models || []
-    if (chengmengModels.value.length && !chengmengModels.value.some(item => item.id === selectedChengmengModel.value)) {
-      selectedChengmengModel.value = chengmengModels.value[0].id
+    chengmengModels.value = (res?.models || []).map(item => ({
+      ...item,
+      credit_cost_flat: item.credit_cost_flat ?? item.credit_cost ?? null,
+    }))
+    if (chengmengModels.value.length) {
+      const defaultModel = res?.default_model
+        || chengmengModels.value.find(item => item.default_option)?.id
+        || chengmengModels.value[0]?.id
+      if (defaultModel && !chengmengModels.value.some(item => item.id === selectedChengmengModel.value)) {
+        selectedChengmengModel.value = defaultModel
+      }
     }
   } catch {
     chengmengModels.value = []
@@ -530,7 +545,7 @@ async function onGenerate(payload) {
     await reload()
     void pollGeneration(generation?.id)
   } catch (err) {
-    toast.error(err?.message || '生成失败')
+    toast.error(formatVideoGenerationError(err?.message || '生成失败'))
   } finally {
     const elapsed = Date.now() - startedAt
     setTimeout(() => {
@@ -551,7 +566,7 @@ async function pollGeneration(generationId) {
         return
       }
       if (res?.status === 'failed') {
-        toast.error(res?.error_msg || res?.errorMsg || '视频生成失败')
+        toast.error(formatVideoGenerationError(res?.error_msg || res?.errorMsg || '视频生成失败'))
         return
       }
     } catch {

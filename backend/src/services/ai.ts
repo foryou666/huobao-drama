@@ -3,6 +3,7 @@
  */
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
+import { buildJimengVirtualConfig } from './jimeng-web-video.js'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
 
@@ -137,6 +138,9 @@ export function resolveVideoTaskConfig(record: {
     if (stored) return stored
   }
   const provider = String(record.provider || '').trim()
+  if (provider === 'jimeng_web') {
+    return buildJimengVirtualConfig()
+  }
   if (!provider) return getActiveConfig('video')
   const rows = db.select().from(schema.aiServiceConfigs)
     .where(eq(schema.aiServiceConfigs.serviceType, 'video'))

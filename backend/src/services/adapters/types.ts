@@ -100,6 +100,7 @@ export interface VideoGenerationRecord {
   referencePayload?: string | null
   duration?: number | null
   aspectRatio?: string | null
+  providerChannel?: string | null
   // ... 其他字段
 }
 

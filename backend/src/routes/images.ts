@@ -9,12 +9,14 @@ import { logActivity } from '../services/activity.js'
 import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { resolveActiveTeamId } from '../services/team-access.js'
+import { attachGeneratedImageToEntity } from '../services/image-entity-attach.js'
 import { listImageLedger } from '../services/image-ledger.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
 import { getImageSizeForAspectRatio } from '../utils/image-size.js'
 import { getMaxImageReferenceCount } from '../utils/image-reference-limits.js'
 import { supportsImageReference, imageReferenceSupportHint } from '../utils/image-reference-support.js'
+import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 
 const app = new Hono()
 
@@ -38,6 +40,7 @@ function formatImageRecord(row: typeof schema.imageGenerations.$inferSelect | nu
   const rawImage = row.localPath || row.imageUrl
   return toSnakeCase({
     ...row,
+    errorMsg: sanitizeUserFacingProviderError(row.errorMsg),
     display_image_url: resolveDisplayMediaUrl(rawImage),
   })
 }
@@ -144,7 +147,7 @@ app.post('/', async (c) => {
       metadata: { reason: err.message },
     })
     logTaskError('ImageAPI', 'generate', { error: err.message })
-    return badRequest(c, err.message)
+    return badRequest(c, sanitizeUserFacingProviderError(err.message))
   }
 })
 
@@ -207,6 +210,66 @@ app.get('/', async (c) => {
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
 
   return success(c, rows.map(row => formatImageRecord(row)))
+})
+
+// POST /images/:id/attach — 将已生成图片添加到角色/场景/道具分组
+app.post('/:id/attach', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return badRequest(c, 'invalid id')
+
+  const body = await c.req.json()
+  const entityType = String(body.entity_type || body.entityType || '').trim() as 'character' | 'scene' | 'prop'
+  if (!['character', 'scene', 'prop'].includes(entityType)) {
+    return badRequest(c, 'entity_type 须为 character / scene / prop')
+  }
+
+  const entityIdRaw = body.entity_id ?? body.entityId
+  const entityId = entityIdRaw != null && String(entityIdRaw).trim() !== ''
+    ? Number(entityIdRaw)
+    : undefined
+  const dramaIdRaw = body.drama_id ?? body.dramaId
+  const dramaId = dramaIdRaw != null && String(dramaIdRaw).trim() !== ''
+    ? Number(dramaIdRaw)
+    : undefined
+  const createEntity = body.create_entity ?? body.createEntity ?? null
+
+  if ((!entityId || !Number.isFinite(entityId) || entityId <= 0) && !createEntity) {
+    return badRequest(c, 'entity_id 或 create_entity 必填')
+  }
+
+  try {
+    const user = getAuthUser(c)
+    const activeTeamId = resolveActiveTeamId(c, user)
+    const result = attachGeneratedImageToEntity({
+      generationId: id,
+      entityType,
+      entityId,
+      dramaId,
+      createEntity,
+      groupId: body.group_id ?? body.groupId,
+      groupLabel: body.group_label ?? body.groupLabel,
+      setAsDefault: body.set_as_default ?? body.setAsDefault,
+      user,
+      activeTeamId,
+    })
+
+    const typeLabel = entityType === 'character' ? '角色' : entityType === 'scene' ? '场景' : '道具'
+    logActivity(user, {
+      action: 'image.attach_entity',
+      summary: `图片 #${id} ${result.created_entity ? '新建并添加至' : '添加到'}${typeLabel}「${result.entity_label}」· ${result.group_label}`,
+      resourceType: 'image_generation',
+      resourceId: id,
+      metadata: {
+        entity_type: entityType,
+        entity_id: result.entity_id,
+        group_id: result.group_id,
+        created_entity: result.created_entity,
+      },
+    })
+    return success(c, result)
+  } catch (err: any) {
+    return badRequest(c, err.message || '添加失败')
+  }
 })
 
 // GET /images/:id

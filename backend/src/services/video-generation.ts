@@ -5,12 +5,17 @@ import { now } from '../utils/response.js'
 import { downloadFile, readFileAsDataUrl, readImageAsCompressedDataUrl } from '../utils/storage.js'
 import { getDramaImageAspectRatio } from '../utils/image-size.js'
 import { getVideoAdapter } from './adapters/registry'
-import type { AIConfig } from './adapters/types'
+import type { AIConfig, ProviderRequest } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
 import type { VideoContentRef } from '../utils/seedance-content.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/video-content-refs.js'
 import { isChengmengProvider, isChengmengBalanceError, CHENGMENG_VIDEO_MODELS } from '../constants/chengmeng.js'
+import { isAistarslabProvider } from '../constants/aistarslab.js'
+import { mapGrokAspectRatio } from '../constants/geeknow-grok.js'
+import { normalizeJimengAspectRatio } from '../constants/jimeng-web.js'
+import { processJimengWebVideoGeneration } from './jimeng-web-video.js'
+import { buildJimengVirtualConfig } from './jimeng-web-video.js'
 import {
   normalizeChengmengContentRefs,
   normalizeChengmengReferenceUrls,
@@ -19,27 +24,57 @@ import {
   assertChengmengPromptLength,
   resolveChengmengPromptMediaCounts,
 } from '../utils/chengmeng-content.js'
+import {
+  normalizeAistarslabAspectRatio,
+  normalizeAistarslabContentRefs,
+  normalizeAistarslabReferenceUrls,
+  resolveAistarslabMediaUrl,
+} from '../utils/aistarslab-content.js'
 import { failVideoGeneration } from '../utils/generation-failure.js'
 import { normalizeSeedanceRatio } from '../utils/video-aspect-ratio.js'
+import { isSeedance2Model } from '../constants/seedance.js'
+import { ensureApiTrimmedAudioPath } from '../utils/audio-trim.js'
+import { extractVolcengineApiErrorMessage, formatVolcengineVideoError } from '../utils/volcengine-video-errors.js'
+import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
+
+/** 防止同一本地任务重复向上游 POST 创建（重启/并发/误调） */
+const activeVideoSubmissions = new Set<number>()
+const activeVideoPolls = new Set<number>()
+
+function resumePollForRecord(
+  id: number,
+  config: AIConfig,
+  record: typeof schema.videoGenerations.$inferSelect,
+) {
+  if (adapterIsVidu(config.provider)) return
+  pollVideoTask(id, config, record.taskId!, record.storyboardId)
+    .catch(err => logTaskError('VideoTask', 'resume-poll', { id, error: err.message }))
+}
+
+function adapterIsVidu(provider?: string | null) {
+  return String(provider || '').trim().toLowerCase() === 'vidu'
+}
 
 function formatVideoProviderError(status: number, errText: string, provider?: string): string {
-  let message = ''
-  try {
-    const parsed = JSON.parse(errText)
-    message = String(parsed?.error?.message || parsed?.message || '').trim()
-    const code = String(parsed?.error?.code || parsed?.code || '').trim()
-    if (status === 401 || code === 'AuthenticationError') {
-      if (provider === 'volcengine') {
-        return '火山方舟 API Key 无效或未配置，请在「设置 → AI 配置」中更新「火山方舟 Seedance-视频」的 API Key'
-      }
-      return message || 'API 认证失败，请检查服务配置中的 API Key'
+  const message = extractVolcengineApiErrorMessage(errText)
+  const code = (() => {
+    try {
+      const parsed = JSON.parse(errText)
+      return String(parsed?.error?.code || parsed?.code || '').trim()
+    } catch {
+      return ''
     }
-    if (message) return message
-  } catch {
-    // ignore JSON parse errors
+  })()
+
+  if (status === 401 || code === 'AuthenticationError') {
+    return formatVolcengineVideoError(message || 'API 认证失败', provider)
   }
+  if (message) return formatVolcengineVideoError(message, provider)
+
   const snippet = errText.replace(/\s+/g, ' ').trim().slice(0, 240)
-  return snippet ? `API error ${status}: ${snippet}` : `API error ${status}`
+  return sanitizeUserFacingProviderError(
+    snippet ? `API error ${status}: ${snippet}` : `API error ${status}`,
+  )
 }
 
 interface GenerateVideoParams {
@@ -56,15 +91,19 @@ interface GenerateVideoParams {
   duration?: number
   aspectRatio?: string
   configId?: number
+  provider?: string
+  aistarslabChannel?: string
   creditTransactionId?: number
   userId?: number
 }
 
 export async function generateVideo(params: GenerateVideoParams): Promise<number> {
   const ts = now()
-  const config = params.configId
-    ? getConfigById(params.configId, { includeInactive: true })
-    : getActiveConfig('video')
+  const config = params.provider === 'jimeng_web'
+    ? buildJimengVirtualConfig(params.model)
+    : params.configId
+      ? getConfigById(params.configId, { includeInactive: true })
+      : getActiveConfig('video')
   if (!config) throw new Error('No video AI config available')
   const configId = config.id ?? params.configId ?? null
 
@@ -88,15 +127,26 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const hasReferenceMedia = !!(params.contentRefs?.length)
     || !!(params.referenceImageUrls?.length)
     || !!(params.imageUrl || params.firstFrameUrl || params.lastFrameUrl)
-  const defaultAspect = params.dramaId ? getDramaImageAspectRatio(params.dramaId) : '16:9'
+  const defaultAspect = params.dramaId
+    ? getDramaImageAspectRatio(params.dramaId)
+    : (isAistarslabProvider(config.provider) ? '9:16' : '16:9')
   const rawAspect = params.aspectRatio || defaultAspect
   const useChengmeng = isChengmengProvider(config.provider)
+  const useAistarslab = isAistarslabProvider(config.provider)
+  const useGeeknowGrok = config.provider === 'geeknow'
+  const useJimengWeb = config.provider === 'jimeng_web'
   const storedModel = useChengmeng
     ? (params.model || CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST)
     : (params.model || config.model)
   const aspectRatio = useChengmeng
     ? normalizeChengmengAspectRatio(rawAspect, defaultAspect)
-    : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
+    : useAistarslab
+      ? normalizeAistarslabAspectRatio(rawAspect, defaultAspect)
+      : useGeeknowGrok
+      ? mapGrokAspectRatio(rawAspect)
+      : useJimengWeb
+        ? normalizeJimengAspectRatio(rawAspect, defaultAspect)
+        : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
 
   if (useChengmeng) {
     const { imageCount, videoCount, audioCount } = resolveChengmengPromptMediaCounts({
@@ -125,6 +175,7 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     referencePayload: params.contentRefs?.length ? JSON.stringify(params.contentRefs) : null,
     duration: params.duration || 15,
     aspectRatio,
+    style: params.aistarslabChannel || null,
     creditTransactionId: params.creditTransactionId ?? null,
     configId,
     userId: params.userId ?? null,
@@ -159,12 +210,38 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
 }
 
 async function processVideoGeneration(id: number, config: AIConfig, options?: { allowChengmengFallback?: boolean }) {
+  if (config.provider === 'jimeng_web') {
+    return processJimengWebVideoGeneration(id)
+  }
+
   const adapter = getVideoAdapter(config.provider)
 
   try {
     const rows = db.select().from(schema.videoGenerations).where(eq(schema.videoGenerations.id, id)).all()
     const record = rows[0]
     if (!record) return
+
+    if (record.status === 'completed' || record.status === 'failed') {
+      logTaskWarn('VideoTask', 'submit-skipped', { id, reason: 'terminal status', status: record.status })
+      return
+    }
+
+    if (record.taskId) {
+      logTaskWarn('VideoTask', 'submit-skipped', {
+        id,
+        reason: 'task_id already set — poll only, never resubmit',
+        taskId: record.taskId,
+      })
+      resumePollForRecord(id, config, record)
+      return
+    }
+
+    if (activeVideoSubmissions.has(id)) {
+      logTaskWarn('VideoTask', 'submit-skipped', { id, reason: 'submission already in flight' })
+      return
+    }
+    activeVideoSubmissions.add(id)
+
     logTaskProgress('VideoTask', 'build-request', {
       id,
       provider: config.provider,
@@ -173,32 +250,69 @@ async function processVideoGeneration(id: number, config: AIConfig, options?: { 
     })
 
     const useChengmeng = isChengmengProvider(config.provider)
-    const resolvedImageUrl = useChengmeng
-      ? await resolveChengmengMediaUrl(record.imageUrl)
-      : await normalizeVideoReferenceUrl(record.imageUrl)
-    const resolvedFirstFrameUrl = useChengmeng
-      ? await resolveChengmengMediaUrl(record.firstFrameUrl)
-      : await normalizeVideoReferenceUrl(record.firstFrameUrl)
-    const resolvedLastFrameUrl = useChengmeng
-      ? await resolveChengmengMediaUrl(record.lastFrameUrl)
-      : await normalizeVideoReferenceUrl(record.lastFrameUrl)
-    const resolvedReferenceImageUrls = useChengmeng
-      ? await normalizeChengmengReferenceUrls(record.referenceImageUrls)
-      : await normalizeVideoReferenceUrls(record.referenceImageUrls)
+    const useAistarslab = isAistarslabProvider(config.provider)
+    const useGeeknowGrok = config.provider === 'geeknow'
+    const dramaId = record.dramaId ?? null
+    const resolvedImageUrl = useChengmeng || useAistarslab
+      ? await resolveChengmengMediaUrl(record.imageUrl, useAistarslab ? dramaId : undefined)
+      : useGeeknowGrok
+        ? normalizeGrokReferencePathSync(record.imageUrl)
+        : await normalizeVideoReferenceUrl(record.imageUrl)
+    const resolvedFirstFrameUrl = useChengmeng || useAistarslab
+      ? await resolveAistarslabMediaUrl(record.firstFrameUrl, useAistarslab ? dramaId : undefined)
+      : useGeeknowGrok
+        ? normalizeGrokReferencePathSync(record.firstFrameUrl)
+        : await normalizeVideoReferenceUrl(record.firstFrameUrl)
+    const resolvedLastFrameUrl = useChengmeng || useAistarslab
+      ? await resolveAistarslabMediaUrl(record.lastFrameUrl, useAistarslab ? dramaId : undefined)
+      : useGeeknowGrok
+        ? normalizeGrokReferencePathSync(record.lastFrameUrl)
+        : await normalizeVideoReferenceUrl(record.lastFrameUrl)
+    const resolvedReferenceImageUrls = useChengmeng || useAistarslab
+      ? await normalizeAistarslabReferenceUrls(record.referenceImageUrls, useAistarslab ? dramaId : undefined)
+      : useGeeknowGrok
+        ? normalizeGrokReferenceUrls(record.referenceImageUrls)
+        : await normalizeVideoReferenceUrls(record.referenceImageUrls)
     const resolvedContentRefs = useChengmeng
       ? await normalizeChengmengContentRefs(record.referencePayload)
-      : await normalizeVideoContentRefs(record.referencePayload)
+      : useAistarslab
+        ? await normalizeAistarslabContentRefs(record.referencePayload, dramaId)
+        : useGeeknowGrok
+          ? normalizeGrokContentRefs(record.referencePayload)
+          : await normalizeVideoContentRefs(record.referencePayload)
 
-    if (useChengmeng) {
+    if (useChengmeng || useAistarslab) {
       const rawRefs = parseVideoContentRefs(record.referencePayload)
-      if (rawRefs.length > 0 && resolvedContentRefs.length === 0) {
+      let rawRefUrls: string[] = []
+      if (record.referenceImageUrls) {
+        try {
+          const parsed = JSON.parse(record.referenceImageUrls)
+          if (Array.isArray(parsed)) rawRefUrls = parsed.map(String).filter(Boolean)
+        } catch { /* ignore */ }
+      }
+      const hasRawRefMedia = rawRefs.length > 0
+        || rawRefUrls.length > 0
+        || !!(record.imageUrl || record.firstFrameUrl || record.lastFrameUrl)
+      const hasResolvedRefMedia = resolvedContentRefs.length > 0
+        || (resolvedReferenceImageUrls?.length ?? 0) > 0
+        || !!(resolvedImageUrl || resolvedFirstFrameUrl || resolvedLastFrameUrl)
+      if (hasRawRefMedia && !hasResolvedRefMedia) {
         throw new Error('参考图无法转为公网 URL，请检查 OSS 配置（backend/.env 中的 OSS_ACCESS_KEY_ID/SECRET）')
+      }
+    } else if (isSeedance2Model(record.model)) {
+      const rawRefs = parseVideoContentRefs(record.referencePayload)
+      const rawAudio = rawRefs.filter(ref => ref.type === 'audio')
+      const resolvedAudio = resolvedContentRefs.filter(ref => ref.type === 'audio')
+      if (rawAudio.length > 0 && resolvedAudio.length === 0) {
+        throw new Error('参考音频无法读取或过长，请确认音色 MP3 存在；系统会自动裁剪至 3 秒，需安装 ffmpeg')
       }
     }
 
-    const referencePayload = useChengmeng
+    const referencePayload = useChengmeng || useAistarslab
       ? JSON.stringify(resolvedContentRefs)
-      : (resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload)
+      : useGeeknowGrok
+        ? (resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload)
+        : (resolvedContentRefs.length ? JSON.stringify(resolvedContentRefs) : record.referencePayload)
 
     // 使用 Adapter 构建请求
     const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
@@ -213,6 +327,7 @@ async function processVideoGeneration(id: number, config: AIConfig, options?: { 
       referencePayload,
       duration: record.duration,
       aspectRatio: record.aspectRatio,
+      providerChannel: record.style,
     })
     logTaskProgress('VideoTask', 'request', {
       id,
@@ -230,10 +345,25 @@ async function processVideoGeneration(id: number, config: AIConfig, options?: { 
       body,
     })
 
+    const [freshBeforePost] = db.select().from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.id, id)).all()
+    if (freshBeforePost?.taskId) {
+      logTaskWarn('VideoTask', 'submit-skipped', {
+        id,
+        reason: 'task_id set before POST (race guard)',
+        taskId: freshBeforePost.taskId,
+      })
+      resumePollForRecord(id, config, freshBeforePost)
+      return
+    }
+
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
     const resp = await fetch(url, {
       method,
-      headers,
-      body: JSON.stringify(body),
+      headers: isFormData
+        ? { Authorization: headers.Authorization || headers.authorization || '' }
+        : headers,
+      body: isFormData ? body : JSON.stringify(body),
     })
 
     if (!resp.ok) {
@@ -291,12 +421,49 @@ async function processVideoGeneration(id: number, config: AIConfig, options?: { 
           .where(eq(schema.videoGenerations.id, id))
           .run()
         promoteChengmengVideoConfig(fallback.id)
+        activeVideoSubmissions.delete(id)
         return processVideoGeneration(id, fallback, { allowChengmengFallback: false })
       }
     }
     logTaskError('VideoTask', 'process', { id, provider: config.provider, error: message })
     failVideoGeneration(id, message)
+  } finally {
+    activeVideoSubmissions.delete(id)
   }
+}
+
+function normalizeGrokReferencePathSync(value: string | null | undefined): string | null {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  if (raw.startsWith('static/') || raw.startsWith('/static/')) {
+    return raw.startsWith('/static/') ? raw.slice(1) : raw
+  }
+  if (raw.startsWith('data:image/')) return raw
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  return raw
+}
+
+function normalizeGrokReferenceUrls(raw: string | null | undefined): string[] {
+  if (!raw?.trim()) return []
+  let refs: string[] = []
+  try {
+    refs = JSON.parse(raw)
+  } catch {
+    refs = []
+  }
+  return Array.from(new Set(
+    refs.map(item => String(item || '').trim()).filter(Boolean),
+  )).map(item => (item.startsWith('/static/') ? item.slice(1) : item))
+}
+
+function normalizeGrokContentRefs(raw: string | null | undefined): VideoContentRef[] {
+  const refs = parseVideoContentRefs(raw)
+  return refs
+    .filter(ref => ref.type === 'image' && ref.url)
+    .map(ref => ({
+      ...ref,
+      url: String(ref.url).trim().replace(/^\/+/, ''),
+    }))
 }
 
 async function normalizeVideoReferenceUrl(value: string | null | undefined): Promise<string | null> {
@@ -340,8 +507,12 @@ async function normalizeVideoContentRefs(raw: string | null | undefined): Promis
         return next ? { ...ref, url: next } : null
       }
       if (type === 'audio') {
-        const next = await normalizeAudioReferenceUrl(url)
-        return next ? { ...ref, url: next } : null
+        let audioPath = url
+        if (url.startsWith('static/') || url.startsWith('/static/')) {
+          audioPath = await ensureApiTrimmedAudioPath(url)
+        }
+        const next = await normalizeAudioReferenceUrl(audioPath)
+        return next ? { ...ref, url: next, role: 'reference_audio' as const } : null
       }
       if (type === 'video') {
         const next = await normalizeVideoMediaReferenceUrl(url)
@@ -394,46 +565,67 @@ async function normalizeVideoReferenceUrls(raw: string | null | undefined): Prom
   return normalized.filter((item): item is string => !!item)
 }
 
+async function fetchAdapterRequest(req: ProviderRequest) {
+  const isFormData = typeof FormData !== 'undefined' && req.body instanceof FormData
+  return fetch(req.url, {
+    method: req.method,
+    headers: isFormData
+      ? { Authorization: req.headers.Authorization || req.headers.authorization || '' }
+      : req.headers,
+    body: isFormData ? req.body : req.body != null ? JSON.stringify(req.body) : undefined,
+  })
+}
+
 async function pollVideoTask(id: number, config: AIConfig, taskId: string, storyboardId?: number | null) {
+  if (activeVideoPolls.has(id)) {
+    logTaskWarn('VideoTask', 'poll-skipped', { id, taskId, reason: 'poll already running' })
+    return
+  }
+  activeVideoPolls.add(id)
+
   const adapter = getVideoAdapter(config.provider)
 
-  for (let i = 0; i < 300; i++) {
-    await new Promise(r => setTimeout(r, 10000))
-    try {
-      const { url, method, headers } = adapter.buildPollRequest(config, taskId)
-      logTaskProgress('VideoTask', 'poll-request', {
-        id,
-        taskId,
-        provider: config.provider,
-        method,
-        url: redactUrl(url),
-        attempt: i + 1,
-      })
-      const resp = await fetch(url, { method, headers })
-      if (!resp.ok) continue
-      const result = await resp.json() as any
+  try {
+    for (let i = 0; i < 300; i++) {
+      await new Promise(r => setTimeout(r, 10000))
+      try {
+        const pollReq = adapter.buildPollRequest(config, taskId)
+        logTaskProgress('VideoTask', 'poll-request', {
+          id,
+          taskId,
+          provider: config.provider,
+          method: pollReq.method,
+          url: redactUrl(pollReq.url),
+          attempt: i + 1,
+        })
+        const resp = await fetchAdapterRequest(pollReq)
+        if (!resp.ok) continue
+        const result = await resp.json() as any
 
-      const pollResp = adapter.parsePollResponse(result)
+        const pollResp = adapter.parsePollResponse(result)
 
-      if (pollResp.status === 'completed' && pollResp.videoUrl) {
-        logTaskSuccess('VideoTask', 'poll-complete', { id, taskId, videoUrl: pollResp.videoUrl })
-        await handleVideoComplete(id, pollResp.videoUrl, null, storyboardId)
-        return
+        if (pollResp.status === 'completed' && pollResp.videoUrl) {
+          logTaskSuccess('VideoTask', 'poll-complete', { id, taskId, videoUrl: pollResp.videoUrl })
+          await handleVideoComplete(id, pollResp.videoUrl, null, storyboardId)
+          return
+        }
+        if (pollResp.status === 'failed') {
+          const errMsg = formatVolcengineVideoError(pollResp.error || 'Video generation failed', config.provider)
+          logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errMsg })
+          failVideoGeneration(id, errMsg)
+          return
+        }
+      } catch (err: any) {
+        if (i === 299) {
+          logTaskError('VideoTask', 'poll-timeout', { id, taskId, error: err.message })
+          failVideoGeneration(id, `Timeout: ${err.message}`)
+          return
+        }
+        logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
       }
-      if (pollResp.status === 'failed') {
-        const errMsg = pollResp.error || 'Video generation failed'
-        logTaskError('VideoTask', 'poll-failed', { id, taskId, error: errMsg })
-        failVideoGeneration(id, errMsg)
-        return
-      }
-    } catch (err: any) {
-      if (i === 299) {
-        logTaskError('VideoTask', 'poll-timeout', { id, taskId, error: err.message })
-        failVideoGeneration(id, `Timeout: ${err.message}`)
-        return
-      }
-      logTaskWarn('VideoTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
     }
+  } finally {
+    activeVideoPolls.delete(id)
   }
 }
 
@@ -510,13 +702,26 @@ export async function refreshVideoFromProvider(id: number): Promise<typeof schem
   const config = resolveVideoTaskConfig(record)
   if (!config) throw new Error('未找到视频服务配置')
 
+  if (config.provider === 'jimeng_web') {
+    if (!record.taskId) throw new Error('该记录无 task_id，无法向即梦查询')
+    const poll = await import('./jimeng-web-video.js').then(m => m.pollJimengVideoOnce(record.taskId!))
+    if (poll.status === 'completed' && poll.videoUrl) {
+      await handleVideoComplete(id, poll.videoUrl, record.duration, record.storyboardId)
+    } else if (poll.status === 'failed') {
+      failVideoGeneration(id, poll.error || '即梦视频生成失败')
+    }
+    const [updated] = db.select().from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.id, id)).all()
+    return updated || null
+  }
+
   const adapter = getVideoAdapter(config.provider)
   if (adapter.provider === 'vidu') {
     throw new Error('Vidu 视频请等待 Webhook 回调')
   }
 
-  const { url, method, headers } = adapter.buildPollRequest(config, record.taskId)
-  const resp = await fetch(url, { method, headers })
+  const pollReq = adapter.buildPollRequest(config, record.taskId)
+  const resp = await fetchAdapterRequest(pollReq)
   if (!resp.ok) throw new Error(`查询任务失败 HTTP ${resp.status}`)
   const result = await resp.json() as any
   const pollResp = adapter.parsePollResponse(result)
@@ -524,7 +729,7 @@ export async function refreshVideoFromProvider(id: number): Promise<typeof schem
   if (pollResp.status === 'completed' && pollResp.videoUrl) {
     await handleVideoComplete(id, pollResp.videoUrl, record.duration, record.storyboardId)
   } else if (pollResp.status === 'failed') {
-    failVideoGeneration(id, pollResp.error || 'Video generation failed')
+    failVideoGeneration(id, formatVolcengineVideoError(pollResp.error || 'Video generation failed', config.provider))
   }
 
   const [updated] = db.select().from(schema.videoGenerations)
@@ -532,14 +737,42 @@ export async function refreshVideoFromProvider(id: number): Promise<typeof schem
   return updated || null
 }
 
-/** 服务重启后恢复 processing 任务的轮询 */
+/** 服务重启后恢复 processing 任务的轮询（绝不重新 POST 创建） */
 export function resumeProcessingVideoTasks() {
   const rows = db.select()
     .from(schema.videoGenerations)
     .where(eq(schema.videoGenerations.status, 'processing'))
     .all()
   for (const row of rows) {
-    if (!row.taskId || !row.provider) continue
+    if (!row.taskId) {
+      logTaskWarn('VideoTask', 'resume-skipped', {
+        id: row.id,
+        provider: row.provider,
+        reason: 'processing without task_id — mark failed to prevent duplicate upstream charge',
+      })
+      failVideoGeneration(
+        row.id,
+        '任务未获得上游 ID（可能服务重启中断）。已停止以免重复扣费，请在前端手动重新提交。',
+      )
+      continue
+    }
+    if (!row.provider) {
+      logTaskWarn('VideoTask', 'resume-skipped', { id: row.id, reason: 'no provider' })
+      continue
+    }
+    if (row.provider === 'jimeng_web') {
+      logTaskProgress('VideoTask', 'resume-poll', {
+        id: row.id,
+        taskId: row.taskId,
+        provider: row.provider,
+      })
+      import('./jimeng-web-video.js').then(m => {
+        m.pollJimengVideoTask(row.id, row.taskId!, row.storyboardId, row.duration).catch(err => {
+          logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
+        })
+      })
+      continue
+    }
     const config = resolveVideoTaskConfig(row)
     if (!config) {
       logTaskWarn('VideoTask', 'resume-skipped', { id: row.id, reason: 'no config' })
@@ -551,8 +784,6 @@ export function resumeProcessingVideoTasks() {
       provider: row.provider,
       configId: row.configId ?? config.id,
     })
-    pollVideoTask(row.id, config, row.taskId, row.storyboardId).catch(err => {
-      logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
-    })
+    resumePollForRecord(row.id, config, row)
   }
 }

@@ -19,6 +19,7 @@ import {
   shouldUseSeedance2Multimodal,
 } from '../../utils/seedance-content.js'
 import { seedanceRatioRequestFields } from '../../utils/video-aspect-ratio.js'
+import { extractVolcengineApiErrorMessage, formatVolcengineVideoError } from '../../utils/volcengine-video-errors.js'
 
 export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   provider = 'volcengine'
@@ -98,14 +99,20 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   parsePollResponse(result: any): VideoPollResponse {
     const status = result.status
     if (status === 'succeeded') {
-      const videoUrl = result.video_url || result.content?.video_url || result.data?.video_url
+      const videoUrl = result.content?.video_url
+        || result.video_url
+        || result.output?.video_url
+        || result.data?.video_url
       return {
         status: 'completed',
         videoUrl,
       }
     }
     if (status === 'failed') {
-      return { status: 'failed', error: result.error || 'Video generation failed' }
+      const raw = extractVolcengineApiErrorMessage(
+        typeof result.error === 'string' ? result.error : JSON.stringify(result.error || result),
+      ) || String(result.error?.message || result.message || 'Video generation failed')
+      return { status: 'failed', error: formatVolcengineVideoError(raw, this.provider) }
     }
     return { status: status || 'processing' }
   }

@@ -54,4 +54,46 @@ app.post('/image', async (c) => {
   })
 })
 
+// POST /upload/video — 视频参考素材：同步 OSS 供 Seedance VIP 等第三方拉取
+app.post('/video', async (c) => {
+  const body = await c.req.parseBody()
+  const file = body['file']
+
+  if (!file || !(file instanceof File)) {
+    return badRequest(c, 'file is required')
+  }
+
+  const mime = String(file.type || '').toLowerCase()
+  const lowerName = String(file.name || '').toLowerCase()
+  const isVideo = mime.startsWith('video/')
+    || lowerName.endsWith('.mp4')
+    || lowerName.endsWith('.mov')
+    || lowerName.endsWith('.webm')
+  if (!isVideo) {
+    return badRequest(c, '仅支持 MP4 / MOV / WebM 视频')
+  }
+
+  const dramaIdRaw = body['drama_id']
+  const dramaId = dramaIdRaw != null && String(dramaIdRaw).trim() !== ''
+    ? Number(dramaIdRaw)
+    : null
+
+  const buffer = await file.arrayBuffer()
+  const path = await saveUploadedFile(buffer, 'uploads', file.name)
+
+  let ossUrl: string | null = null
+  try {
+    ossUrl = await trySyncUploadImageToOss(path, dramaId)
+  } catch (err: any) {
+    console.warn('[upload/video] OSS sync failed:', err?.message || err)
+  }
+
+  return success(c, {
+    url: `/${path}`,
+    path,
+    oss_url: ossUrl,
+    name: file.name.replace(/\.[^.]+$/, '') || '参考视频',
+  })
+})
+
 export default app

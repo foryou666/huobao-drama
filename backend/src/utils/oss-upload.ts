@@ -17,7 +17,7 @@ import { isImageStaticPath } from './thumbnail.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
 import { now } from './response.js'
 import { db, schema } from '../db/index.js'
-import { ossKeyPrefix, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
+import { ossKeyPrefix, projectAssetObjectKey, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
 
 let client: OSS | null = null
 
@@ -189,7 +189,7 @@ async function ensureCompressedOssImage(staticPath: string, objectKey: string): 
  * 兜底：按 static 路径上传 OSS（镜头帧等非角色/场景资源）
  * 角色/场景图应在生成/上传时已同步，此处仅处理未映射资源
  */
-export async function uploadStaticToOss(relativeStaticPath: string): Promise<string> {
+export async function uploadStaticToOss(relativeStaticPath: string, dramaId?: number | null): Promise<string> {
   const normalized = relativeStaticPath.replace(/^\/+/, '')
   if (!normalized.startsWith('static/')) {
     throw new Error(`仅支持 static/ 路径上传 OSS: ${relativeStaticPath}`)
@@ -205,15 +205,22 @@ export async function uploadStaticToOss(relativeStaticPath: string): Promise<str
     throw new Error(`本地文件不存在: ${normalized}`)
   }
 
-  const objectKey = buildFallbackObjectKey(normalized)
+  const objectKey = (Number.isFinite(Number(dramaId)) && Number(dramaId) > 0
+    ? projectAssetObjectKey(Number(dramaId), normalized)
+    : null)
+    ?? resolveProjectObjectKeyForStaticPath(normalized)
+    ?? buildFallbackObjectKey(normalized)
   await putLocalFileToOss(absPath, objectKey)
   upsertPathMapping(normalized, objectKey)
-  logTaskProgress('OSS', 'uploaded-fallback', { path: normalized, objectKey })
+  logTaskProgress('OSS', 'uploaded-fallback', { path: normalized, objectKey, dramaId: dramaId ?? null })
   return signOssObjectKey(objectKey)
 }
 
 /** 解析媒体 URL：已是 http(s) 则原样返回；本地 static/ 优先读 OSS 映射签名 */
-export async function resolveMediaUrlForExternalApi(value: string | null | undefined): Promise<string | null> {
+export async function resolveMediaUrlForExternalApi(
+  value: string | null | undefined,
+  dramaId?: number | null,
+): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
   if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
@@ -226,12 +233,23 @@ export async function resolveMediaUrlForExternalApi(value: string | null | undef
     try {
       const mappedKey = lookupOssObjectKey(staticPath)
       if (mappedKey) {
+        const dramaIdNum = Number(dramaId)
+        if (mappedKey.startsWith('unknown/') && Number.isFinite(dramaIdNum) && dramaIdNum > 0) {
+          const absPath = getAbsolutePath(staticPath)
+          if (fs.existsSync(absPath)) {
+            const objectKey = projectAssetObjectKey(dramaIdNum, staticPath)
+            await putLocalFileToOss(absPath, objectKey)
+            upsertPathMapping(staticPath, objectKey)
+            logTaskProgress('OSS', 'remapped-unknown-key', { path: staticPath, objectKey, dramaId: dramaIdNum })
+            return signOssObjectKey(objectKey)
+          }
+        }
         if (isImageStaticPath(staticPath)) {
           await ensureCompressedOssImage(staticPath, mappedKey)
         }
         return signOssObjectKey(mappedKey)
       }
-      return await uploadStaticToOss(staticPath)
+      return await uploadStaticToOss(staticPath, dramaId)
     } catch (err: any) {
       logTaskWarn('OSS', 'upload-failed', { path: staticPath, error: err?.message || String(err) })
       throw err

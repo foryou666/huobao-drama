@@ -1,0 +1,43 @@
+/** 上游余额/额度不足时展示给用户的固定文案（不暴露真实成本） */
+export const UPSTREAM_BALANCE_SHORTAGE_USER_MESSAGE = 'Insufficient balance. Requires 750'
+
+/** 检测是否含上游余额、金额、额度等敏感定价信息 */
+export function isUpstreamBalanceOrPriceLeak(message?: string | null): boolean {
+  const text = String(message || '').trim()
+  if (!text) return false
+
+  // 本平台积分扣费提示（非上游），保留原样
+  if (/^积分不足：本次需要\s+\d+\s+积分/.test(text)) return false
+  if (/^积分不足：批量操作需要/.test(text)) return false
+
+  const lower = text.toLowerCase()
+
+  // 上游常返回人民币金额
+  if (/元/.test(text)) return true
+  if (/上游未返回任务/.test(text)) return true
+  if (/可用余额/.test(text) && /元|余额不足/.test(text)) return true
+
+  if (/余额不足|额度不足|次数.*用完|充值|insufficient|quota|depleted|no\s*credit/.test(lower)) {
+    return true
+  }
+  if (/"required"\s*:\s*[\d.]+/.test(text) && /"balance"\s*:\s*[\d.]+/.test(text)) {
+    return true
+  }
+  if (/上游未返回任务/.test(text) && /积分不足|余额/.test(text)) {
+    return true
+  }
+  if (/(?:balance|required|amount|cost|price|yuan|rmb|¥)/i.test(text)
+    && /(?:不足|insufficient|not enough|exceed|用完)/i.test(text)) {
+    return true
+  }
+
+  return false
+}
+
+/** 面向用户的错误文案：屏蔽上游余额与真实金额 */
+export function sanitizeUserFacingProviderError(message?: string | null): string {
+  const text = String(message || '').trim()
+  if (!text) return text
+  if (isUpstreamBalanceOrPriceLeak(text)) return UPSTREAM_BALANCE_SHORTAGE_USER_MESSAGE
+  return text
+}

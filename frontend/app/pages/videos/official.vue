@@ -224,6 +224,8 @@ import { dramaAPI, videoAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
+import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
+import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
 
 const OFFICIAL_MODEL_IDS = [
   'doubao-seedance-2-0-260128',
@@ -308,7 +310,7 @@ function normalizeItem(row) {
     model: row.model,
     prompt: row.prompt || '',
     status: row.status || 'pending',
-    error_msg: row.error_msg || row.errorMsg || '',
+    error_msg: sanitizeUserFacingProviderError(row.error_msg || row.errorMsg || ''),
     duration: row.duration,
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
@@ -590,7 +592,7 @@ async function onGenerate(payload) {
     await reload()
     void pollGeneration(generation?.id)
   } catch (err) {
-    toast.error(err?.message || '生成失败')
+    toast.error(formatVideoGenerationError(err?.message || '生成失败'))
     await reload()
   } finally {
     const elapsed = Date.now() - startedAt
@@ -614,7 +616,7 @@ async function pollGeneration(generationId) {
       if (res?.status === 'failed') {
         filterStatus.value = 'failed'
         await reload()
-        toast.error(res?.error_msg || res?.errorMsg || '视频生成失败，可在上方列表重新生成')
+        toast.error(formatVideoGenerationError(res?.error_msg || res?.errorMsg || '视频生成失败，可在上方列表重新生成'))
         return
       }
     } catch {

@@ -40,3 +40,7 @@ export function countChengmengReferenceImages(contentRefs = []) {
 export function countChengmengReferenceAudios(contentRefs = []) {
   return contentRefs.filter(item => item?.type === 'audio').length
 }
+
+export function countChengmengReferenceVideos(contentRefs = []) {
+  return contentRefs.filter(item => item?.type === 'video').length
+}

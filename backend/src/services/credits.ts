@@ -1,11 +1,79 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction } from '../constants/credit-actions.js'
+import { AISTARSLAB_DEFAULT_CREDIT_COST } from '../constants/aistarslab.js'
 import { now } from '../utils/response.js'
 import { getAppMeta, setAppMeta } from '../db/index.js'
 
 const CREDIT_PRICING_MIGRATION_KEY = 'credit_pricing_defaults_v2'
 const SEEDANCE_PER_SECOND_MIGRATION_KEY = 'credit_pricing_seedance_per_second_v1'
+const JIMENG_PRICING_LABEL_KEY = 'credit_pricing_jimeng_label_v1'
+const AISTARSLAB_PRICING_FLAT_FIX_KEY = 'credit_pricing_aistarslab_flat_fix_v1'
+const AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY = 'credit_pricing_aistarslab_ref_video_v1'
+
+/** 将即梦定价项标签与导航「视频生成(即梦)」对齐 */
+function migrateJimengPricingLabel() {
+  if (getAppMeta(JIMENG_PRICING_LABEL_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG)
+  if (!def) return
+  const [row] = db.select().from(schema.creditPricing)
+    .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG))
+    .all()
+  if (row) {
+    db.update(schema.creditPricing)
+      .set({
+        label: def.label,
+        description: def.description,
+        updatedAt: now(),
+      })
+      .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG))
+      .run()
+  }
+  setAppMeta(JIMENG_PRICING_LABEL_KEY, now())
+}
+
+/** 修正 VIP 通道曾被误设为「单价乘数」的过低定价，恢复为按条 fallback 默认值 */
+function migrateAistarslabPricingFlat() {
+  if (getAppMeta(AISTARSLAB_PRICING_FLAT_FIX_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB)
+  if (!def) return
+  const [row] = db.select().from(schema.creditPricing)
+    .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB))
+    .all()
+  if (row && row.cost > 0 && row.cost < 500) {
+    db.update(schema.creditPricing)
+      .set({
+        cost: AISTARSLAB_DEFAULT_CREDIT_COST,
+        label: def.label,
+        description: def.description,
+        updatedAt: now(),
+      })
+      .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB))
+      .run()
+  }
+  setAppMeta(AISTARSLAB_PRICING_FLAT_FIX_KEY, now())
+}
+
+/** 同步 VIP 通道定价说明：参考视频 ×1.5 计入用户扣费 */
+function migrateAistarslabRefVideoPricingLabel() {
+  if (getAppMeta(AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB)
+  if (!def) return
+  const [row] = db.select().from(schema.creditPricing)
+    .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB))
+    .all()
+  if (row) {
+    db.update(schema.creditPricing)
+      .set({
+        label: def.label,
+        description: def.description,
+        updatedAt: now(),
+      })
+      .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB))
+      .run()
+  }
+  setAppMeta(AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY, now())
+}
 
 /** 将官方 Seedance 定价从「按次总价」迁移为「每秒单价」（仅当单价 ≥500 时视为旧数据） */
 export function migrateSeedancePricingToPerSecond() {
@@ -38,6 +106,8 @@ export interface ChargeContext {
   resourceType?: string
   resourceId?: number
   quantity?: number
+  /** 按条/按次一口价（优先于单价 × quantity） */
+  flatCost?: number
   metadata?: Record<string, unknown>
 }
 
@@ -51,6 +121,9 @@ export interface ChargeResult {
 
 export function seedCreditPricing() {
   migrateSeedancePricingToPerSecond()
+  migrateJimengPricingLabel()
+  migrateAistarslabPricingFlat()
+  migrateAistarslabRefVideoPricingLabel()
   const ts = now()
   for (const item of DEFAULT_CREDIT_PRICING) {
     const [existing] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, item.action)).all()
@@ -127,7 +200,9 @@ export function updateCreditPricing(action: string, cost: number, label?: string
 
 export function chargeCredits(userId: number, action: string, context: ChargeContext = {}): ChargeResult {
   const quantity = Math.max(1, context.quantity ?? 1)
-  const cost = getActionCost(action, quantity)
+  const cost = context.flatCost != null && Number.isFinite(context.flatCost)
+    ? Math.max(0, Math.floor(context.flatCost))
+    : getActionCost(action, quantity)
   if (cost <= 0) {
     return { ok: true, cost: 0, balance: getUserBalance(userId) }
   }

@@ -17,11 +17,11 @@
               选择道具
               <span v-if="boundPropCount" class="composer-pick-count">{{ boundPropCount }}</span>
             </button>
-            <button type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
+            <button v-if="showVoicePicker" type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
               选择音色
               <span v-if="boundVoiceCount" class="composer-pick-count">{{ boundVoiceCount }}</span>
             </button>
-            <button type="button" class="btn btn-sm composer-pick-btn" @click="voiceLibraryOpen = true">
+            <button v-if="showVoicePicker" type="button" class="btn btn-sm composer-pick-btn" @click="voiceLibraryOpen = true">
               音色库
             </button>
           </div>
@@ -64,7 +64,7 @@
             </button>
           </div>
         </div>
-        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方图片可左右拖动调整顺序，输入框会自动更新「图片1是…」；可用 <kbd>@</kbd> 关联</span>
+        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方图片可左右拖动调整顺序，输入框会自动更新「图片1是…」「音频1是…的声音」；可用 <kbd>@</kbd> 关联</span>
       </div>
 
       <div class="composer-main">
@@ -136,6 +136,28 @@
             </label>
           </div>
 
+          <div
+            v-if="videoRefUploadEnabled && uploadedVideoRefs.length"
+            class="composer-video-ref-row"
+          >
+            <div
+              v-for="(video, vIndex) in uploadedVideoRefs"
+              :key="video.path"
+              class="composer-video-ref-chip"
+            >
+              <span class="composer-video-ref-icon" aria-hidden="true">▶</span>
+              <span class="composer-video-ref-label">{{ video.label || (videoRefLabelKind === 'material' ? `参考素材${vIndex + 1}` : `参考视频${vIndex + 1}`) }}</span>
+              <button
+                type="button"
+                class="composer-video-ref-remove"
+                title="移除"
+                @click="removeVideoRef(vIndex)"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
           <textarea
             ref="promptEl"
             v-model="prompt"
@@ -174,6 +196,34 @@
 
         <div class="composer-toolbar">
           <div class="composer-options">
+            <div v-if="jimengMode && jimengModels.length" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">即梦模型</span>
+              <button
+                v-for="model in jimengModels"
+                :key="model.id"
+                type="button"
+                class="composer-pill composer-pill-model"
+                :class="{ active: fixedModel === model.id }"
+                @click="selectOfficialModel(model.id)"
+              >
+                {{ model.label }}
+              </button>
+            </div>
+
+            <div v-if="grokMode && grokModels.length" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">Grok 模型</span>
+              <button
+                v-for="model in grokModels"
+                :key="model.id"
+                type="button"
+                class="composer-pill composer-pill-model"
+                :class="{ active: fixedModel === model.id }"
+                @click="selectOfficialModel(model.id)"
+              >
+                {{ model.label }}
+              </button>
+            </div>
+
             <div v-if="officialMode && officialModels.length" class="composer-pills composer-pills-official">
               <span class="composer-option-label">官方模型</span>
               <button
@@ -210,7 +260,7 @@
               </select>
             </label>
 
-            <div v-if="showRefModeToggle" class="composer-pills">
+            <div v-if="showRefModeToggle && !grokMode && !jimengMode" class="composer-pills">
               <button
                 type="button"
                 class="composer-pill"
@@ -231,7 +281,7 @@
 
             <div class="composer-pills">
               <button
-                v-for="ratio in aspectRatios"
+                v-for="ratio in effectiveAspectRatios"
                 :key="ratio"
                 type="button"
                 class="composer-pill"
@@ -242,7 +292,18 @@
               </button>
             </div>
 
-            <div v-if="durationRangeEnabled" class="composer-duration-range">
+            <div v-if="(grokMode && grokDurationRangeEnabled) || (jimengMode && jimengDurationRangeEnabled)" class="composer-duration-range">
+              <select
+                class="composer-select composer-duration-select"
+                :value="duration"
+                @change="onDurationSelect"
+              >
+                <option v-for="sec in durationSelectOptions" :key="sec" :value="sec">
+                  {{ sec }}s
+                </option>
+              </select>
+            </div>
+            <div v-else-if="durationRangeEnabled" class="composer-duration-range">
               <select
                 class="composer-select composer-duration-select"
                 :value="duration"
@@ -274,6 +335,22 @@
               上传图片
             </label>
 
+            <label
+              v-if="videoRefUploadEnabled && uploadedVideoRefs.length < maxVideoRefs"
+              class="composer-upload-btn"
+            >
+              <input
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                hidden
+                @change="onVideoUpload"
+              />
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              上传参考视频
+            </label>
+
             <button type="button" class="composer-upload-btn" @click="openReferencePicker">
               参考图库
             </button>
@@ -291,10 +368,10 @@
           <button
             type="button"
             class="composer-submit"
-            :disabled="generating || !prompt.trim() || (officialMode && !fixedModel)"
+            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengMode || aistarslabMode) && !fixedModel)"
             @click="submit"
           >
-            <span>{{ generating ? '生成中…' : (officialMode ? '官方生成' : '生成视频') }}</span>
+            <span>{{ generating ? '生成中…' : (jimengMode ? '即梦生成' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频')))) }}</span>
             <span v-if="displayCreditHint && !generating" class="composer-submit-cost">{{ displayCreditHint }}</span>
           </button>
         </div>
@@ -373,18 +450,18 @@ import {
   bindCharacter,
   bindScene,
   bindProp,
-  applyStudioPromptImageHeader,
+  applyStudioPromptMediaHeader,
   applyRefStripOrderToBinding,
   buildMentionOptions,
   buildStudioContentRefs,
   buildStudioRefStripItems,
   canUnlinkStudioRef,
+  collectPreservedMediaLabels,
   createStudioBindingState,
   ensureRefStripOrderKeys,
   formatPromptImageRefIssues,
   getBindingSceneIds,
   nextPromptImageIndex,
-  parsePromptImageLabels,
   removePromptImageLabel,
   replaceMentionWithImageLabel,
   restoreStudioBindingsFromVideoItem,
@@ -406,10 +483,22 @@ const props = defineProps({
   defaultDramaId: { type: String, default: '' },
   /** 官方 Seedance 页：走火山方舟 API */
   officialMode: { type: Boolean, default: false },
+  /** Grok 视频页：走 GeekNow Grok API */
+  grokMode: { type: Boolean, default: false },
+  /** 即梦视频页（管理员）：走 jimeng.jianying.com Cookie API */
+  jimengMode: { type: Boolean, default: false },
+  /** AIStartLab 视频页：走 OpenAPI Seedance 2.0 */
+  aistarslabMode: { type: Boolean, default: false },
   /** 官方页可选模型列表 */
   officialModels: { type: Array, default: () => [] },
+  /** Grok 页可选模型列表 */
+  grokModels: { type: Array, default: () => [] },
+  /** 即梦页可选模型列表 */
+  jimengModels: { type: Array, default: () => [] },
   /** 橙盟视频页可选模型列表 */
   chengmengModels: { type: Array, default: () => [] },
+  /** AIStartLab 页可选模型列表 */
+  aistarslabModels: { type: Array, default: () => [] },
   /** 固定官方 Seedance 配置 ID（视频生成官页面） */
   fixedConfigId: { type: [Number, null], default: null },
   /** 固定 Seedance 模型 ID */
@@ -420,6 +509,10 @@ const props = defineProps({
   creditCostHint: { type: String, default: '' },
   /** 按秒计费单价（官方 Seedance 页） */
   creditCostPerSecond: { type: Number, default: null },
+  /** 按次计费单价（Grok 视频页） */
+  creditCostFlat: { type: Number, default: null },
+  /** 含参考视频时的积分倍率（如 1.5） */
+  referenceVideoMultiplier: { type: Number, default: null },
   /** 可选时长下限（秒），官方页默认 4 */
   durationMin: { type: Number, default: null },
   /** 可选时长上限（秒），官方页默认 15 */
@@ -430,16 +523,32 @@ const props = defineProps({
   dramaPreferenceScope: { type: String, default: 'video' },
   /** 是否显示参考图/首尾帧切换（橙盟通道不支持首尾帧） */
   showRefModeToggle: { type: Boolean, default: true },
+  /** 是否显示音色选择（Grok 不支持音色） */
+  showVoicePicker: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['generate', 'update:fixedModel'])
 
-const maxImages = 9
-const aspectRatios = ['9:16', '16:9']
+const maxImages = computed(() => (props.grokMode ? 6 : props.jimengMode ? 2 : 9))
+const MAX_VIDEO_REFS = 3
+const isChengmengStudio = computed(() =>
+  props.chengmengModels.length > 0
+  && !props.officialMode
+  && !props.grokMode
+  && !props.jimengMode
+  && !props.aistarslabMode,
+)
+const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value)
+const videoRefLabelKind = computed(() => (isChengmengStudio.value ? 'material' : 'video'))
+const maxVideoRefs = computed(() => (videoRefUploadEnabled.value ? MAX_VIDEO_REFS : 0))
+const defaultAspectRatios = ['9:16', '16:9']
+const grokAspectRatios = ['2:3', '3:2', '1:1']
+const jimengAspectRatios = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3']
 const durations = [10, 15]
 
 const prompt = ref('')
 const uploadedRefs = ref([])
+const uploadedVideoRefs = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
@@ -459,13 +568,69 @@ watch(
 const aspectRatio = ref('9:16')
 const duration = ref(15)
 
+const effectiveAspectRatios = computed(() => {
+  if (props.grokMode) return grokAspectRatios
+  if (props.jimengMode) return jimengAspectRatios
+  return defaultAspectRatios
+})
+
+const selectedGrokModel = computed(() => {
+  if (!props.grokMode || !props.fixedModel) return null
+  return props.grokModels.find(item => item.id === props.fixedModel) || null
+})
+
+const selectedJimengModel = computed(() => {
+  if (!props.jimengMode || !props.fixedModel) return null
+  return props.jimengModels.find(item => item.id === props.fixedModel) || null
+})
+
+watch(
+  () => props.jimengMode,
+  (enabled) => {
+    if (!enabled) return
+    if (!jimengAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '16:9'
+    refMode.value = 'reference'
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.grokMode,
+  (enabled) => {
+    if (!enabled) return
+    if (!grokAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '2:3'
+    refMode.value = 'reference'
+  },
+  { immediate: true },
+)
+
 const effectiveDurationMin = computed(() => {
+  if (props.jimengMode) {
+    const model = selectedJimengModel.value
+    if (model?.duration_min != null) return Number(model.duration_min)
+    return 5
+  }
+  if (props.grokMode) {
+    const model = selectedGrokModel.value
+    if (model?.duration_min != null) return Number(model.duration_min)
+    return 4
+  }
   if (props.durationMin != null) return props.durationMin
   if (props.officialMode) return 4
   return null
 })
 
 const effectiveDurationMax = computed(() => {
+  if (props.jimengMode) {
+    const model = selectedJimengModel.value
+    if (model?.duration_max != null) return Number(model.duration_max)
+    return 10
+  }
+  if (props.grokMode) {
+    const model = selectedGrokModel.value
+    if (model?.duration_max != null) return Number(model.duration_max)
+    return String(props.fixedModel || '').toLowerCase().endsWith('-pro') ? 10 : 15
+  }
   if (props.durationMax != null) return props.durationMax
   if (props.officialMode) return 15
   return null
@@ -487,19 +652,62 @@ const durationSelectOptions = computed(() => {
 })
 
 function clampDuration(value) {
-  if (!durationRangeEnabled.value) return value
   const min = effectiveDurationMin.value
   const max = effectiveDurationMax.value
-  const parsed = Math.round(Number(value ?? max))
-  if (!Number.isFinite(parsed)) return max
-  return Math.min(max, Math.max(min, parsed))
+  if (min != null && max != null && max >= min) {
+    const parsed = Math.round(Number(value ?? max))
+    if (!Number.isFinite(parsed)) return max
+    return Math.min(max, Math.max(min, parsed))
+  }
+  return value
 }
+
+watch(
+  () => [props.fixedModel, selectedJimengModel.value],
+  () => {
+    if (!props.jimengMode) return
+    const model = selectedJimengModel.value
+    const defaultSec = Number(model?.duration_default) || 5
+    duration.value = clampDuration(duration.value ?? defaultSec)
+    if (!durationSelectOptions.value.includes(duration.value)) {
+      duration.value = defaultSec
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [props.fixedModel, selectedGrokModel.value],
+  () => {
+    if (!props.grokMode) return
+    const model = selectedGrokModel.value
+    const fallbackMax = String(props.fixedModel || '').toLowerCase().endsWith('-pro') ? 10 : 15
+    const defaultSec = Number(model?.duration_default) || fallbackMax
+    duration.value = clampDuration(duration.value ?? defaultSec)
+    if (!durationSelectOptions.value.includes(duration.value)) {
+      duration.value = defaultSec
+    }
+  },
+  { immediate: true },
+)
+
+const grokDurationRangeEnabled = computed(() => props.grokMode && durationRangeEnabled.value)
+const jimengDurationRangeEnabled = computed(() => props.jimengMode && durationRangeEnabled.value)
 
 function onDurationSelect(event) {
   duration.value = clampDuration(event?.target?.value)
 }
 
 const displayCreditHint = computed(() => {
+  const flat = props.creditCostFlat
+  if (flat != null && Number.isFinite(Number(flat))) {
+    let cost = Number(flat)
+    const mult = Number(props.referenceVideoMultiplier)
+    if (props.aistarslabMode && uploadedVideoRefs.value.length > 0 && Number.isFinite(mult) && mult > 1) {
+      cost = Math.max(1, Math.round(cost * mult))
+    }
+    return `${cost} 积分/次`
+  }
   const perSecond = props.creditCostPerSecond
   if (perSecond != null && Number.isFinite(Number(perSecond))) {
     return `${Number(perSecond)} 积分/s`
@@ -563,7 +771,7 @@ const visualRefItems = computed(() =>
 )
 
 const showRefStrip = computed(() =>
-  dramaLinked.value || visualRefItems.value.length > 0,
+  dramaLinked.value || visualRefItems.value.length > 0 || (videoRefUploadEnabled.value && uploadedVideoRefs.value.length > 0),
 )
 
 const canDragRefStrip = computed(() => visualRefItems.value.length > 1)
@@ -772,12 +980,14 @@ function openVoicePicker() {
 
 function onVoicePickerConfirm(refs) {
   binding.voice_refs = (refs || []).slice(0, MAX_VOICE_REFS)
+  syncPromptMediaHeader()
 }
 
 function unbindVoiceByIndex(index) {
   const next = [...boundVoices.value]
   next.splice(index, 1)
   binding.voice_refs = next
+  syncPromptMediaHeader()
 }
 
 function openScenePicker() {
@@ -789,7 +999,12 @@ function openScenePicker() {
   entityPickerOpen.value = true
 }
 
-function openPropPicker() {
+async function openPropPicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  await loadProjectAssets(dramaId.value)
   if (!projectProps.value.length) {
     toast.warning('该项目暂无道具')
     return
@@ -810,16 +1025,26 @@ function ensureRefStripOrder() {
   ensureRefStripOrderKeys(binding, defaultItems)
 }
 
-function syncPromptImageHeader() {
+function syncPromptMediaHeader() {
   ensureRefStripOrder()
-  prompt.value = applyStudioPromptImageHeader(
+  const preserved = collectPreservedMediaLabels(prompt.value)
+  prompt.value = applyStudioPromptMediaHeader(
     prompt.value,
     binding,
     projectChars.value,
     projectScenes.value,
     projectProps.value,
     uploadedRefs.value,
+    {
+      ...preserved,
+      uploadedVideoRefs: uploadedVideoRefs.value,
+      videoRefLabel: videoRefLabelKind.value,
+    },
   )
+}
+
+function syncPromptImageHeader() {
+  syncPromptMediaHeader()
 }
 
 function reorderVisualRefs(fromIndex, toIndex) {
@@ -965,8 +1190,8 @@ function syncUploadPaths() {
 function addReferencePath(path, meta = {}) {
   const normalized = normalizeMediaPath(path)
   if (!normalized) return false
-  if (uploadedRefs.value.length >= maxImages) {
-    toast.warning(`最多 ${maxImages} 张参考图`)
+  if (uploadedRefs.value.length >= maxImages.value) {
+    toast.warning(`最多 ${maxImages.value} 张参考图`)
     return false
   }
   if (uploadedRefs.value.some(item => normalizeMediaPath(item.path) === normalized)) {
@@ -987,9 +1212,9 @@ function addReferencePath(path, meta = {}) {
 async function onUpload(event) {
   const files = Array.from(event?.target?.files || [])
   if (!files.length) return
-  const remain = maxImages - uploadedRefs.value.length
+  const remain = maxImages.value - uploadedRefs.value.length
   if (remain <= 0) {
-    toast.warning(`最多上传 ${maxImages} 张参考图`)
+    toast.warning(`最多上传 ${maxImages.value} 张参考图`)
     return
   }
   for (const file of files.slice(0, remain)) {
@@ -1011,6 +1236,56 @@ async function onUpload(event) {
   }
   if (event?.target) event.target.value = ''
   syncPromptImageHeader()
+}
+
+function addVideoPath(path, meta = {}) {
+  const normalized = normalizeMediaPath(path)
+  if (!normalized) return false
+  if (uploadedVideoRefs.value.length >= maxVideoRefs.value) {
+    toast.warning(`最多 ${maxVideoRefs.value} 个参考视频`)
+    return false
+  }
+  if (uploadedVideoRefs.value.some(item => normalizeMediaPath(item.path) === normalized)) {
+    return true
+  }
+  uploadedVideoRefs.value.push({
+    path: normalized,
+    label: meta.label || null,
+    ossUrl: meta.ossUrl || null,
+  })
+  syncPromptMediaHeader()
+  return true
+}
+
+async function onVideoUpload(event) {
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (uploadedVideoRefs.value.length >= maxVideoRefs.value) {
+    toast.warning(`最多上传 ${maxVideoRefs.value} 个参考视频`)
+    if (event?.target) event.target.value = ''
+    return
+  }
+  try {
+    const res = await uploadAPI.video(file, dramaId.value ? Number(dramaId.value) : null)
+    const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
+    if (!path) throw new Error('上传失败')
+    const defaultName = videoRefLabelKind.value === 'material' ? '参考素材' : '参考视频'
+    const label = res?.name || file.name?.replace(/\.[^.]+$/, '') || `${defaultName}${uploadedVideoRefs.value.length + 1}`
+    addVideoPath(path, { label, ossUrl: res?.oss_url || res?.ossUrl || null })
+    if (!res?.oss_url && !res?.ossUrl) {
+      toast.warning('视频已添加，但未同步 OSS（生成前请配置 OSS）')
+    } else {
+      toast.success('参考视频已上传')
+    }
+  } catch (err) {
+    toast.error(err?.message || '视频上传失败')
+  }
+  if (event?.target) event.target.value = ''
+}
+
+function removeVideoRef(index) {
+  uploadedVideoRefs.value = uploadedVideoRefs.value.filter((_, i) => i !== index)
+  syncPromptMediaHeader()
 }
 
 function pushSessionReferenceAsset({ path, label, assetId }) {
@@ -1144,6 +1419,24 @@ function buildSimplePromptHeader(text, count) {
 }
 
 function applyFixedOfficialPayload(payload) {
+  if (props.jimengMode) {
+    payload.jimeng = true
+    payload.provider = 'jimeng_web'
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
+  if (props.grokMode) {
+    payload.grok = true
+    if (props.fixedConfigId) payload.config_id = props.fixedConfigId
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
+  if (props.aistarslabMode) {
+    payload.aistarslab = true
+    if (props.fixedConfigId) payload.config_id = props.fixedConfigId
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
   if (!props.officialMode && !props.fixedConfigId && !props.fixedModel) return payload
   if (props.officialMode) payload.official = true
   if (props.fixedConfigId) payload.config_id = props.fixedConfigId
@@ -1174,7 +1467,11 @@ function submit() {
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
 
-  if (dramaLinked.value && refMode.value === 'reference') {
+  const hasStudioRefs = uploadedRefs.value.length > 0
+    || uploadedVideoRefs.value.length > 0
+    || (binding.voice_refs?.length > 0)
+
+  if ((dramaLinked.value && refMode.value === 'reference') || (videoRefUploadEnabled.value && hasStudioRefs)) {
     syncPromptImageHeader()
     const textForSubmit = prompt.value.trim()
     const issues = validateStudioPrompt(textForSubmit, binding, projectChars.value, projectScenes.value, projectProps.value, uploadedRefs.value)
@@ -1189,6 +1486,8 @@ function submit() {
       projectScenes.value,
       projectProps.value,
       uploadedRefs.value,
+      uploadedVideoRefs.value,
+      { videoRefLabel: videoRefLabelKind.value },
     )
     payload.prompt = finalPrompt
     if (contentRefs.length) {
@@ -1200,6 +1499,8 @@ function submit() {
       if (imageUrls.length) {
         payload.reference_mode = 'multiple'
         payload.reference_image_urls = imageUrls
+      } else if (contentRefs.some(ref => ref.type === 'video' || ref.type === 'audio')) {
+        payload.reference_mode = 'multiple'
       }
     }
     emit('generate', applyFixedOfficialPayload(payload))
@@ -1243,12 +1544,35 @@ function submit() {
   emit('generate', applyFixedOfficialPayload(payload))
 }
 
+function normalizeLoadedAspectRatio(value) {
+  const ratio = String(value || '').trim()
+  if (props.jimengMode) {
+    if (jimengAspectRatios.includes(ratio)) return ratio
+    if (ratio === '9:16' || ratio === 'portrait' || ratio === '2:3') return '9:16'
+    if (ratio === '16:9' || ratio === 'landscape' || ratio === '3:2') return '16:9'
+    return '16:9'
+  }
+  if (props.grokMode) {
+    if (ratio === '9:16' || ratio === 'portrait' || ratio === '2:3') return '2:3'
+    if (ratio === '16:9' || ratio === 'landscape' || ratio === '3:2') return '3:2'
+    if (ratio === '1:1') return '1:1'
+    return '2:3'
+  }
+  if (ratio === '2:3') return '9:16'
+  if (ratio === '3:2') return '16:9'
+  return ratio || '9:16'
+}
+
 async function loadFromItem(item) {
   resetBinding()
   uploadedRefs.value = []
+  uploadedVideoRefs.value = []
 
-  aspectRatio.value = item?.aspect_ratio || item?.aspectRatio || '9:16'
-  duration.value = clampDuration(Number(item?.duration || 15))
+  aspectRatio.value = normalizeLoadedAspectRatio(item?.aspect_ratio || item?.aspectRatio || '9:16')
+  duration.value = clampDuration(Number(
+    item?.duration
+    || (props.jimengMode ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15)),
+  ))
 
   const mode = item?.reference_mode || item?.referenceMode
   refMode.value = props.showRefModeToggle && mode === 'first_last' ? 'first_last' : 'reference'
@@ -1261,9 +1585,11 @@ async function loadFromItem(item) {
 
   prompt.value = String(item?.prompt || '')
 
-  const preservedLabels = new Map(
-    parsePromptImageLabels(String(item?.prompt || '')).map(entry => [entry.index, entry.label]),
-  )
+  const {
+    preservedLabels,
+    preservedAudioLabels,
+    preservedVideoLabels,
+  } = collectPreservedMediaLabels(String(item?.prompt || ''))
 
   restoreStudioBindingsFromVideoItem(
     item,
@@ -1288,15 +1614,37 @@ async function loadFromItem(item) {
       },
     },
   )
+
+  const payloadRaw = item?.reference_payload || item?.referencePayload
+  if (payloadRaw) {
+    try {
+      const refs = typeof payloadRaw === 'string' ? JSON.parse(payloadRaw) : payloadRaw
+      if (Array.isArray(refs)) {
+        for (const ref of refs) {
+          if (ref?.type !== 'video') continue
+          const path = normalizeMediaPath(ref.url || ref.path)
+          if (!path) continue
+          addVideoPath(path, { label: ref.label || null })
+        }
+      }
+    } catch { /* ignore */ }
+  } else if (Array.isArray(item?.reference_videos)) {
+    for (const ref of item.reference_videos) {
+      const path = normalizeMediaPath(ref.path || ref.url)
+      if (!path) continue
+      addVideoPath(path, { label: ref.label || null })
+    }
+  }
+
   syncUploadPaths()
-  prompt.value = applyStudioPromptImageHeader(
+  prompt.value = applyStudioPromptMediaHeader(
     prompt.value,
     binding,
     projectChars.value,
     projectScenes.value,
     projectProps.value,
     uploadedRefs.value,
-    { preservedLabels },
+    { preservedLabels, preservedAudioLabels, preservedVideoLabels, uploadedVideoRefs: uploadedVideoRefs.value, videoRefLabel: videoRefLabelKind.value },
   )
 }
 
@@ -1560,6 +1908,56 @@ defineExpose({ loadFromItem, clearPrompt })
   line-height: 1.1;
   text-align: center;
   padding: 0 4px;
+}
+
+.composer-video-ref-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 14px 10px;
+}
+
+.composer-video-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  font-size: 12px;
+}
+
+.composer-video-ref-icon {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.composer-video-ref-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-video-ref-remove {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.composer-video-ref-remove:hover {
+  background: var(--bg-hover);
+  color: var(--text);
 }
 
 .composer-input {

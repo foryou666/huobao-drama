@@ -93,6 +93,15 @@
             >
               ↓
             </button>
+            <button
+              v-if="canAttachToEntity(item)"
+              type="button"
+              class="studio-card-attach"
+              title="添加到角色/场景/道具"
+              @click.stop="openAttachModal(item)"
+            >
+              +
+            </button>
           </div>
 
           <div class="studio-card-body">
@@ -123,6 +132,15 @@
 
       <div class="studio-feed-spacer" />
     </div>
+
+    <AddGeneratedImageToEntityModal
+      :open="attachModalOpen"
+      :image-item="attachImageItem"
+      :dramas="dramas"
+      :default-drama-id="filterDramaId"
+      @close="closeAttachModal"
+      @success="onAttachSuccess"
+    />
 
     <ImageStudioComposer
       ref="composerRef"
@@ -176,6 +194,14 @@
                 {{ detailDownloading ? '下载中…' : '下载图片' }}
               </button>
               <button type="button" class="btn btn-sm" @click="reuseDetail">复用到输入框</button>
+              <button
+                v-if="canAttachToEntity(detailItem)"
+                type="button"
+                class="btn btn-sm btn-primary"
+                @click="openAttachModal(detailItem)"
+              >
+                添加到资产
+              </button>
               <button type="button" class="btn btn-sm" @click="copyPrompt(detailItem.prompt)">复制提示词</button>
               <NuxtLink
                 v-if="episodeLink(detailItem)"
@@ -199,6 +225,9 @@ import { dramaAPI, imageAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
 import { downloadMediaFile } from '~/utils/download-media.js'
 import ImageStudioComposer from '~/components/ImageStudioComposer.vue'
+import AddGeneratedImageToEntityModal from '~/components/AddGeneratedImageToEntityModal.vue'
+import { formatImageGenerationError } from '~/utils/image-generation-error.js'
+import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
 
 const route = useRoute()
 
@@ -216,6 +245,8 @@ const detailItem = ref(null)
 const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
+const attachModalOpen = ref(false)
+const attachImageItem = ref(null)
 let pollTimer = null
 
 const statusTabs = [
@@ -246,7 +277,7 @@ function normalizeItem(row) {
     model: row.model,
     prompt: row.prompt || '',
     status: row.status || 'pending',
-    error_msg: row.error_msg || row.errorMsg || '',
+    error_msg: sanitizeUserFacingProviderError(row.error_msg || row.errorMsg || ''),
     size: row.size,
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_images: row.reference_images || [],
@@ -312,6 +343,25 @@ function formatTime(value) {
 function episodeLink(item) {
   if (!item?.storyboard_exists || !item.drama_id || item.episode_number == null) return null
   return `/drama/${item.drama_id}/episode/${item.episode_number}`
+}
+
+function canAttachToEntity(item) {
+  return item?.status === 'completed' && !!playableUrl(item)
+}
+
+function openAttachModal(item) {
+  if (!canAttachToEntity(item)) return
+  attachImageItem.value = item
+  attachModalOpen.value = true
+}
+
+function closeAttachModal() {
+  attachModalOpen.value = false
+  attachImageItem.value = null
+}
+
+function onAttachSuccess() {
+  closeAttachModal()
 }
 
 function openDetail(item) {
@@ -437,16 +487,20 @@ function setViewScope(scope) {
 
 async function onGenerate(payload) {
   generating.value = true
+  const startedAt = Date.now()
   try {
     const generation = await imageAPI.generate(payload)
     toast.success('图片任务已提交')
     filterStatus.value = 'all'
     await reload()
-    await pollGeneration(generation?.id)
+    void pollGeneration(generation?.id)
   } catch (err) {
-    toast.error(err?.message || '生成失败')
+    toast.error(formatImageGenerationError(err?.message || '生成失败'))
   } finally {
-    generating.value = false
+    const elapsed = Date.now() - startedAt
+    setTimeout(() => {
+      generating.value = false
+    }, Math.max(0, 1000 - elapsed))
   }
 }
 
@@ -462,7 +516,7 @@ async function pollGeneration(generationId) {
         return
       }
       if (res?.status === 'failed') {
-        toast.error(res?.error_msg || res?.errorMsg || '图片生成失败')
+        toast.error(formatImageGenerationError(res?.error_msg || res?.errorMsg || '图片生成失败'))
         return
       }
     } catch {
@@ -723,6 +777,23 @@ onUnmounted(() => {
   background: rgba(15, 20, 28, 0.72);
   color: #fff;
   font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.studio-card-attach {
+  position: absolute;
+  bottom: 8px;
+  right: 42px;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.72);
+  color: #fff;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
   opacity: 0.85;

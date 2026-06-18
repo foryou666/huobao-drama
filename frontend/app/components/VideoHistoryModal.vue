@@ -101,6 +101,8 @@ import { useOverlayDismiss } from '~/composables/useOverlayDismiss'
 import { mediaDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 
+import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
+
 const props = defineProps({
   open: { type: Boolean, default: false },
   storyboardId: { type: Number, default: null },
@@ -126,7 +128,7 @@ function normalizeRow(row) {
     status: row?.status || 'pending',
     videoUrl: row?.video_url || row?.videoUrl || '',
     localPath: row?.local_path || row?.localPath || '',
-    errorMsg: row?.error_msg || row?.errorMsg || '',
+    errorMsg: sanitizeUserFacingProviderError(row?.error_msg || row?.errorMsg || ''),
     createdAt: row?.created_at || row?.createdAt || '',
   }
 }

@@ -22,6 +22,17 @@ export function parsePropViewImages(raw) {
 }
 
 export function listPropImages(prop) {
+  const media = prop?.prop_media || prop?.propMedia
+  if (media?.preview_images?.length) {
+    return media.preview_images
+      .map(img => ({
+        view_id: String(img.view_id || img.viewId || img.angle_id || img.angleId || 'hero'),
+        label: String(img.label || img.tag || '参考图'),
+        url: normalizePath(img.url || ''),
+      }))
+      .filter(item => item.url)
+  }
+
   const primaryUrl = normalizePath(prop?.image_url || prop?.imageUrl || prop?.local_path || prop?.localPath || '')
   const items = []
   if (primaryUrl) items.push({ view_id: 'hero', label: '主图', url: primaryUrl })

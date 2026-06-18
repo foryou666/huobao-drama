@@ -25,7 +25,10 @@ function normalizeStaticPath(value: string): string | null {
 }
 
 /** 第三方任务接口只接受可公网访问的 http(s) URL */
-export async function resolveChengmengMediaUrl(value: string | null | undefined): Promise<string | null> {
+export async function resolveChengmengMediaUrl(
+  value: string | null | undefined,
+  dramaId?: number | null,
+): Promise<string | null> {
   const raw = String(value || '').trim()
   if (!raw) return null
   if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
@@ -33,7 +36,7 @@ export async function resolveChengmengMediaUrl(value: string | null | undefined)
   const staticPath = normalizeStaticPath(raw)
   if (staticPath) {
     if (isOssConfigured()) {
-      return resolveMediaUrlForExternalApi(staticPath)
+      return resolveMediaUrlForExternalApi(staticPath, dramaId)
     }
     const base = publicBaseUrl()
     if (base) return `${base}/${staticPath}`
@@ -123,11 +126,19 @@ export function normalizeChengmengAudioLabels(prompt: string): string {
   return String(prompt || '').replace(/音色\s*(\d+)/gi, '音频$1')
 }
 
+function formatVoicePromptLabel(label?: string | null): string {
+  const raw = String(label || '').trim()
+  if (!raw) return '参考音色的声音'
+  if (/的声音$/.test(raw)) return raw
+  return `${raw.replace(/的声音$/, '')}的声音`
+}
+
 function buildChengmengAudioHeader(refs: VideoContentRef[], prompt: string): string {
   const audios = refs.filter(ref => ref.type === 'audio')
   if (!audios.length) return ''
-  if (/音频\s*\d/i.test(prompt)) return ''
-  const lines = audios.map((ref, index) => `音频${index + 1}是${ref.label || '参考音色'}`)
+  const normalizedPrompt = normalizeChengmengAudioLabels(prompt)
+  if (/音频\s*\d/i.test(normalizedPrompt)) return ''
+  const lines = audios.map((ref, index) => `音频${index + 1}是${formatVoicePromptLabel(ref.label)}`)
   return `${lines.join('，')}。`
 }
 
@@ -319,7 +330,7 @@ export function parseChengmengModelIds(config: { model?: string; models?: string
   }
 }
 
-/** 任务级 model 覆盖（视频生成页可选 31 Fast / 32 标准版） */
+/** 任务级 model 覆盖（视频生成页可选 53 Fast / 32 标准版） */
 export function resolveChengmengModelIds(
   config: { model?: string; models?: string[] },
   modelOverride?: string | null,

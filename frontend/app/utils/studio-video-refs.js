@@ -1,5 +1,6 @@
 import {
   parsePromptImageLabels,
+  parsePromptAudioLabels,
   buildPromptOrderedDisplayItems,
   buildOrderedVideoContentRefs,
   validatePromptImageRefs,
@@ -9,8 +10,14 @@ import {
 import { resolveCharacterImageUrl, listCharacterImages } from './character-image-variants.js'
 import { resolveSceneImageUrl, listSceneImages } from './scene-image-variants.js'
 import { resolvePropImageUrl } from './prop-image-variants.js'
+import { parseVoiceRefs, formatVoicePromptLabel } from './voice-refs.js'
 
-export { validatePromptImageRefs, formatPromptImageRefIssues, parsePromptImageLabels }
+export {
+  validatePromptImageRefs,
+  formatPromptImageRefIssues,
+  parsePromptImageLabels,
+  parsePromptAudioLabels,
+}
 
 export function createStudioBindingState() {
   return {
@@ -151,6 +158,145 @@ export function stripPromptImageLabels(prompt) {
   return cleanupPromptCommas(text)
 }
 
+/** 移除提示词中所有「音频N是…」片段，保留用户正文 */
+export function stripPromptAudioLabels(prompt) {
+  let text = String(prompt || '')
+  text = text.replace(/[,，]?\s*@?(?:音频|音色)\s*\d+\s*是[^，,@。\n]+/g, '')
+  return cleanupPromptCommas(text)
+}
+
+export function parsePromptVideoLabels(prompt) {
+  const labels = []
+  const re = /[,，]?\s*@?(?:视频)\s*(\d+)\s*是([^，,@。\n]+)/gi
+  let match
+  while ((match = re.exec(String(prompt || ''))) !== null) {
+    labels.push({ index: Number(match[1]), label: String(match[2] || '').trim() })
+  }
+  return labels
+}
+
+/** 移除提示词中所有「视频N是…」片段，保留用户正文 */
+export function stripPromptVideoLabels(prompt) {
+  let text = String(prompt || '')
+  text = text.replace(/[,，]?\s*@?(?:视频)\s*\d+\s*是[^，,@。\n]+/g, '')
+  return cleanupPromptCommas(text)
+}
+
+export function parsePromptMaterialLabels(prompt) {
+  const labels = []
+  const re = /[,，]?\s*@?(?:素材)\s*(\d+)\s*是([^，,@。\n]+)/gi
+  let match
+  while ((match = re.exec(String(prompt || ''))) !== null) {
+    labels.push({ index: Number(match[1]), label: String(match[2] || '').trim() })
+  }
+  return labels
+}
+
+/** 移除提示词中所有「素材N是…」片段（橙盟参考视频），保留用户正文 */
+export function stripPromptMaterialLabels(prompt) {
+  let text = String(prompt || '')
+  text = text.replace(/[,，]?\s*@?(?:素材)\s*\d+\s*是[^，,@。\n]+/g, '')
+  return cleanupPromptCommas(text)
+}
+
+export function buildPromptMaterialSnippet(index, label) {
+  return `素材${index}是${label}`
+}
+
+export function buildPromptVideoSnippet(index, label) {
+  return `视频${index}是${label}`
+}
+
+export function buildPromptAudioSnippet(index, label) {
+  return `音频${index}是${formatVoicePromptLabel(label)}`
+}
+
+/** 按绑定音色顺序生成「音频1是A的声音，音频2是B的声音。」前缀 */
+export function buildStudioPromptAudioHeader(voiceRefs, preservedLabels) {
+  const voices = parseVoiceRefs(voiceRefs)
+  if (!voices.length) return ''
+  return voices
+    .map((voice, index) => {
+      const audioIndex = index + 1
+      const label = preservedLabels?.get?.(audioIndex) || voice.name || '参考音色'
+      return buildPromptAudioSnippet(audioIndex, label)
+    })
+    .join('，') + '。'
+}
+
+/** 按上传顺序生成「视频1是A，视频2是B。」前缀（VIP 等 @视频N） */
+export function buildStudioPromptVideoHeader(uploadedVideoRefs, preservedLabels, options) {
+  const items = (uploadedVideoRefs || []).filter(item => item?.path)
+  if (!items.length) return ''
+  const useMaterial = options?.labelKind === 'material'
+  return items
+    .map((item, index) => {
+      const videoIndex = index + 1
+      const defaultLabel = useMaterial ? `参考素材${videoIndex}` : `参考视频${videoIndex}`
+      const label = preservedLabels?.get?.(videoIndex) || item.label || defaultLabel
+      return useMaterial
+        ? buildPromptMaterialSnippet(videoIndex, label)
+        : buildPromptVideoSnippet(videoIndex, label)
+    })
+    .join('，') + '。'
+}
+
+/** 从当前提示词提取用户已编辑的「图片/视频/音频N是…」标签，供重写前缀时保留 */
+export function collectPreservedMediaLabels(prompt) {
+  const text = String(prompt || '')
+  return {
+    preservedLabels: new Map(
+      parsePromptImageLabels(text).map(entry => [entry.index, entry.label]),
+    ),
+    preservedAudioLabels: new Map(
+      parsePromptAudioLabels(text).map(entry => [entry.index, entry.label]),
+    ),
+    preservedVideoLabels: new Map(
+      [
+        ...parsePromptVideoLabels(text),
+        ...parsePromptMaterialLabels(text),
+      ].map(entry => [entry.index, entry.label]),
+    ),
+  }
+}
+
+/** 根据当前绑定参考图、参考视频与音色，重写提示词开头的说明前缀 */
+export function applyStudioPromptMediaHeader(prompt, binding, chars, scenes, props, uploadedRefs, options) {
+  const preservedFromPrompt = options?.preservedLabels
+    ? null
+    : collectPreservedMediaLabels(prompt)
+  let body = stripPromptImageLabels(prompt)
+  body = stripPromptAudioLabels(body)
+  body = stripPromptVideoLabels(body)
+  body = stripPromptMaterialLabels(body)
+  const imageHeader = buildStudioPromptImageHeader(
+    binding,
+    chars,
+    scenes,
+    props,
+    uploadedRefs,
+    options?.preservedLabels ?? preservedFromPrompt?.preservedLabels,
+  )
+  const videoHeader = buildStudioPromptVideoHeader(
+    options?.uploadedVideoRefs,
+    options?.preservedVideoLabels ?? preservedFromPrompt?.preservedVideoLabels,
+    { labelKind: options?.videoRefLabel || 'video' },
+  )
+  const audioHeader = buildStudioPromptAudioHeader(
+    binding?.voice_refs ?? binding?.voiceRefs,
+    options?.preservedAudioLabels ?? preservedFromPrompt?.preservedAudioLabels,
+  )
+  const headers = [imageHeader, videoHeader, audioHeader].filter(Boolean).join('')
+  if (!headers) return body
+  if (!body) return headers
+  return `${headers}${body}`
+}
+
+/** @deprecated 使用 applyStudioPromptMediaHeader */
+export function applyStudioPromptImageHeader(prompt, binding, chars, scenes, props, uploadedRefs, options) {
+  return applyStudioPromptMediaHeader(prompt, binding, chars, scenes, props, uploadedRefs, options)
+}
+
 /** 按参考图栏顺序生成「图片1是A，图片2是B。」前缀 */
 export function buildStudioPromptImageHeader(binding, chars, scenes, props, uploadedRefs, preservedLabels) {
   const items = buildStudioRefStripItems(binding, chars, scenes, props, uploadedRefs, () => '')
@@ -163,16 +309,6 @@ export function buildStudioPromptImageHeader(binding, chars, scenes, props, uplo
       return buildPromptImageSnippet(imageIndex, label)
     })
     .join('，') + '。'
-}
-
-/** 根据当前绑定参考图，重写提示词开头的图片说明 */
-export function applyStudioPromptImageHeader(prompt, binding, chars, scenes, props, uploadedRefs, options) {
-  const body = stripPromptImageLabels(prompt)
-  const preservedLabels = options?.preservedLabels
-  const header = buildStudioPromptImageHeader(binding, chars, scenes, props, uploadedRefs, preservedLabels)
-  if (!header) return body
-  if (!body) return header
-  return `${header}${body}`
 }
 
 export function buildStudioDisplayItems(binding, prompt, chars, scenes, props = []) {
@@ -351,24 +487,52 @@ export function buildStudioRefStripItems(binding, chars, scenes, props, uploaded
   return applyRefStripOrder(items, binding.ref_strip_order)
 }
 
-export function buildStudioContentRefs(binding, prompt, chars, scenes, props, uploadedRefs = []) {
-  const finalPrompt = applyStudioPromptImageHeader(prompt, binding, chars, scenes, props, uploadedRefs)
+export function buildStudioContentRefs(binding, prompt, chars, scenes, props, uploadedRefs = [], uploadedVideoRefs = [], options = {}) {
+  const preserved = collectPreservedMediaLabels(prompt)
+  const finalPrompt = applyStudioPromptMediaHeader(prompt, binding, chars, scenes, props, uploadedRefs, {
+    uploadedVideoRefs,
+    videoRefLabel: options?.videoRefLabel,
+    ...preserved,
+  })
   const stripItems = buildStudioRefStripItems(binding, chars, scenes, props, uploadedRefs, () => '')
     .filter(item => item.path && !item.missing)
+
+  const labelByIndex = new Map(parsePromptImageLabels(finalPrompt).map(entry => [entry.index, entry.label]))
+  const videoLabelByIndex = new Map([
+    ...parsePromptVideoLabels(finalPrompt),
+    ...parsePromptMaterialLabels(finalPrompt),
+  ].map(entry => [entry.index, entry.label]))
 
   const imageRefs = stripItems.map((item, index) => ({
     type: 'image',
     url: normalizeStripPath(item.path),
     role: 'reference_image',
-    label: item.ref?.label || item.tagLabel || item.label || `参考图${index + 1}`,
+    label: labelByIndex.get(index + 1)
+      || item.ref?.label
+      || item.tagLabel
+      || item.label
+      || `参考图${index + 1}`,
   }))
+
+  const videoRefs = (uploadedVideoRefs || [])
+    .map((item, index) => {
+      const path = normalizeStripPath(item?.path)
+      if (!path) return null
+      return {
+        type: 'video',
+        url: path,
+        role: 'reference_video',
+        label: videoLabelByIndex.get(index + 1) || item.label || `参考视频${index + 1}`,
+      }
+    })
+    .filter(Boolean)
 
   const sb = bindingToStoryboard(binding)
   const helpers = createStudioHelpers(binding, props)
   const fullRefs = buildOrderedVideoContentRefs(sb, finalPrompt, chars, scenes, helpers)
   const audioRefs = fullRefs.filter(ref => ref.type !== 'image')
 
-  return { prompt: finalPrompt, contentRefs: [...imageRefs, ...audioRefs] }
+  return { prompt: finalPrompt, contentRefs: [...imageRefs, ...videoRefs, ...audioRefs] }
 }
 
 export function validateStudioPrompt(prompt, binding, chars, scenes, props = [], uploadedRefs = []) {
@@ -584,14 +748,13 @@ export function isGenericReuseLabel(label) {
 }
 
 function pickStudioHeaderLabel(item, imageIndex, preservedLabels) {
-  const preserved = preservedLabels?.get?.(imageIndex)
+  const preserved = String(preservedLabels?.get?.(imageIndex) || '').trim()
+  if (preserved) return preserved
   if (item.kind === 'linked' && item.ref?.label && !isGenericReuseLabel(item.ref.label)) {
     return item.ref.label
   }
   const candidate = item.ref?.label || item.tagLabel || item.label
   if (candidate && !isGenericReuseLabel(candidate)) return candidate
-  if (preserved && !isGenericReuseLabel(preserved)) return preserved
-  if (preserved) return preserved
   return `参考图${imageIndex}`
 }
 

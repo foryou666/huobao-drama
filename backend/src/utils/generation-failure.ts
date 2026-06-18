@@ -3,6 +3,7 @@ import { db, schema } from '../db/index.js'
 import { now } from './response.js'
 import { refundCreditTransaction } from '../services/credits.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
+import { sanitizeUserFacingProviderError } from './provider-error-sanitize.js'
 
 function refundLinkedCredit(
   creditTransactionId: number | null | undefined,
@@ -45,8 +46,10 @@ export function failImageGeneration(id: number, errorMsg: string) {
   if (!record) return
   if (record.status === 'completed' || record.status === 'failed') return
 
+  const userMessage = sanitizeUserFacingProviderError(errorMsg)
+
   db.update(schema.imageGenerations)
-    .set({ status: 'failed', errorMsg, updatedAt: now() })
+    .set({ status: 'failed', errorMsg: userMessage, updatedAt: now() })
     .where(eq(schema.imageGenerations.id, id))
     .run()
 
@@ -54,7 +57,7 @@ export function failImageGeneration(id: number, errorMsg: string) {
     summary: '图片生成失败退款',
     resourceType: 'image_generation',
     resourceId: id,
-    reason: errorMsg,
+    reason: userMessage,
     dramaId: record.dramaId,
   })
 }
@@ -64,8 +67,10 @@ export function failVideoGeneration(id: number, errorMsg: string) {
   if (!record) return
   if (record.status === 'completed' || record.status === 'failed') return
 
+  const userMessage = sanitizeUserFacingProviderError(errorMsg)
+
   db.update(schema.videoGenerations)
-    .set({ status: 'failed', errorMsg, updatedAt: now() })
+    .set({ status: 'failed', errorMsg: userMessage, updatedAt: now() })
     .where(eq(schema.videoGenerations.id, id))
     .run()
 
@@ -73,7 +78,7 @@ export function failVideoGeneration(id: number, errorMsg: string) {
     summary: '视频生成失败退款',
     resourceType: 'video_generation',
     resourceId: id,
-    reason: errorMsg,
+    reason: userMessage,
     dramaId: record.dramaId,
   })
 }

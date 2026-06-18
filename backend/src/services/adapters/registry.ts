@@ -13,6 +13,9 @@ import { ViduVideoAdapter } from './vidu-video'
 import { AliImageAdapter } from './ali-image'
 import { AliVideoAdapter } from './ali-video'
 import { ChengmengVideoAdapter } from './chengmeng-video'
+import { GeeknowGrokVideoAdapter } from './geeknow-grok-video'
+import { JimengWebVideoAdapter } from './jimeng-web-video'
+import { AistarslabVideoAdapter } from './aistarslab-video'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
 // 图片 Adapter 注册表
@@ -34,6 +37,9 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
   vidu: new ViduVideoAdapter(),
   ali: new AliVideoAdapter(),
   chengmeng: new ChengmengVideoAdapter(),
+  geeknow: new GeeknowGrokVideoAdapter(),
+  jimeng_web: new JimengWebVideoAdapter(),
+  aistarslab: new AistarslabVideoAdapter(),
   // Chatfire 视频 - 待确认 API 格式
 }
 

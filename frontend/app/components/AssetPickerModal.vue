@@ -97,6 +97,7 @@ const customPrompt = ref('')
 
 const subtitleText = computed(() => {
   if (props.type === 'reference') return '团队共享参考图；选项目时可筛该项目 + 通用参考图'
+  if (props.type === 'all') return '人物、场景、服装、道具、参考图等全部图片资产'
   if (props.confirmBeforeSelect) return '选择服装后点击确认，将基于角色基准图重新生成换装图'
   return '仅显示有图片的资产'
 })
@@ -115,6 +116,7 @@ const filteredItems = computed(() => {
   return unique.filter(item => {
     const url = item.url || item.local_path || item.localPath
     if (!url) return false
+    if (item.type === 'voice') return false
     if (!q) return true
     return String(item.name || '').toLowerCase().includes(q)
   })
@@ -127,8 +129,9 @@ function normalizePath(raw) {
 async function load() {
   loading.value = true
   try {
-    const params = { type: props.type }
+    const params = {}
     if (props.dramaId && props.type !== 'reference') params.drama_id = props.dramaId
+    if (props.type && props.type !== 'all') params.type = props.type
     const res = await assetAPI.list(params)
     const rows = Array.isArray(res) ? res : (res?.items || res?.data || [])
     items.value = Array.isArray(rows) ? rows : []

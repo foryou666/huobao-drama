@@ -1837,8 +1837,18 @@
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ shotVidCount }}/{{ sbs.length }} 已生成</span>
-              <span class="tag">{{ lockedVideoConfigLabel }}</span>
-              <span v-if="isChengmengVideoActive" class="tag tag-warn">800 积分/条（15 秒）</span>
+              <div v-if="isChengmengVideoActive && chengmengVideoModels.length" class="prod-video-model-pills">
+                <button
+                  v-for="model in chengmengVideoModels"
+                  :key="model.id"
+                  type="button"
+                  class="prod-video-model-pill"
+                  :class="{ active: selectedChengmengVideoModel === model.id }"
+                  @click="selectedChengmengVideoModel = model.id"
+                >
+                  {{ model.label }}
+                </button>
+              </div>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
                 <button class="btn btn-sm" @click="addShot">
@@ -2811,6 +2821,10 @@ const gridLayoutOptions = [
 ]
 const imageConfigs = ref([])
 const videoConfigs = ref([])
+const chengmengVideoModels = ref([])
+const CHENGMENG_VIDEO_MODEL_STORAGE_KEY = 'huobao:chengmeng-video-model'
+const DEFAULT_CHENGMENG_VIDEO_MODEL = '32'
+const selectedChengmengVideoModel = ref(DEFAULT_CHENGMENG_VIDEO_MODEL)
 const audioConfigs = ref([])
 const pendingCharImageIds = ref([])
 const pendingCharUploadIds = ref([])
@@ -3573,9 +3587,28 @@ const lockedVideoConfigLabel = computed(() => {
   const cfg = resolvedVideoConfig.value
   if (!cfg) return '未配置'
   const prefix = lockedVideoConfigId.value ? '' : '默认 · '
-  return prefix + configLabel(cfg)
+  let label = prefix + configLabel(cfg)
+  if (isChengmengVideoActive.value && selectedChengmengVideoPricing.value?.label) {
+    label += ` · ${selectedChengmengVideoPricing.value.label}`
+  }
+  return label
 })
 const isChengmengVideoActive = computed(() => resolvedVideoConfig.value?.provider === 'chengmeng')
+
+const selectedChengmengVideoPricing = computed(() =>
+  chengmengVideoModels.value.find(item => item.id === selectedChengmengVideoModel.value)
+  || chengmengVideoModels.value[0]
+  || null,
+)
+
+watch(selectedChengmengVideoModel, (value) => {
+  if (typeof localStorage === 'undefined' || !value) return
+  localStorage.setItem(CHENGMENG_VIDEO_MODEL_STORAGE_KEY, value)
+})
+
+watch(isChengmengVideoActive, (active) => {
+  if (active) loadChengmengVideoOptions()
+}, { immediate: true })
 
 const videoPromptEditorReferenceImageCount = computed(() => {
   const sb = sbs.value.find(item => item.id === videoPromptEditor.value.storyboardId)
@@ -6139,6 +6172,9 @@ async function genVid(sb) {
       Object.assign(params, { reference_mode: 'single', image_url: first })
     }
   }
+  if (isChengmengVideoActive.value && selectedChengmengVideoModel.value) {
+    params.model = selectedChengmengVideoModel.value
+  }
 
   try {
     delete failedVideoMessages.value[sb.id]
@@ -6243,24 +6279,17 @@ function doCompose(sb) {
   })
 }
 function batchVideos() {
-  const pendingIds = sbs.value.filter(s => !hasVid(s)).map(s => s.id)
-  if (!pendingIds.length) {
-    toast.info('所有镜头视频已生成')
+  const pending = sbs.value.filter((s) => {
+    if (hasVid(s)) return false
+    const prompt = (s.video_prompt || s.videoPrompt || '').trim()
+    return !!prompt
+  })
+  if (!pending.length) {
+    toast.info('所有镜头视频已生成，或请先填写视频提示词')
     return
   }
-  pendingVideoIds.value = [...new Set([...pendingVideoIds.value, ...pendingIds])]
-  pendingIds.forEach((id) => {
-    const sb = sbs.value.find(s => s.id === id)
-    genTimer.startTask(videoTimerKey(id), `镜头 #${sb ? shotIndex(sb) : id} 视频`, 'video')
-  })
-  sendAssistant('请为所有尚无视频的镜头批量生成视频，调用 batch_generate_shot_videos', () => {
-    watchAsyncResult(() => pendingIds.every(id => {
-      const target = sbs.value.find(s => s.id === id)
-      const done = !!hasVid(target)
-      if (done) pendingVideoIds.value = pendingVideoIds.value.filter(item => item !== id)
-      return done
-    }), 80, 4000, () => pendingIds.forEach(id => genTimer.endTask(videoTimerKey(id))))
-  })
+  pending.forEach((sb) => { genVid(sb) })
+  toast.success(`已提交 ${pending.length} 个镜头视频生成`)
 }
 function batchCompose() {
   sendAssistant('请合成当前集所有已有视频的镜头，调用 compose_all_shots', () => {
@@ -6328,7 +6357,30 @@ async function loadConfigs() {
     imageConfigs.value = imgCfgs || []
     videoConfigs.value = vidCfgs || []
     audioConfigs.value = audCfgs || []
+    if (isChengmengVideoActive.value) {
+      await loadChengmengVideoOptions()
+    }
   } catch (e) { console.error('Failed to load AI configs', e) }
+}
+
+async function loadChengmengVideoOptions() {
+  try {
+    const res = await videoAPI.chengmengOptions()
+    chengmengVideoModels.value = (res?.models || []).map(item => ({
+      ...item,
+      label: item.label || (item.id === '32' ? 'Seedance 2.0' : 'Seedance 2.0 Fast'),
+    }))
+    if (chengmengVideoModels.value.length
+      && !chengmengVideoModels.value.some(item => item.id === selectedChengmengVideoModel.value)) {
+      const preferred = chengmengVideoModels.value.find(item => item.id === DEFAULT_CHENGMENG_VIDEO_MODEL)
+      selectedChengmengVideoModel.value = preferred?.id || chengmengVideoModels.value[0].id
+    }
+  } catch {
+    chengmengVideoModels.value = [
+      { id: '32', label: 'Seedance 2.0' },
+      { id: '53', label: 'Seedance 2.0 Fast' },
+    ]
+  }
 }
 
 function inferVoiceGender(name, desc = []) {
@@ -6361,7 +6413,17 @@ async function loadVoices() {
 }
 
 watch([lockedAudioConfigId, audioConfigs], () => { loadVoices() }, { deep: true })
-onMounted(() => { refresh({ restoreVideoPending: true }); loadConfigs(); loadVoices() })
+onMounted(() => {
+  if (typeof localStorage !== 'undefined') {
+    const saved = localStorage.getItem(CHENGMENG_VIDEO_MODEL_STORAGE_KEY)
+    if (saved === '53' || saved === '32') selectedChengmengVideoModel.value = saved
+    else if (saved === '31') selectedChengmengVideoModel.value = '53'
+    else selectedChengmengVideoModel.value = DEFAULT_CHENGMENG_VIDEO_MODEL
+  }
+  refresh({ restoreVideoPending: true })
+  loadConfigs()
+  loadVoices()
+})
 
 watch(() => route.params.episodeNumber, () => {
   panel.value = 'script'
@@ -7285,6 +7347,34 @@ watch(() => route.params.episodeNumber, () => {
 /* Production content */
 .prod-content { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prod-video-model-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.prod-video-model-pill {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.prod-video-model-pill.active {
+  background: var(--accent);
+  color: #fff;
+}
+.prod-video-model-pill:hover:not(.active) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
 
 .dub-grid { display: flex; flex-direction: column; gap: 10px; }
 .dub-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-radius: 20px; background: linear-gradient(180deg, rgba(255,255,255,0.74), rgba(248,251,255,0.58)); }

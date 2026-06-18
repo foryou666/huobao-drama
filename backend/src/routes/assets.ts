@@ -15,6 +15,7 @@ import {
   resolveAssetDisplayMedia,
   upsertLibraryAsset,
   formatSceneAssetName,
+  hydratePropImagesFromLinkedAssets,
 } from '../services/asset-library.js'
 import { summarizeCharacterMedia } from '../utils/character-image-variants.js'
 import { summarizeSceneMedia } from '../utils/scene-image-variants.js'
@@ -85,6 +86,7 @@ app.get('/', async (c) => {
       }
       if (char && !char.deletedAt) {
         payload.characterMedia = summarizeCharacterMedia(char)
+        payload.linkedCharacterId = char.id
       }
     } else if (row.type === 'scene') {
       let scene = null as typeof schema.scenes.$inferSelect | null
@@ -171,6 +173,7 @@ app.post('/', async (c) => {
       localPath: body.local_path || body.url || null,
       assetId: id,
     })
+    hydratePropImagesFromLinkedAssets(Number(body.drama_id))
   }
 
   logActivity(getAuthUser(c), {
@@ -278,6 +281,7 @@ app.post('/upload', async (c) => {
       localPath: path,
       assetId: id,
     })
+    hydratePropImagesFromLinkedAssets(dramaId)
   }
 
   const [row] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()

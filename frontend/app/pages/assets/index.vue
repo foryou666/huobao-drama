@@ -88,6 +88,86 @@
             :clickable="!!(item.url || item.local_path || item.localPath)"
             @preview="(img) => openCharacterMediaPreview(item, img)"
           />
+          <div v-if="activeType === 'character' && resolveLinkedCharacterId(item)" class="asset-outfit-section">
+            <div class="asset-outfit-section-head">
+              <span class="asset-outfit-label">造型分组</span>
+              <div class="asset-outfit-head-actions">
+                <label
+                  class="btn btn-sm asset-outfit-upload-btn"
+                  :class="{ 'is-disabled': isPendingNewOutfitUpload(resolveLinkedCharacterId(item)) || !assetHasPrimaryImage(item) }"
+                >
+                  <input
+                    type="file"
+                    accept="image/*"
+                    hidden
+                    :disabled="isPendingNewOutfitUpload(resolveLinkedCharacterId(item)) || !assetHasPrimaryImage(item)"
+                    @change="uploadNewOutfit(item, $event)"
+                  />
+                  {{ isPendingNewOutfitUpload(resolveLinkedCharacterId(item)) ? '上传中' : '本地上传建组' }}
+                </label>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="!assetHasPrimaryImage(item) || !resolveLinkedCharacterId(item)"
+                  @click="openOutfitImageModal(item, null, 'ai', true)"
+                >
+                  AI 建组
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="!assetHasPrimaryImage(item) || !resolveLinkedCharacterId(item)"
+                  @click="openOutfitImageModal(item, null, 'fusion', true)"
+                >
+                  溶图建组
+                </button>
+              </div>
+            </div>
+            <p v-if="!assetHasPrimaryImage(item)" class="dim asset-outfit-hint">请先上传或生成角色基准图</p>
+            <p v-else-if="!resolveCharacterOutfits(item).length" class="dim asset-outfit-hint">
+              暂无造型分组，可新建（如日常、宫装）并在组内追加上传
+            </p>
+            <div v-if="resolveCharacterOutfits(item).length" class="asset-outfit-list">
+              <div
+                v-for="outfit in resolveCharacterOutfits(item)"
+                :key="`${item.id}:${outfit.outfit_id}`"
+                class="asset-outfit-row"
+              >
+                <span class="asset-outfit-name">{{ outfit.label }}</span>
+                <span class="dim asset-outfit-count">{{ outfit.candidate_count || 0 }} 张</span>
+                <div class="asset-outfit-row-actions">
+                  <label
+                    class="btn btn-sm asset-outfit-upload-btn"
+                    :class="{ 'is-disabled': isPendingOutfitUpload(resolveLinkedCharacterId(item), outfit.outfit_id) }"
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      :disabled="isPendingOutfitUpload(resolveLinkedCharacterId(item), outfit.outfit_id)"
+                      @change="uploadOutfitCandidate(item, outfit, $event)"
+                    />
+                    {{ isPendingOutfitUpload(resolveLinkedCharacterId(item), outfit.outfit_id) ? '上传中' : '本地上传' }}
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    @click="openOutfitImageModal(item, outfit, 'ai', false)"
+                  >
+                    AI 生图
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    @click="openOutfitImageModal(item, outfit, 'fusion', false)"
+                  >
+                    溶图
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="activeType === 'character'" class="dim asset-outfit-unlinked">未关联项目角色，无法管理造型分组</p>
           <EntityViewMediaStrip
             v-if="activeType === 'scene' && resolveSceneMedia(item)"
             :media="resolveSceneMedia(item)"
@@ -195,17 +275,36 @@
         </div>
       </div>
     </div>
+
+    <CharacterOutfitImageModal
+      :open="outfitImageModal.open"
+      :char-id="outfitImageModal.charId"
+      :outfit-id="outfitImageModal.outfitId"
+      :outfit-label="outfitImageModal.outfitLabel"
+      :is-new-outfit="outfitImageModal.isNewOutfit"
+      :drama-id="outfitImageModal.dramaId"
+      :character-path="outfitImageModal.characterPath"
+      :character-name="outfitImageModal.characterName"
+      :initial-mode="outfitImageModal.initialMode"
+      @close="closeOutfitImageModal"
+      @done="onOutfitImageDone"
+    />
   </div>
 </template>
 
 <script setup>
-import { dramaAPI, assetAPI } from '~/composables/useApi'
+import { dramaAPI, assetAPI, characterAPI } from '~/composables/useApi'
 import { ASSET_CATEGORIES, assetCategoryLabel } from '~/utils/asset-categories.js'
 import { mediaDisplayUrl, normalizeMediaPath } from '~/utils/media-url.js'
 import GridMediaImage from '~/components/GridMediaImage.vue'
 import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
 import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
-import { characterImageTagLabel, resolveOutfitPreviewsFromMedia } from '~/utils/character-image-variants.js'
+import CharacterOutfitImageModal from '~/components/CharacterOutfitImageModal.vue'
+import {
+  characterImageTagLabel,
+  resolveOutfitPreviewsFromMedia,
+  slugifyOutfitId,
+} from '~/utils/character-image-variants.js'
 import { resolveViewPreviewsFromMedia } from '~/utils/entity-view-media.js'
 import { toast } from 'vue-sonner'
 
@@ -239,6 +338,19 @@ const editForm = ref({
 })
 const imageViewer = ref({ open: false, src: '', title: '' })
 const visibleCount = ref(GRID_PAGE_SIZE)
+const pendingCharOutfitUploadKeys = ref([])
+const pendingNewOutfitUploadIds = ref([])
+const outfitImageModal = ref({
+  open: false,
+  charId: null,
+  outfitId: '',
+  outfitLabel: '',
+  isNewOutfit: false,
+  dramaId: null,
+  characterPath: '',
+  characterName: '',
+  initialMode: 'upload',
+})
 
 function parseDramaFilter(raw) {
   const id = Number(raw)
@@ -295,6 +407,145 @@ function enrichEntityMedia(media, primaryTag) {
   return {
     ...media,
     view_previews: resolveViewPreviewsFromMedia(media),
+  }
+}
+
+function resolveLinkedCharacterId(item) {
+  const linked = Number(item?.linked_character_id ?? item?.linkedCharacterId)
+  if (Number.isFinite(linked) && linked > 0) return linked
+  const fromSource = Number(item?.source_id ?? item?.sourceId)
+  if ((item?.source_type === 'character' || item?.sourceType === 'character') && Number.isFinite(fromSource) && fromSource > 0) {
+    return fromSource
+  }
+  return null
+}
+
+function assetHasPrimaryImage(item) {
+  return !!(item?.url || item?.local_path || item?.localPath)
+}
+
+function resolveCharacterPrimaryPath(item) {
+  const media = item?.character_media || item?.characterMedia
+  const fromMedia = media?.primary_url || media?.preview_images?.[0]?.url
+  return normalizeMediaPath(fromMedia || item?.url || item?.local_path || item?.localPath)
+}
+
+function openOutfitImageModal(item, outfit, initialMode, isNewOutfit) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) {
+    toast.warning('未关联项目角色，无法添加造型图')
+    return
+  }
+  if (!assetHasPrimaryImage(item)) {
+    toast.warning('请先上传或生成角色基准图')
+    return
+  }
+  outfitImageModal.value = {
+    open: true,
+    charId,
+    outfitId: outfit?.outfit_id || '',
+    outfitLabel: outfit?.label || '',
+    isNewOutfit: !!isNewOutfit,
+    dramaId: Number(item?.drama_id || item?.dramaId) || null,
+    characterPath: resolveCharacterPrimaryPath(item),
+    characterName: item?.name || '',
+    initialMode: initialMode || 'upload',
+  }
+}
+
+function closeOutfitImageModal() {
+  outfitImageModal.value = { ...outfitImageModal.value, open: false }
+}
+
+async function onOutfitImageDone() {
+  await loadAssets()
+}
+
+function resolveCharacterOutfits(item) {
+  const media = resolveCharacterMedia(item)
+  if (!media) return []
+  return resolveOutfitPreviewsFromMedia(media)
+}
+
+function outfitUploadKey(charId, outfitId) {
+  return `${charId}:outfit:${outfitId}`
+}
+
+function isPendingOutfitUpload(charId, outfitId) {
+  return pendingCharOutfitUploadKeys.value.includes(outfitUploadKey(charId, outfitId))
+}
+
+function isPendingNewOutfitUpload(charId) {
+  return pendingNewOutfitUploadIds.value.includes(charId)
+}
+
+async function uploadOutfitCandidate(item, outfit, event) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) {
+    toast.warning('未关联项目角色，无法上传造型')
+    return
+  }
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  const uploadKey = outfitUploadKey(charId, outfit.outfit_id)
+  if (isPendingOutfitUpload(charId, outfit.outfit_id)) return
+  pendingCharOutfitUploadKeys.value.push(uploadKey)
+  try {
+    await characterAPI.uploadOutfitCandidate(charId, outfit.outfit_id, file, {
+      label: outfit.label,
+      set_as_default: false,
+    })
+    toast.success('已追加上传备选图')
+    await loadAssets()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingCharOutfitUploadKeys.value = pendingCharOutfitUploadKeys.value.filter(key => key !== uploadKey)
+    if (event?.target) event.target.value = ''
+  }
+}
+
+async function uploadNewOutfit(item, event) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) {
+    toast.warning('未关联项目角色，无法新建造型分组')
+    return
+  }
+  if (!assetHasPrimaryImage(item)) {
+    toast.warning('请先上传或生成角色基准图')
+    return
+  }
+  const file = event?.target?.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) {
+    toast.warning('请选择图片文件')
+    return
+  }
+  const name = window.prompt('请输入造型分组名称（如：日常、宫装、战场）', '日常')?.trim()
+  if (!name) {
+    if (event?.target) event.target.value = ''
+    return
+  }
+  const outfitId = slugifyOutfitId(name)
+  if (isPendingNewOutfitUpload(charId)) return
+  pendingNewOutfitUploadIds.value.push(charId)
+  try {
+    await characterAPI.uploadOutfitCandidate(charId, outfitId, file, {
+      label: name,
+      candidate_label: '定稿',
+      set_as_default: true,
+    })
+    toast.success(`「${name}」造型分组已创建`)
+    await loadAssets()
+  } catch (e) {
+    toast.error(e?.message || '上传失败')
+  } finally {
+    pendingNewOutfitUploadIds.value = pendingNewOutfitUploadIds.value.filter(id => id !== charId)
+    if (event?.target) event.target.value = ''
   }
 }
 
@@ -650,6 +901,48 @@ onMounted(async () => {
 .asset-body { padding: 10px; }
 .asset-name { font-size: 13px; font-weight: 600; }
 .asset-meta { font-size: 11px; margin-top: 2px; }
+.asset-outfit-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.asset-outfit-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.asset-outfit-head-actions,
+.asset-outfit-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.asset-outfit-label { font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.asset-outfit-hint,
+.asset-outfit-unlinked { font-size: 11px; margin: 0; line-height: 1.4; }
+.asset-outfit-unlinked { margin-top: 6px; }
+.asset-outfit-list { display: flex; flex-direction: column; gap: 4px; }
+.asset-outfit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.asset-outfit-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-outfit-count { flex-shrink: 0; font-size: 10px; }
+.asset-outfit-upload-btn {
+  flex-shrink: 0;
+  cursor: pointer;
+  margin: 0;
+}
+.asset-outfit-upload-btn.is-disabled { opacity: 0.55; pointer-events: none; }
 .asset-foot {
   display: flex;
   gap: 6px;

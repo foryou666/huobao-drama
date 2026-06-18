@@ -5,7 +5,7 @@ export const CHENGMENT_DISPLAY_NAME = '橙盟 Seedance 2.0 9图过人脸'
 /** 橙盟官方 API 网关（稳定）；勿使用已下线的 cpolar 临时隧道 */
 export const CHENGMENT_DEFAULT_BASE_URL = 'https://api.chengmeng.site'
 
-export const CHENGMENT_DEFAULT_MODEL_ID = '31'
+export const CHENGMENT_DEFAULT_MODEL_ID = '53'
 export const CHENGMENT_DEFAULT_GROUP_ID = '15'
 
 /** 橙盟 Seedance 2.0 标准版（视频生成页可选） */
@@ -47,6 +47,18 @@ export const CHENGMENT_PROMPT_MAX_LENGTH = 2000
 
 export function isChengmengProvider(provider?: string | null): boolean {
   return String(provider || '').toLowerCase() === 'chengmeng'
+}
+
+/** 每个橙盟 model_id 对应一条积分定价项（53/32 沿用历史 action 键） */
+export function chengmengModelCreditAction(modelId?: string | null): string {
+  const id = String(modelId || CHENGMENT_DEFAULT_MODEL_ID).trim()
+  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0) return 'video.generate.chengmeng_seedance2'
+  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) return 'video.generate.chengmeng'
+  return `video.generate.chengmeng.${id}`
+}
+
+export function isChengmengDynamicCreditAction(action: string): boolean {
+  return /^video\.generate\.chengmeng\.\d+$/.test(String(action || '').trim())
 }
 
 /** 橙盟 API 返回余额/额度不足时，用于自动切换备用 Key */

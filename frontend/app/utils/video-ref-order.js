@@ -1,12 +1,28 @@
 import { resolveCharacterImageUrl } from './character-image-variants.js'
+import { formatVoicePromptLabel } from './voice-refs.js'
 
 /** 匹配「图片1是xx」与简写「图1是xx」 */
 export const PROMPT_IMAGE_LABEL_RE = /(?:@)?(?:图片|图)\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
+
+/** 匹配「音频1是xx的声音」；兼容旧写法「音色1是…」 */
+export const PROMPT_AUDIO_LABEL_RE = /(?:@)?(?:音频|音色)\s*(\d+)\s*是\s*([^，,@。\n]+)/gi
 
 export function parsePromptImageLabels(prompt) {
   if (!prompt?.trim()) return []
   const items = []
   for (const match of String(prompt).matchAll(PROMPT_IMAGE_LABEL_RE)) {
+    const index = Number(match[1])
+    const label = String(match[2] || '').trim()
+    if (!Number.isFinite(index) || index <= 0 || !label) continue
+    if (!items.some(item => item.index === index)) items.push({ index, label })
+  }
+  return items.sort((a, b) => a.index - b.index)
+}
+
+export function parsePromptAudioLabels(prompt) {
+  if (!prompt?.trim()) return []
+  const items = []
+  for (const match of String(prompt).matchAll(PROMPT_AUDIO_LABEL_RE)) {
     const index = Number(match[1])
     const label = String(match[2] || '').trim()
     if (!Number.isFinite(index) || index <= 0 || !label) continue
@@ -475,13 +491,13 @@ export function buildOrderedVideoContentRefs(sb, prompt, chars, scenes, helpers)
   }
 
   const tts = getTTSUrl(sb)
-  if (tts) items.push({ type: 'audio', url: String(tts).replace(/^\/+/, ''), label: '配音' })
+  if (tts) items.push({ type: 'audio', url: String(tts).replace(/^\/+/, ''), label: '配音', role: 'reference_audio' })
 
   const voiceRefs = helpers.getVoiceRefs?.(sb) || []
   for (const ref of voiceRefs.slice(0, 3)) {
     const url = String(ref?.path || '').trim().replace(/^\/+/, '')
     if (!url) continue
-    items.push({ type: 'audio', url, label: ref.name || '音色参考', role: 'voice_reference' })
+    items.push({ type: 'audio', url, label: formatVoicePromptLabel(ref.name || '音色参考'), role: 'reference_audio' })
   }
 
   return items

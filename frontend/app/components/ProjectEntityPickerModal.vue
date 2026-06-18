@@ -170,13 +170,14 @@ const searchPlaceholder = computed(() => {
 const items = computed(() => {
   if (props.mode === 'prop') {
     return (props.dramaProps || []).map(prop => {
-      const viewCount = listPropImages(prop).length
+      const images = listPropImages(prop)
+      const viewCount = images.length
       const viewHint = viewCount > 1 ? `${viewCount}张视角` : ''
       return {
         id: prop.id,
         label: prop.name || `道具#${prop.id}`,
         sub: viewHint,
-        thumb: normalizeMediaPath(prop.image_url || prop.imageUrl || prop.local_path || prop.localPath),
+        thumb: normalizeMediaPath(images[0]?.url || prop.image_url || prop.imageUrl || prop.local_path || prop.localPath),
       }
     })
   }

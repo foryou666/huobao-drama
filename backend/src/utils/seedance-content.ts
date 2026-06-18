@@ -7,11 +7,23 @@ import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 
 export type VideoContentRefType = 'image' | 'video' | 'audio'
 export type VideoImageRole = 'first_frame' | 'last_frame' | 'reference_image'
+export type VideoMediaRole = VideoImageRole | 'reference_video' | 'reference_audio'
+
+/** 火山官方 Seedance 2.0 多模态 content[] 所需的 role 字段 */
+export function seedanceMultimodalContentRole(ref: Pick<VideoContentRef, 'type' | 'role'>): VideoMediaRole | undefined {
+  if (ref.type === 'image') {
+    if (ref.role === 'first_frame' || ref.role === 'last_frame') return ref.role
+    return 'reference_image'
+  }
+  if (ref.type === 'video') return 'reference_video'
+  if (ref.type === 'audio') return 'reference_audio'
+  return undefined
+}
 
 export interface VideoContentRef {
   type: VideoContentRefType
   url: string
-  role?: VideoImageRole
+  role?: VideoMediaRole | 'voice_reference'
   label?: string
 }
 
@@ -96,18 +108,23 @@ export function buildSeedance2Content(prompt: string, refs: VideoContentRef[]) {
     if (seen.has(key)) continue
     seen.add(key)
 
+    const role = seedanceMultimodalContentRole(ref)
     if (ref.type === 'image') {
       const item: any = { type: 'image_url', image_url: { url: ref.url } }
-      if (ref.role) item.role = ref.role
+      if (role) item.role = role
       content.push(item)
       continue
     }
     if (ref.type === 'video') {
-      content.push({ type: 'video_url', video_url: { url: ref.url } })
+      const item: any = { type: 'video_url', video_url: { url: ref.url } }
+      if (role) item.role = role
+      content.push(item)
       continue
     }
     if (ref.type === 'audio') {
-      content.push({ type: 'audio_url', audio_url: { url: ref.url } })
+      const item: any = { type: 'audio_url', audio_url: { url: ref.url } }
+      if (role) item.role = role
+      content.push(item)
     }
   }
 

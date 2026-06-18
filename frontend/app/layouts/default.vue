@@ -30,19 +30,42 @@
           </svg>
           <span>资产库</span>
         </NuxtLink>
-        <NuxtLink to="/videos" class="nav-link" :class="{ active: route.path === '/videos' }">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-          </svg>
-          <span>视频生成</span>
-        </NuxtLink>
-        <NuxtLink to="/videos/official" class="nav-link" :class="{ active: route.path === '/videos/official' }">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-            <circle cx="18" cy="6" r="2.5" fill="currentColor" stroke="none"/>
-          </svg>
-          <span>视频生成(官)</span>
-        </NuxtLink>
+        <div
+          ref="videoNavRef"
+          class="nav-dropdown"
+          :class="{ open: videoMenuOpen, active: isVideoRoute }"
+        >
+          <button
+            type="button"
+            class="nav-link nav-dropdown-trigger"
+            :class="{ active: isVideoRoute }"
+            aria-haspopup="menu"
+            :aria-expanded="videoMenuOpen"
+            @click="toggleVideoMenu"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+            <span>视频生成</span>
+            <svg class="nav-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div v-if="videoMenuOpen" class="nav-dropdown-menu" role="menu">
+            <NuxtLink
+              v-for="item in videoNavItems"
+              :key="item.to"
+              :to="item.to"
+              class="nav-dropdown-item"
+              :class="{ active: route.path === item.to }"
+              role="menuitem"
+              @click="videoMenuOpen = false"
+            >
+              <span class="nav-dropdown-item-label">{{ item.label }}</span>
+              <span v-if="item.refHint" class="nav-dropdown-item-ref">{{ item.refHint }}</span>
+            </NuxtLink>
+          </div>
+        </div>
         <NuxtLink to="/images" class="nav-link" :class="{ active: route.path.startsWith('/images') }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
@@ -109,11 +132,39 @@
 
 <script setup>
 import brandLogo from '~/assets/huobao-logo.png'
+import { buildVideoNavItems } from '~/constants/video-channels.js'
 
 const route = useRoute()
 const showBrandImage = ref(true)
 const { user, isAdmin, init, logout } = useAuth()
 const { teams, activeTeamId, activeTeamMemberNames, selectTeam, canManageTeam, loadActiveTeamMembers } = useTeam()
+
+const videoMenuOpen = ref(false)
+const videoNavRef = ref(null)
+
+const isVideoRoute = computed(() => route.path === '/videos' || route.path.startsWith('/videos/'))
+
+const videoNavItems = computed(() => buildVideoNavItems(isAdmin.value))
+
+function toggleVideoMenu() {
+  videoMenuOpen.value = !videoMenuOpen.value
+}
+
+function closeVideoMenu() {
+  videoMenuOpen.value = false
+}
+
+function onDocumentClick(event) {
+  if (!videoMenuOpen.value) return
+  const el = videoNavRef.value
+  if (el && !el.contains(event.target)) closeVideoMenu()
+}
+
+function onDocumentKeydown(event) {
+  if (event.key === 'Escape') closeVideoMenu()
+}
+
+watch(() => route.path, () => closeVideoMenu())
 
 function onTeamChange(e) {
   const id = Number(e.target.value)
@@ -131,6 +182,13 @@ const creditsBalance = computed(() => {
 onMounted(async () => {
   await init()
   await loadActiveTeamMembers()
+  document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
 })
 </script>
 
@@ -212,6 +270,67 @@ onMounted(async () => {
   color: var(--accent-text);
   border-color: rgba(76,125,255,0.18);
   font-weight: 600;
+}
+
+.nav-dropdown {
+  position: relative;
+}
+.nav-dropdown-trigger {
+  cursor: pointer;
+  font: inherit;
+}
+.nav-dropdown-chevron {
+  opacity: 0.55;
+  transition: transform 0.18s var(--ease-out);
+}
+.nav-dropdown.open .nav-dropdown-chevron {
+  transform: rotate(180deg);
+}
+.nav-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-card, 0 8px 24px rgba(0, 0, 0, 0.12));
+}
+.nav-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--text-0);
+  transition: background 0.15s;
+}
+.nav-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+.nav-dropdown-item.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+.nav-dropdown-item-label {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.nav-dropdown-item-ref {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.nav-dropdown-item.active .nav-dropdown-item-ref {
+  color: var(--accent-text);
+  opacity: 0.75;
 }
 
 .header-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }

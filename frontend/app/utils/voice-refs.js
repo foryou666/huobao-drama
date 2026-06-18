@@ -51,3 +51,11 @@ export function formatVoiceDuration(seconds) {
   if (!Number.isFinite(n) || n <= 0) return ''
   return `${n.toFixed(1).replace(/\.0$/, '')}s`
 }
+
+/** 橙盟/Seedance 参考音频描述：音频1是「{name}的声音」 */
+export function formatVoicePromptLabel(name) {
+  const raw = String(name || '').trim()
+  if (!raw) return '参考音色的声音'
+  if (/的声音$/u.test(raw)) return raw
+  return `${raw.replace(/的声音$/u, '')}的声音`
+}

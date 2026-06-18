@@ -177,6 +177,14 @@ export const uploadAPI = {
     }
     return uploadForm('/upload/image', form)
   },
+  video: (file: File, dramaId?: number | null) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (dramaId != null && Number.isFinite(Number(dramaId)) && Number(dramaId) > 0) {
+      form.append('drama_id', String(dramaId))
+    }
+    return uploadForm('/upload/video', form)
+  },
 }
 
 export const agentAPI = {
@@ -446,6 +454,26 @@ export const imageAPI = {
   generate: (d: any) => api.post('/images', d),
   get: (id: number) => api.get(`/images/${id}`),
   capabilities: () => api.get('/images/studio/capabilities'),
+  attachToEntity: (
+    id: number,
+    data: {
+      entity_type: 'character' | 'scene' | 'prop'
+      entity_id?: number
+      drama_id?: number
+      create_entity?: {
+        name?: string
+        location?: string
+        time?: string
+        role?: string
+        description?: string
+        appearance?: string
+        prompt?: string
+      }
+      group_id?: string
+      group_label?: string
+      set_as_default?: boolean
+    },
+  ) => api.post(`/images/${id}/attach`, data),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
@@ -483,8 +511,11 @@ export const gridAPI = {
 }
 export const videoAPI = {
   generate: (d: any) => api.post('/videos', d),
-  officialOptions: () => api.get('/videos/official-options'),
   chengmengOptions: () => api.get('/videos/chengmeng-options'),
+  grokOptions: () => api.get('/videos/grok-options'),
+  jimengOptions: () => api.get('/videos/jimeng-options'),
+  officialOptions: () => api.get('/videos/official-options'),
+  aistarslabOptions: () => api.get('/videos/aistarslab-options'),
   get: (id: number) => api.get(`/videos/${id}`),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
@@ -517,6 +548,12 @@ export const videoAPI = {
     return api.get(`/videos/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
 }
+export const jimengSessionAPI = {
+  get: () => api.get('/jimeng/session'),
+  save: (d: { cookie?: string; session_id?: string; label?: string }) => api.put('/jimeng/session', d),
+  clear: () => api.del('/jimeng/session'),
+  validate: () => api.post('/jimeng/session/validate'),
+}
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),
   all: (epId: number) => api.post(`/compose/episodes/${epId}/compose-all`),
@@ -532,6 +569,16 @@ export const aiConfigAPI = {
   update: (id: number, d: any) => api.put(`/ai-configs/${id}`, d),
   del: (id: number) => api.del(`/ai-configs/${id}`),
   test: (d: any) => api.post('/ai-configs/test', d),
+  aistarslabConfig: (params: { api_key: string; base_url?: string }) => {
+    const query = new URLSearchParams({ api_key: params.api_key })
+    if (params.base_url) query.set('base_url', params.base_url)
+    return api.get(`/ai-configs/aistarslab-config?${query.toString()}`)
+  },
+  chengmengConfig: (params: { api_key: string; base_url?: string }) => {
+    const query = new URLSearchParams({ api_key: params.api_key })
+    if (params.base_url) query.set('base_url', params.base_url)
+    return api.get(`/ai-configs/chengmeng-config?${query.toString()}`)
+  },
   huobaoPreset: (apiKey: string) => api.post('/ai-configs/huobao-preset', { api_key: apiKey }),
 }
 
@@ -650,6 +697,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'video.generate.seedance2': '官方 Seedance 2.0 视频',
   'video.generate.seedance2_fast': '官方 Seedance 2.0 Fast 视频',
   'video.generate.chengmeng': '橙盟 9图过人脸视频',
+  'video.generate.chengmeng_seedance2': '橙盟 Seedance 2.0 标准版',
   'grid.generate': '生成宫格图',
   'grid.prompt': '宫格提示词',
   'assistant.chat': '制作助手',

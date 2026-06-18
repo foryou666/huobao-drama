@@ -110,7 +110,7 @@
 
     <AssetPickerModal
       :open="picker.open"
-      type="reference"
+      type="all"
       :drama-id="dramaId"
       :title="pickerTitle"
       @close="picker.open = false"

@@ -13,8 +13,12 @@
               选择场景
               <span v-if="boundSceneCount" class="composer-pick-count">{{ boundSceneCount }}</span>
             </button>
+            <button type="button" class="btn btn-sm composer-pick-btn" @click="openPropPicker">
+              选择道具
+              <span v-if="boundPropCount" class="composer-pick-count">{{ boundPropCount }}</span>
+            </button>
           </div>
-          <div v-if="boundCharacterCount || boundSceneCount" class="composer-bound-summary">
+          <div v-if="boundCharacterCount || boundSceneCount || boundPropCount" class="composer-bound-summary">
             <button
               v-for="char in boundCharacters"
               :key="char.id"
@@ -33,9 +37,18 @@
             >
               {{ sceneDisplayLabel(scene) }} ×
             </button>
+            <button
+              v-for="prop in boundProps"
+              :key="prop.id"
+              type="button"
+              class="composer-bound-chip"
+              @click="unbindPropById(prop.id)"
+            >
+              {{ prop.name || `道具#${prop.id}` }} ×
+            </button>
           </div>
         </div>
-        <span class="dim composer-project-hint">选择角色/场景或上传参考图；参考图栏出现图片后可在提示词输入 <kbd>@</kbd> 关联</span>
+        <span class="dim composer-project-hint">选择角色/场景/道具（角色可选服装造型）或上传/资产库选图；参考图栏出现图片后可用 <kbd>@</kbd> 关联</span>
       </div>
 
       <div class="composer-main">
@@ -149,8 +162,8 @@
               上传图片
             </label>
 
-            <button type="button" class="composer-upload-btn" @click="openReferencePicker">
-              参考图库
+            <button type="button" class="composer-upload-btn" @click="openAssetLibrary">
+              资产库
             </button>
 
             <button
@@ -182,20 +195,25 @@
       :mode="entityPickerMode"
       :characters="projectChars"
       :scenes="projectScenes"
+      :drama-props="projectProps"
       :selected-character-ids="binding.character_ids"
       :selected-scene-ids="getBindingSceneIds(binding)"
+      :selected-prop-ids="binding.prop_ids"
+      :selected-character-image-refs="binding.character_image_refs"
+      :selected-scene-image-refs="binding.scene_image_refs"
+      :selected-prop-image-refs="binding.prop_image_refs"
       @close="entityPickerOpen = false"
       @confirm="onEntityPickerConfirm"
     />
 
     <AssetPickerModal
-      :key="referencePickerKey"
-      :open="referencePickerOpen"
-      type="reference"
-      :extra-items="sessionReferenceAssets"
-      title="从参考图库选择"
-      @close="referencePickerOpen = false"
-      @select="onReferencePicked"
+      :key="assetLibraryKey"
+      :open="assetLibraryOpen"
+      type="all"
+      :drama-id="dramaId ? Number(dramaId) : null"
+      title="从资产库选择"
+      @close="assetLibraryOpen = false"
+      @select="onAssetLibraryPicked"
     />
 
     <div
@@ -221,8 +239,11 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { toast } from 'vue-sonner'
 import { dramaAPI, imageAPI, uploadAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
+import { assetCategoryLabel } from '~/utils/asset-categories.js'
 import {
+  applyStudioPromptImageHeader,
   bindCharacter,
+  bindProp,
   bindScene,
   buildMentionOptions,
   buildStudioContentRefs,
@@ -235,6 +256,7 @@ import {
   replaceMentionWithImageLabel,
   sceneDisplayLabel,
   unbindCharacter,
+  unbindProp,
   unbindScene,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
@@ -256,6 +278,7 @@ const uploadedRefs = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
+const projectProps = ref([])
 const aspectRatio = ref('9:16')
 const dramaId = ref('')
 const promptEl = ref(null)
@@ -265,8 +288,8 @@ const mentionStart = ref(0)
 const imagePreview = ref({ open: false, src: '', title: '' })
 const entityPickerOpen = ref(false)
 const entityPickerMode = ref('character')
-const referencePickerOpen = ref(false)
-const referencePickerKey = ref(0)
+const assetLibraryOpen = ref(false)
+const assetLibraryKey = ref(0)
 const sessionReferenceAssets = ref([])
 const refStackExpanded = ref(false)
 
@@ -281,9 +304,13 @@ const boundScenes = computed(() => {
   return projectScenes.value.filter(scene => ids.includes(scene.id))
 })
 const boundSceneCount = computed(() => boundScenes.value.length)
+const boundProps = computed(() =>
+  projectProps.value.filter(prop => (binding.prop_ids || []).includes(prop.id)),
+)
+const boundPropCount = computed(() => boundProps.value.length)
 
 const visualRefItems = computed(() =>
-  buildStudioRefStripItems(binding, projectChars.value, projectScenes.value, [], uploadedRefs.value, gridUrl),
+  buildStudioRefStripItems(binding, projectChars.value, projectScenes.value, projectProps.value, uploadedRefs.value, gridUrl),
 )
 
 const showRefStrip = computed(() => dramaLinked.value || visualRefItems.value.length > 0)
@@ -356,6 +383,7 @@ async function loadProjectAssets(id) {
   if (!Number.isFinite(parsed)) {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
     resetBinding()
     return
   }
@@ -363,9 +391,11 @@ async function loadProjectAssets(id) {
     const drama = await dramaAPI.get(parsed)
     projectChars.value = drama?.characters || []
     projectScenes.value = drama?.scenes || []
+    projectProps.value = drama?.props || []
   } catch (err) {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
     toast.error(err?.message || '加载项目素材失败')
   }
 }
@@ -377,7 +407,32 @@ function onDramaChange() {
   else {
     projectChars.value = []
     projectScenes.value = []
+    projectProps.value = []
   }
+}
+
+function syncPromptImageHeader() {
+  prompt.value = applyStudioPromptImageHeader(
+    prompt.value,
+    binding,
+    projectChars.value,
+    projectScenes.value,
+    projectProps.value,
+    uploadedRefs.value,
+  )
+}
+
+function openPropPicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  if (!projectProps.value.length) {
+    toast.warning('该项目暂无道具')
+    return
+  }
+  entityPickerMode.value = 'prop'
+  entityPickerOpen.value = true
 }
 
 function openCharacterPicker() {
@@ -407,6 +462,7 @@ function onEntityPickerConfirm(result) {
       ...(binding.character_image_refs || {}),
       ...(result.characterImageRefs || {}),
     }
+    syncPromptImageHeader()
     return
   }
   if (result.mode === 'scene') {
@@ -422,12 +478,28 @@ function onEntityPickerConfirm(result) {
         if (scene.location) prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
       }
     }
+    binding.scene_image_refs = { ...(result.sceneImageRefs || {}) }
+    syncPromptImageHeader()
+    return
+  }
+  if (result.mode === 'prop') {
+    const prevIds = new Set(binding.prop_ids || [])
+    const nextIds = new Set(result.propIds || [])
+    for (const prop of projectProps.value) {
+      const wasBound = prevIds.has(prop.id)
+      const isBound = nextIds.has(prop.id)
+      if (isBound && !wasBound) bindProp(binding, prop.id, projectProps.value)
+      else if (!isBound && wasBound) unbindProp(binding, prop.id)
+    }
+    binding.prop_image_refs = { ...(result.propImageRefs || {}) }
+    syncPromptImageHeader()
   }
 }
 
 function unbindCharacterById(charId, name) {
   unbindCharacter(binding, charId)
   prompt.value = removePromptImageLabel(prompt.value, null, name)
+  syncPromptImageHeader()
 }
 
 function unbindSceneById(sceneId) {
@@ -437,6 +509,14 @@ function unbindSceneById(sceneId) {
     prompt.value = removePromptImageLabel(prompt.value, null, sceneDisplayLabel(scene))
     if (scene.location) prompt.value = removePromptImageLabel(prompt.value, null, scene.location)
   }
+  syncPromptImageHeader()
+}
+
+function unbindPropById(propId) {
+  const prop = projectProps.value.find(item => item.id === propId)
+  unbindProp(binding, propId)
+  if (prop?.name) prompt.value = removePromptImageLabel(prompt.value, null, prop.name)
+  syncPromptImageHeader()
 }
 
 function openVisualRefPreview(item) {
@@ -461,12 +541,14 @@ function unlinkRef(ref) {
   const label = ref.promptLabel || ref.label
   if (ref.source === 'character' && ref.charId) unbindCharacter(binding, ref.charId)
   else if (ref.source === 'scene' || ref.sceneId) unbindScene(binding, ref.sceneId)
+  else if (ref.source === 'prop' && ref.propId) unbindProp(binding, ref.propId)
   else if (ref.source === 'reference' && ref.url) {
     const path = normalizeMediaPath(ref.url)
     uploadedRefs.value = uploadedRefs.value.filter(item => normalizeMediaPath(item.path) !== path)
     syncUploadPaths()
   }
   prompt.value = removePromptImageLabel(prompt.value, ref.imageIndex, label)
+  syncPromptImageHeader()
 }
 
 function syncUploadPaths() {
@@ -489,6 +571,7 @@ function addReferencePath(path, meta = {}) {
     assetId: meta.assetId || null,
   })
   syncUploadPaths()
+  syncPromptImageHeader()
   return true
 }
 
@@ -514,6 +597,7 @@ async function onUpload(event) {
     }
   }
   if (event?.target) event.target.value = ''
+  syncPromptImageHeader()
 }
 
 function pushSessionReferenceAsset({ path, label, assetId }) {
@@ -534,20 +618,21 @@ function pushSessionReferenceAsset({ path, label, assetId }) {
   ]
 }
 
-function openReferencePicker() {
-  referencePickerKey.value += 1
-  referencePickerOpen.value = true
+function openAssetLibrary() {
+  assetLibraryKey.value += 1
+  assetLibraryOpen.value = true
 }
 
-function onReferencePicked(item) {
+function onAssetLibraryPicked(item) {
   const asset = item?.asset || item
   const path = normalizeMediaPath(asset?.url || asset?.local_path || asset?.localPath)
   if (!path) {
-    toast.error('参考图无效')
+    toast.error('资产图片无效')
     return
   }
-  if (!addReferencePath(path, { label: asset?.name || '参考图', assetId: asset?.id || null })) return
-  referencePickerOpen.value = false
+  const label = asset?.name || assetCategoryLabel(asset?.type) || '参考图'
+  if (!addReferencePath(path, { label, assetId: asset?.id || null })) return
+  assetLibraryOpen.value = false
   prefetchMediaUrls([path]).catch(() => {})
 }
 
@@ -654,7 +739,14 @@ function submit() {
   }
 
   if (dramaLinked.value) {
-    const issues = validateStudioPrompt(text, binding, projectChars.value, projectScenes.value)
+    const issues = validateStudioPrompt(
+      text,
+      binding,
+      projectChars.value,
+      projectScenes.value,
+      projectProps.value,
+      uploadedRefs.value,
+    )
     if (issues.length) {
       toast.error(formatPromptImageRefIssues(issues))
       return
@@ -664,7 +756,8 @@ function submit() {
       text,
       projectChars.value,
       projectScenes.value,
-      [],
+      projectProps.value,
+      uploadedRefs.value,
     )
     payload.prompt = finalPrompt
     const refs = collectReferencePaths(contentRefs)

@@ -9,6 +9,17 @@ import { SEEDANCE_VIDEO_PRESETS } from '../constants/video-presets.js'
 import { SEEDANCE_DOC_URL, SEEDANCE_MODELS, SEEDANCE_ARK_BASE_URL } from '../constants/seedance.js'
 import { denyUnlessAdmin, getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
+import { AISTARSLAB_DEFAULT_BASE_URL, AISTARSLAB_DOC_URL } from '../constants/aistarslab.js'
+import { CHENGMENT_DOC_URL } from '../constants/chengmeng.js'
+import {
+  listAistarslabModelOptionsForApi,
+  loadAistarslabVideoConfigFromProvider,
+  normalizeAistarslabVideoConfig,
+} from '../utils/aistarslab-video-options.js'
+import {
+  getChengmengVideoModelOptions,
+  listChengmengModelOptionsForApi,
+} from '../utils/chengmeng-video-options.js'
 
 const app = new Hono()
 
@@ -182,6 +193,79 @@ app.get('/seedance-models', (c) => {
       },
     ],
   })
+})
+
+// GET /ai-configs/aistarslab-config — 从 OpenAPI 拉取线路与模型（设置页展示）
+app.get('/aistarslab-config', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+
+  const apiKey = String(c.req.query('api_key') || '').trim()
+  const baseUrl = String(c.req.query('base_url') || AISTARSLAB_DEFAULT_BASE_URL).trim()
+  if (!apiKey || apiKey === '********') {
+    return badRequest(c, '请填写有效的 API Key')
+  }
+
+  try {
+    const raw = await loadAistarslabVideoConfigFromProvider({ baseUrl, apiKey })
+    const config = normalizeAistarslabVideoConfig(raw)
+    const models = listAistarslabModelOptionsForApi(config, null)
+    const channels = config.channels.map(channel => ({
+      channel: channel.channel,
+      title: channel.title,
+      description: channel.description,
+      seconds_min: channel.secondsMin,
+      seconds_max: channel.secondsMax,
+      aspect_ratios: channel.aspectRatios,
+      supported_mode_types: channel.supportedModeTypes,
+      default_option: channel.defaultOption,
+      models: channel.models.map(model => ({
+        model: model.model,
+        label: model.label,
+        resolutions: model.resolutions,
+        credits_per_second: model.creditsPerSecond,
+        fixed_total_credits: model.fixedTotalCredits,
+        default_option: model.defaultOption,
+      })),
+    }))
+    const modelIds = [...new Set(models.map(item => item.model))]
+
+    return success(c, {
+      doc_url: AISTARSLAB_DOC_URL,
+      reference_video_multiplier: config.referenceVideoCreditsMultiplier,
+      channels,
+      models,
+      model_ids: modelIds,
+    })
+  } catch (err: any) {
+    return badRequest(c, err?.message || '拉取视频通道配置失败')
+  }
+})
+
+// GET /ai-configs/chengmeng-config — 从橙盟 /api/models 拉取模型（设置页展示）
+app.get('/chengmeng-config', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+
+  const apiKey = String(c.req.query('api_key') || '').trim()
+  const baseUrl = String(c.req.query('base_url') || '').trim()
+  if (!apiKey || apiKey === '********') {
+    return badRequest(c, '请填写有效的 API Key')
+  }
+
+  try {
+    const remoteModels = await getChengmengVideoModelOptions({ baseUrl, apiKey }, { refresh: true })
+    const models = listChengmengModelOptionsForApi(remoteModels, null)
+    const modelIds = models.map(item => item.model_id)
+
+    return success(c, {
+      doc_url: CHENGMENT_DOC_URL,
+      models,
+      model_ids: modelIds,
+    })
+  } catch (err: any) {
+    return badRequest(c, err?.message || '拉取橙盟模型列表失败')
+  }
 })
 
 // GET /ai-configs?service_type=text — 工作台可读；完整列表仅管理员

@@ -5,6 +5,7 @@ import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
 import type { AuthUser } from '../middleware/auth.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
+import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 
 function parseReferenceImages(row: {
   imageUrl?: string | null
@@ -53,6 +54,19 @@ function parseReferenceImages(row: {
     path,
     display_url: resolveDisplayMediaUrl(path),
   }))
+}
+
+function parseReferenceVideos(row: { referencePayload?: string | null }) {
+  return parseVideoContentRefs(row.referencePayload)
+    .filter(ref => ref.type === 'video')
+    .map((ref, idx) => {
+      const path = String(ref.url || '').trim().replace(/^\/+/, '')
+      return {
+        path,
+        label: ref.label || `参考视频${idx + 1}`,
+      }
+    })
+    .filter(item => item.path)
 }
 
 export interface VideoLedgerQuery {
@@ -196,7 +210,7 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       prompt: row.prompt,
       status: row.status,
       task_id: row.taskId,
-      error_msg: row.errorMsg,
+      error_msg: sanitizeUserFacingProviderError(row.errorMsg),
       duration: row.duration,
       aspect_ratio: row.aspectRatio,
       reference_mode: row.referenceMode,
@@ -207,6 +221,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       completed_at: row.completedAt,
       display_video_url: resolveDisplayMediaUrl(rawVideo),
       reference_images: parseReferenceImages(row),
+      reference_videos: parseReferenceVideos(row),
+      reference_payload: row.referencePayload,
       is_manual: !row.storyboardId,
       drama_title: drama?.title || null,
       episode_id: ep?.id || null,

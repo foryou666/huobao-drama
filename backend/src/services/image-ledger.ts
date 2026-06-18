@@ -4,6 +4,7 @@ import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
 import type { AuthUser } from '../middleware/auth.js'
+import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 
 function parseSizeAspectRatio(size?: string | null): string {
   const raw = String(size || '').trim()
@@ -170,7 +171,7 @@ export function listImageLedger(query: ImageLedgerQuery) {
       prompt: row.prompt,
       status: row.status,
       task_id: row.taskId,
-      error_msg: row.errorMsg,
+      error_msg: sanitizeUserFacingProviderError(row.errorMsg),
       size: row.size,
       aspect_ratio: parseSizeAspectRatio(row.size),
       image_type: row.imageType,

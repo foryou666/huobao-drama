@@ -3,6 +3,7 @@ import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
 import type { AssetCategory } from '../constants/asset-categories.js'
 import { thumbPathForSource } from '../utils/thumbnail.js'
+import { listPropImages, summarizePropMedia } from '../utils/prop-image-variants.js'
 
 /** 从资产名称解析场景地点与时间，如「养心殿（日）」「王府书房·夜」 */
 export function parseSceneAssetName(name: string): { location: string; time: string } {
@@ -587,6 +588,61 @@ export function syncEntityFromAsset(assetId: number) {
   }
 
   return null
+}
+
+/** 将资产库中已上传、但未写入 props 表的道具图同步到项目道具实体 */
+export function hydratePropImagesFromLinkedAssets(dramaId: number) {
+  const id = Number(dramaId)
+  if (!Number.isFinite(id) || id <= 0) return 0
+
+  const props = db.select().from(schema.props)
+    .where(and(eq(schema.props.dramaId, id), isNull(schema.props.deletedAt)))
+    .all()
+
+  const assets = db.select().from(schema.assets)
+    .where(and(eq(schema.assets.dramaId, id), isNull(schema.assets.deletedAt)))
+    .all()
+    .filter(row => row.type === 'prop' || row.type === 'costume')
+
+  let hydrated = 0
+  for (const prop of props) {
+    if (listPropImages(prop).length > 0) continue
+
+    const linked = assets.find(row => row.sourceType === 'prop' && row.sourceId === prop.id)
+      || assets.find(row => String(row.name || '').trim() === String(prop.name || '').trim())
+
+    const url = normalizePath(linked?.url || linked?.localPath || '')
+    if (!url) continue
+
+    pushAssetToProp(prop.id, {
+      url,
+      name: prop.name,
+      description: prop.description,
+    })
+
+    if (linked?.id) {
+      if (linked.sourceType !== 'prop' || linked.sourceId !== prop.id) {
+        db.update(schema.assets).set({
+          sourceType: 'prop',
+          sourceId: prop.id,
+          updatedAt: now(),
+        }).where(eq(schema.assets.id, linked.id)).run()
+      }
+      syncPropAsset(prop.id)
+    }
+
+    hydrated += 1
+  }
+
+  return hydrated
+}
+
+export function enrichPropForStudio(prop: typeof schema.props.$inferSelect) {
+  const media = summarizePropMedia(prop)
+  return {
+    ...prop,
+    propMedia: media,
+  }
 }
 
 export function syncDramaAssets(dramaId: number) {
