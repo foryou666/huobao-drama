@@ -13,9 +13,13 @@ import { validatePromptImageRefs, formatPromptImageRefIssues } from '../utils/vi
 import { isChengmengProvider, isChengmengBalanceError, CHENGMENG_VIDEO_MODELS } from '../constants/chengmeng.js'
 import { isAistarslabProvider } from '../constants/aistarslab.js'
 import { mapGrokAspectRatio } from '../constants/geeknow-grok.js'
-import { normalizeJimengAspectRatio } from '../constants/jimeng-web.js'
-import { processJimengWebVideoGeneration } from './jimeng-web-video.js'
-import { buildJimengVirtualConfig } from './jimeng-web-video.js'
+import { normalizeJimengAspectRatio, resolveJimengSubmitModel } from '../constants/jimeng-web.js'
+import { normalizeDoubaoTrainingAspectRatio, normalizeDoubaoTrainingDuration } from '../constants/doubao-training.js'
+import { processDoubaoTrainingVideoGeneration } from './doubao-training-video.js'
+import { applyTrainingVideoOverlay } from '../utils/training-video-overlay.js'
+import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
+import { buildJimengVirtualConfig, processJimengWebVideoGeneration } from './jimeng-web-video.js'
+import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import {
   normalizeChengmengContentRefs,
   normalizeChengmengReferenceUrls,
@@ -93,6 +97,8 @@ interface GenerateVideoParams {
   configId?: number
   provider?: string
   aistarslabChannel?: string
+  jimengSessionId?: string
+  doubaoTrainingSessionId?: string
   creditTransactionId?: number
   userId?: number
 }
@@ -101,7 +107,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const ts = now()
   const config = params.provider === 'jimeng_web'
     ? buildJimengVirtualConfig(params.model)
-    : params.configId
+    : params.provider === 'doubao_training'
+      ? buildDoubaoTrainingVirtualConfig(params.model)
+      : params.configId
       ? getConfigById(params.configId, { includeInactive: true })
       : getActiveConfig('video')
   if (!config) throw new Error('No video AI config available')
@@ -135,9 +143,14 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const useAistarslab = isAistarslabProvider(config.provider)
   const useGeeknowGrok = config.provider === 'geeknow'
   const useJimengWeb = config.provider === 'jimeng_web'
+  const useDoubaoTraining = config.provider === 'doubao_training'
   const storedModel = useChengmeng
     ? (params.model || CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST)
-    : (params.model || config.model)
+    : useJimengWeb
+      ? resolveJimengSubmitModel(params.model)
+      : useDoubaoTraining
+        ? (params.model || config.model)
+        : (params.model || config.model)
   const aspectRatio = useChengmeng
     ? normalizeChengmengAspectRatio(rawAspect, defaultAspect)
     : useAistarslab
@@ -146,7 +159,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
       ? mapGrokAspectRatio(rawAspect)
       : useJimengWeb
         ? normalizeJimengAspectRatio(rawAspect, defaultAspect)
-        : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
+        : useDoubaoTraining
+          ? normalizeDoubaoTrainingAspectRatio(rawAspect)
+          : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
 
   if (useChengmeng) {
     const { imageCount, videoCount, audioCount } = resolveChengmengPromptMediaCounts({
@@ -173,9 +188,15 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     lastFrameUrl: params.lastFrameUrl,
     referenceImageUrls: params.referenceImageUrls ? JSON.stringify(params.referenceImageUrls) : null,
     referencePayload: params.contentRefs?.length ? JSON.stringify(params.contentRefs) : null,
-    duration: params.duration || 15,
+    duration: useDoubaoTraining
+      ? normalizeDoubaoTrainingDuration(params.duration)
+      : (params.duration || 15),
     aspectRatio,
-    style: params.aistarslabChannel || null,
+    style: useJimengWeb
+      ? (params.jimengSessionId ? `jimeng_session:${params.jimengSessionId}` : null)
+      : useDoubaoTraining
+        ? (params.doubaoTrainingSessionId ? `doubao_training_session:${params.doubaoTrainingSessionId}` : null)
+        : (params.aistarslabChannel || null),
     creditTransactionId: params.creditTransactionId ?? null,
     configId,
     userId: params.userId ?? null,
@@ -212,6 +233,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
 async function processVideoGeneration(id: number, config: AIConfig, options?: { allowChengmengFallback?: boolean }) {
   if (config.provider === 'jimeng_web') {
     return processJimengWebVideoGeneration(id)
+  }
+  if (config.provider === 'doubao_training') {
+    return processDoubaoTrainingVideoGeneration(id)
   }
 
   const adapter = getVideoAdapter(config.provider)
@@ -670,7 +694,17 @@ export async function handleVideoComplete(id: number, videoUrl: string, duration
   })
 
   try {
-    const localPath = await downloadFile(videoUrl, 'videos')
+    const [videoMeta] = db.select({
+      provider: schema.videoGenerations.provider,
+      dramaId: schema.videoGenerations.dramaId,
+    })
+      .from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.id, id))
+      .all()
+    let localPath = await downloadFile(videoUrl, 'videos', { syncOss: false })
+    if (videoMeta?.provider === 'doubao_training') {
+      localPath = await applyTrainingVideoOverlay(localPath)
+    }
     db.update(schema.videoGenerations)
       .set({ localPath, updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
@@ -682,6 +716,7 @@ export async function handleVideoComplete(id: number, videoUrl: string, duration
         .run()
     }
     logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId: sbId, applyToStoryboard, duration })
+    await trySyncStaticToOss(localPath, videoMeta?.dramaId)
   } catch (err: any) {
     logTaskWarn('VideoTask', 'download-failed', {
       id,
@@ -704,7 +739,7 @@ export async function refreshVideoFromProvider(id: number): Promise<typeof schem
 
   if (config.provider === 'jimeng_web') {
     if (!record.taskId) throw new Error('该记录无 task_id，无法向即梦查询')
-    const poll = await import('./jimeng-web-video.js').then(m => m.pollJimengVideoOnce(record.taskId!))
+    const poll = await import('./jimeng-web-video.js').then(m => m.pollJimengVideoOnce(record.taskId!, record.style))
     if (poll.status === 'completed' && poll.videoUrl) {
       await handleVideoComplete(id, poll.videoUrl, record.duration, record.storyboardId)
     } else if (poll.status === 'failed') {
@@ -767,7 +802,7 @@ export function resumeProcessingVideoTasks() {
         provider: row.provider,
       })
       import('./jimeng-web-video.js').then(m => {
-        m.pollJimengVideoTask(row.id, row.taskId!, row.storyboardId, row.duration).catch(err => {
+        m.pollJimengVideoTask(row.id, row.taskId!, row.storyboardId, row.duration, row.style).catch(err => {
           logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
         })
       })

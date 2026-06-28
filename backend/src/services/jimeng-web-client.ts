@@ -7,9 +7,28 @@ import {
   JIMENG_VERSION_CODE,
 } from '../constants/jimeng-web.js'
 import type { JimengWebSession } from './jimeng-web-session.js'
+import { uploadJimengImageViaImagex, type JimengUploadCredentials } from '../utils/jimeng-imagex-upload.js'
+import { uploadJimengMediaViaVod } from '../utils/jimeng-vod-upload.js'
 
-const WEB_ID = String(Math.floor(Math.random() * 9e15) + 7e15)
-const USER_ID = uuidv4().replace(/-/g, '')
+const FALLBACK_WEB_ID = String(Math.floor(Math.random() * 9e15) + 7e15)
+const FALLBACK_USER_ID = uuidv4().replace(/-/g, '')
+
+import { normalizeJimengCookie, extractJimengCookieField } from '../utils/jimeng-cookie.js'
+
+export { normalizeJimengCookie, extractJimengCookieField } from '../utils/jimeng-cookie.js'
+
+function resolveJimengWebId(session: JimengWebSession): string {
+  const cookie = session.cookie?.trim()
+  if (cookie) {
+    return extractJimengCookieField(cookie, '_tea_web_id')
+      || extractJimengCookieField(cookie, '_v2_spipe_web_id')
+      || FALLBACK_WEB_ID
+  }
+  return FALLBACK_WEB_ID
+}
+
+const WEB_ID = FALLBACK_WEB_ID
+const USER_ID = FALLBACK_USER_ID
 
 const FAKE_HEADERS = {
   Accept: 'application/json, text/plain, */*',
@@ -42,11 +61,12 @@ function buildSign(uri: string, deviceTime: number): string {
 }
 
 export function buildJimengCookie(session: JimengWebSession): string {
-  if (session.cookie?.trim()) return session.cookie.trim()
+  if (session.cookie?.trim()) return normalizeJimengCookie(session.cookie)
   const token = session.sessionId
   const ts = unixTimestamp()
+  const webId = resolveJimengWebId(session)
   return [
-    `_tea_web_id=${WEB_ID}`,
+    `_tea_web_id=${webId}`,
     'is_staff_user=false',
     `sid_guard=${token}%7C${ts}%7C5184000%7CMon%2C+03-Feb-2025+08%3A17%3A09+GMT`,
     `uid_tt=${USER_ID}`,
@@ -65,12 +85,12 @@ export interface JimengRequestOptions {
   noDefaultParams?: boolean
 }
 
-function buildDefaultParams(extra?: Record<string, unknown>) {
+function buildDefaultParams(webId: string, extra?: Record<string, unknown>) {
   return {
     aid: JIMENG_ASSISTANT_ID,
     device_platform: 'web',
     region: 'cn',
-    webId: WEB_ID,
+    webId,
     da_version: '3.3.9',
     os: 'windows',
     web_component_open_flag: 1,
@@ -80,24 +100,23 @@ function buildDefaultParams(extra?: Record<string, unknown>) {
   }
 }
 
-export async function jimengRequest<T = unknown>(
+function buildJimengRequestContext(
   session: JimengWebSession,
-  method: string,
   uri: string,
   options: JimengRequestOptions = {},
-): Promise<T> {
+) {
   const deviceTime = unixTimestamp()
   const sign = buildSign(uri, deviceTime)
+  const webId = resolveJimengWebId(session)
   const params = options.noDefaultParams
     ? (options.params || {})
-    : buildDefaultParams(options.params)
+    : buildDefaultParams(webId, options.params)
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
     if (value == null) continue
     query.set(key, String(value))
   }
   const url = `${JIMENG_BASE_URL}${uri}${query.size ? `?${query.toString()}` : ''}`
-
   const headers: Record<string, string> = {
     ...FAKE_HEADERS,
     Origin: JIMENG_BASE_URL,
@@ -114,11 +133,41 @@ export async function jimengRequest<T = unknown>(
     'Content-Type': 'application/json',
     ...(options.headers || {}),
   }
+  return { url, headers, body: options.data != null ? JSON.stringify(options.data) : undefined }
+}
+
+function normalizeJimengApiErrorMessage(errmsg: string): string {
+  const raw = String(errmsg || '').trim()
+  if (raw.includes('需要安全确认')) {
+    return '即梦返回「需要安全确认」：全能参考 + 参考图（尤其含人脸角色图）在即梦 Web 端需页面内人工确认，API 无法代点。建议：① 改选 Seedance 2.0 VIP 再试；② 减少真人脸参考，改用场景/站位图或插画风格立绘'
+  }
+  return raw
+}
+
+function parseJimengResponsePayload(payload: any, uri: string, httpStatus = 200): unknown {
+  if (httpStatus >= 400) {
+    throw new Error(`即梦 API HTTP ${httpStatus} ${uri}: ${payload?.errmsg || JSON.stringify(payload).slice(0, 200)}`)
+  }
+  const ret = payload?.ret
+  if (ret != null && String(ret) !== '0') {
+    const errmsg = normalizeJimengApiErrorMessage(String(payload?.errmsg || `即梦 API 错误 ret=${ret}`))
+    throw new Error(errmsg)
+  }
+  return payload?.data ?? payload
+}
+
+export async function jimengRequest<T = unknown>(
+  session: JimengWebSession,
+  method: string,
+  uri: string,
+  options: JimengRequestOptions = {},
+): Promise<T> {
+  const { url, headers, body } = buildJimengRequestContext(session, uri, options)
 
   const resp = await fetch(url, {
     method: method.toUpperCase(),
     headers,
-    body: options.data != null ? JSON.stringify(options.data) : undefined,
+    body,
   })
 
   const text = await resp.text()
@@ -126,19 +175,29 @@ export async function jimengRequest<T = unknown>(
   try {
     payload = JSON.parse(text)
   } catch {
-    throw new Error(`即梦 API 响应非 JSON (${resp.status}): ${text.slice(0, 200)}`)
+    throw new Error(`即梦 API 响应非 JSON (${resp.status}) ${uri}: ${text.slice(0, 200)}`)
   }
 
-  if (!resp.ok) {
-    throw new Error(`即梦 API HTTP ${resp.status}: ${payload?.errmsg || text.slice(0, 200)}`)
-  }
+  return parseJimengResponsePayload(payload, uri, resp.status) as T
+}
 
-  const ret = payload?.ret
-  if (ret != null && String(ret) !== '0') {
-    throw new Error(String(payload?.errmsg || `即梦 API 错误 ret=${ret}`))
-  }
-
-  return (payload?.data ?? payload) as T
+/** Seedance generate 需浏览器 bdms 注入 msToken/a_bogus */
+export async function jimengBrowserGenerateRequest<T = unknown>(
+  session: JimengWebSession,
+  uri: string,
+  options: JimengRequestOptions = {},
+): Promise<T> {
+  const { jimengBrowserService } = await import('./jimeng-browser-service.js')
+  const { url, headers, body } = buildJimengRequestContext(session, uri, options)
+  const browserHeaders = { ...headers }
+  delete browserHeaders.Cookie
+  delete browserHeaders['Accept-Encoding']
+  const payload = await jimengBrowserService.fetch(session, url, {
+    method: 'POST',
+    headers: browserHeaders,
+    body,
+  })
+  return parseJimengResponsePayload(payload, uri) as T
 }
 
 export async function validateJimengSession(session: JimengWebSession): Promise<boolean> {
@@ -153,50 +212,80 @@ export async function validateJimengSession(session: JimengWebSession): Promise<
   }
 }
 
+export async function getJimengUploadCredentials(session: JimengWebSession, scene: 1 | 2): Promise<JimengUploadCredentials & { space_name?: string }> {
+  const auth = await jimengRequest<JimengUploadCredentials & { space_name?: string }>(session, 'POST', '/mweb/v1/get_upload_token', {
+    data: { scene },
+  })
+
+  const accessKeyId = auth?.access_key_id || (auth as any)?.accessKeyId
+  const secretAccessKey = auth?.secret_access_key || (auth as any)?.secretAccessKey
+  const sessionToken = auth?.session_token || (auth as any)?.sessionToken
+  if (!accessKeyId || !secretAccessKey || !sessionToken) {
+    throw new Error('即梦上传凭证无效，请检查 Session 是否有效')
+  }
+
+  return {
+    access_key_id: String(accessKeyId),
+    secret_access_key: String(secretAccessKey),
+    session_token: String(sessionToken),
+    space_name: auth?.space_name || (auth as any)?.spaceName,
+  }
+}
+
 export async function uploadJimengImage(
   session: JimengWebSession,
   buffer: Buffer,
-  filename: string,
+  _filename: string,
 ): Promise<string> {
-  const proofResult = await jimengRequest<{
-    proof_info?: {
-      headers?: Record<string, string>
-      query_params?: Record<string, string>
-      image_uri?: string
-    }
-  }>(session, 'POST', '/mweb/v1/get_upload_image_proof', {
-    data: {
-      scene: 'aigc_image',
-      file_name: filename,
-      file_size: buffer.length,
-    },
+  const auth = await getJimengUploadCredentials(session, 2)
+  const uri = await uploadJimengImageViaImagex(auth, buffer)
+  await checkJimengImageContent(session, uri)
+  return uri
+}
+
+export async function uploadJimengMedia(
+  session: JimengWebSession,
+  buffer: Buffer,
+  mediaType: 'video' | 'audio',
+) {
+  const auth = await getJimengUploadCredentials(session, 1)
+  return uploadJimengMediaViaVod(auth, buffer, mediaType)
+}
+
+/** 国内站上传参考图后需走 algo_proxy 人脸/IP 安全确认，否则 generate 会报「需要安全确认」 */
+export async function checkJimengImageContent(session: JimengWebSession, imageUri: string): Promise<void> {
+  const uri = String(imageUri || '').trim()
+  if (!uri) return
+
+  const babiParam = JSON.stringify({
+    scenario: 'image_video_generation',
+    feature_key: 'aigc_to_image',
+    feature_entrance: 'to-generate',
+    feature_entrance_detail: 'to-generate-algo_proxy',
   })
 
-  const proof = proofResult?.proof_info
-  if (!proof?.image_uri) throw new Error('即梦图片上传凭证无效')
-
-  const form = new FormData()
-  const blob = new Blob([new Uint8Array(buffer)], { type: 'application/octet-stream' })
-  form.append('file', blob, filename)
-
-  const uploadUrl = new URL('https://imagex.bytedanceapi.com/')
-  if (proof.query_params) {
-    for (const [key, value] of Object.entries(proof.query_params)) {
-      uploadUrl.searchParams.set(key, String(value))
+  try {
+    await jimengRequest(session, 'POST', '/mweb/v1/algo_proxy', {
+      params: { babi_param: babiParam },
+      data: {
+        scene: 'image_face_ip',
+        options: { ip_check: true },
+        req_key: 'benchmark_test_user_upload_image_input',
+        file_list: [{ file_uri: uri }],
+        req_params: {},
+      },
+    })
+  } catch (err: any) {
+    const message = String(err?.message || err || '')
+    const isContentViolation = message.includes('2003')
+      || /risk not pass/i.test(message)
+      || /detected risk/i.test(message)
+      || /违规|不合规|未通过/.test(message)
+    if (isContentViolation) {
+      throw new Error('参考图内容检测未通过，请更换图片后重试')
     }
+    // 检测服务异常不阻塞生成，与 jimeng-api 一致
   }
-
-  const uploadResp = await fetch(uploadUrl.toString(), {
-    method: 'POST',
-    headers: proof.headers || {},
-    body: form,
-  })
-  if (!uploadResp.ok) {
-    const errText = await uploadResp.text()
-    throw new Error(`即梦图片上传失败 (${uploadResp.status}): ${errText.slice(0, 200)}`)
-  }
-
-  return proof.image_uri
 }
 
 export function extractJimengVideoUrl(item: any): string | null {

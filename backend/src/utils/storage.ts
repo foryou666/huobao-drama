@@ -11,10 +11,30 @@ import { ensureThumbnail, isImageStaticPath } from './thumbnail.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
 
+export interface StaticFileSaveOptions {
+  dramaId?: number | null
+  /** 默认 true：写入本地后尝试同步 OSS */
+  syncOss?: boolean
+}
+
+async function maybeSyncToOss(relative: string, opts?: StaticFileSaveOptions) {
+  if (opts?.syncOss === false) return
+  try {
+    const { trySyncStaticToOss } = await import('./oss-entity-sync.js')
+    await trySyncStaticToOss(relative, opts?.dramaId)
+  } catch {
+    /* OSS 同步失败不影响主流程，本地文件已保留 */
+  }
+}
+
 /**
  * 下载远程文件到本地存储
  */
-export async function downloadFile(url: string, subDir: string): Promise<string> {
+export async function downloadFile(
+  url: string,
+  subDir: string,
+  opts?: StaticFileSaveOptions,
+): Promise<string> {
   const dir = path.join(STORAGE_ROOT, subDir)
   fs.mkdirSync(dir, { recursive: true })
 
@@ -32,13 +52,19 @@ export async function downloadFile(url: string, subDir: string): Promise<string>
   if (isImageStaticPath(relative)) {
     await ensureThumbnail(relative).catch(() => {})
   }
+  await maybeSyncToOss(relative, opts)
   return relative
 }
 
 /**
  * 保存上传的文件
  */
-export async function saveUploadedFile(data: ArrayBuffer, subDir: string, originalName: string): Promise<string> {
+export async function saveUploadedFile(
+  data: ArrayBuffer,
+  subDir: string,
+  originalName: string,
+  opts?: StaticFileSaveOptions,
+): Promise<string> {
   const dir = path.join(STORAGE_ROOT, subDir)
   fs.mkdirSync(dir, { recursive: true })
 
@@ -51,6 +77,7 @@ export async function saveUploadedFile(data: ArrayBuffer, subDir: string, origin
   if (isImageStaticPath(relative)) {
     await ensureThumbnail(relative).catch(() => {})
   }
+  await maybeSyncToOss(relative, opts)
   return relative
 }
 
@@ -77,7 +104,12 @@ export function getAbsolutePath(relativePath: string): string {
  * 保存 Base64 编码的图片数据到本地存储
  * 用于 Gemini 等只返回 base64 数据的厂商
  */
-export async function saveBase64Image(base64Data: string, mimeType: string, subDir: string): Promise<string> {
+export async function saveBase64Image(
+  base64Data: string,
+  mimeType: string,
+  subDir: string,
+  opts?: StaticFileSaveOptions,
+): Promise<string> {
   const dir = path.join(STORAGE_ROOT, subDir)
   fs.mkdirSync(dir, { recursive: true })
 
@@ -93,6 +125,7 @@ export async function saveBase64Image(base64Data: string, mimeType: string, subD
   if (isImageStaticPath(relative)) {
     await ensureThumbnail(relative).catch(() => {})
   }
+  await maybeSyncToOss(relative, opts)
   return relative
 }
 

@@ -8,6 +8,14 @@ import {
   listCreditTransactions,
   updateCreditPricing,
 } from '../services/credits.js'
+import {
+  getAistarslabChannelEnabledMap,
+  setAistarslabChannelEnabled,
+} from '../utils/aistarslab-channel-settings.js'
+import {
+  getChengmengModelEnabledMap,
+  setChengmengModelEnabled,
+} from '../utils/chengmeng-model-settings.js'
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { logActivity } from '../services/activity.js'
@@ -38,7 +46,39 @@ app.get('/transactions', (c) => {
   return success(c, { ...result, scope: scope.mode, team_id: scope.teamId ?? null })
 })
 
-app.get('/pricing', (c) => success(c, { items: listCreditPricing() }))
+app.get('/pricing', (c) => success(c, {
+  items: listCreditPricing(),
+  aistarslab_channel_enabled: getAistarslabChannelEnabledMap(),
+  chengmeng_model_enabled: getChengmengModelEnabledMap(),
+}))
+
+app.put('/chengmeng-models/:modelId/enabled', requireAdmin, async (c) => {
+  const modelId = String(c.req.param('modelId') || '').trim()
+  if (!modelId) return badRequest(c, 'modelId is required')
+  const body = await c.req.json()
+  const enabled = body.enabled !== false && body.enabled !== 0 && body.enabled !== '0'
+  setChengmengModelEnabled(modelId, enabled)
+  logActivity(getAuthUser(c), {
+    action: 'credits.chengmeng_model.update',
+    summary: `橙盟通道1 模型 ${modelId} ${enabled ? '启用' : '禁用'}`,
+    metadata: { model_id: modelId, enabled },
+  })
+  return success(c, { model_id: modelId, enabled })
+})
+
+app.put('/aistarslab-channels/:channel/enabled', requireAdmin, async (c) => {
+  const channel = String(c.req.param('channel') || '').trim()
+  if (!channel) return badRequest(c, 'channel is required')
+  const body = await c.req.json()
+  const enabled = body.enabled !== false && body.enabled !== 0 && body.enabled !== '0'
+  setAistarslabChannelEnabled(channel, enabled)
+  logActivity(getAuthUser(c), {
+    action: 'credits.aistarslab_channel.update',
+    summary: `Seedance VIP 线路 ${channel} ${enabled ? '启用' : '禁用'}`,
+    metadata: { channel, enabled },
+  })
+  return success(c, { channel, enabled })
+})
 
 app.put('/pricing/:action', requireAdmin, async (c) => {
   const action = c.req.param('action')

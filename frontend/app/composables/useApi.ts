@@ -514,6 +514,7 @@ export const videoAPI = {
   chengmengOptions: () => api.get('/videos/chengmeng-options'),
   grokOptions: () => api.get('/videos/grok-options'),
   jimengOptions: () => api.get('/videos/jimeng-options'),
+  doubaoTrainingOptions: () => api.get('/videos/doubao-training-options'),
   officialOptions: () => api.get('/videos/official-options'),
   aistarslabOptions: () => api.get('/videos/aistarslab-options'),
   get: (id: number) => api.get(`/videos/${id}`),
@@ -549,10 +550,21 @@ export const videoAPI = {
   },
 }
 export const jimengSessionAPI = {
+  list: () => api.get('/jimeng/sessions'),
   get: () => api.get('/jimeng/session'),
-  save: (d: { cookie?: string; session_id?: string; label?: string }) => api.put('/jimeng/session', d),
+  save: (d: { id?: string; cookie?: string; session_id?: string; label?: string; set_active?: boolean }) => api.put('/jimeng/session', d),
+  setActive: (id: string) => api.put(`/jimeng/session/${id}/active`),
+  remove: (id: string) => api.del(`/jimeng/session/${id}`),
   clear: () => api.del('/jimeng/session'),
-  validate: () => api.post('/jimeng/session/validate'),
+  validate: (id?: string) => api.post(id ? `/jimeng/session/${id}/validate` : '/jimeng/session/validate'),
+}
+export const doubaoTrainingSessionAPI = {
+  list: () => api.get('/doubao-training/sessions'),
+  save: (d: { id?: string; cookie?: string; session_id?: string; label?: string; set_active?: boolean }) => api.put('/doubao-training/session', d),
+  setActive: (id: string) => api.put(`/doubao-training/session/${id}/active`),
+  remove: (id: string) => api.del(`/doubao-training/session/${id}`),
+  clear: () => api.del('/doubao-training/session'),
+  validate: (id?: string) => api.post(id ? `/doubao-training/session/${id}/validate` : '/doubao-training/session/validate'),
 }
 export const composeAPI = {
   shot: (id: number) => api.post(`/compose/storyboards/${id}/compose`),
@@ -646,9 +658,13 @@ export const creditsAPI = {
     const qs = q.toString()
     return api.get<{ items: any[]; total: number; scope?: string }>(`/credits/transactions${qs ? `?${qs}` : ''}`)
   },
-  pricing: () => api.get<{ items: any[] }>('/credits/pricing'),
+  pricing: () => api.get<{ items: any[]; aistarslab_channel_enabled?: Record<string, boolean>; chengmeng_model_enabled?: Record<string, boolean> }>('/credits/pricing'),
   updatePricing: (action: string, data: { cost: number; label?: string; description?: string }) =>
     api.put(`/credits/pricing/${encodeURIComponent(action)}`, data),
+  setAistarslabChannelEnabled: (channel: string, enabled: boolean) =>
+    api.put(`/credits/aistarslab-channels/${encodeURIComponent(channel)}/enabled`, { enabled }),
+  setChengmengModelEnabled: (modelId: string, enabled: boolean) =>
+    api.put(`/credits/chengmeng-models/${encodeURIComponent(modelId)}/enabled`, { enabled }),
   grant: (data: { user_id: number; amount: number; summary?: string }) =>
     api.post('/credits/grant', data),
 }

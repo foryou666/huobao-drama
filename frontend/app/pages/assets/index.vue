@@ -252,11 +252,12 @@
           <input v-model="createForm.name" class="input" placeholder="资产名称" />
         </label>
         <label class="modal-field">
-          <span>所属项目（可选）</span>
+          <span>所属项目{{ createForm.type === 'character' ? '' : '（可选）' }}</span>
           <select v-model="createForm.drama_id" class="input">
             <option :value="null">不绑定项目</option>
             <option v-for="d in dramas" :key="d.id" :value="d.id">{{ d.title }}</option>
           </select>
+          <span v-if="createForm.type === 'character'" class="dim asset-create-hint">视频/图片页「选择角色」只显示已绑定项目的角色，建议必选项目</span>
         </label>
         <label class="modal-field">
           <span>描述</span>
@@ -919,8 +920,12 @@ onMounted(async () => {
 }
 .asset-outfit-label { font-size: 11px; font-weight: 600; color: var(--text-dim); }
 .asset-outfit-hint,
-.asset-outfit-unlinked { font-size: 11px; margin: 0; line-height: 1.4; }
-.asset-outfit-unlinked { margin-top: 6px; }
+.asset-create-hint {
+  font-size: 11px;
+  margin: 0;
+  line-height: 1.4;
+}
+.asset-outfit-unlinked { font-size: 11px; margin: 6px 0 0; line-height: 1.4; }
 .asset-outfit-list { display: flex; flex-direction: column; gap: 4px; }
 .asset-outfit-row {
   display: flex;

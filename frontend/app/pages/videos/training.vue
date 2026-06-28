@@ -2,9 +2,10 @@
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
-        <h1 class="studio-title">通道4</h1>
+        <h1 class="studio-title">视频通道5(培训)</h1>
         <p class="studio-desc">
-          Seedance 2.0 通道4（全能参考）：参考素材上限 {{ refLimitsHint }}，提示词可用 @图片N @视频N @音频N 引用素材。
+          豆包免费额度练手 · Seedance 2.0 Fast · 可选 {{ refLimitsHint }} · 生成后自动叠加「{{ overlayText }}」标识 · 不扣积分
+          <span v-if="dailyQuota">（每账号每日 {{ dailyQuota }} 次）</span>
         </p>
       </div>
       <div class="studio-header-actions">
@@ -26,8 +27,8 @@
             查看全部
           </button>
         </div>
-        <select v-if="isAdmin && jimengSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="即梦 Session">
-          <option v-for="s in jimengSessions" :key="s.id" :value="s.id">
+        <select v-if="isAdmin && trainingSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="豆包培训 Session">
+          <option v-for="s in trainingSessions" :key="s.id" :value="s.id">
             {{ sessionOptionLabel(s) }}
           </option>
         </select>
@@ -58,7 +59,7 @@
     <div ref="feedRef" class="studio-feed">
       <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
       <div v-else-if="!items.length" class="studio-empty card">
-        <p>还没有视频，在底部输入描述并点击「通道4」</p>
+        <p>还没有培训视频，在底部输入描述并点击「通道5」</p>
       </div>
 
       <div v-else class="studio-grid">
@@ -144,16 +145,18 @@
     <div class="studio-composer-wrap">
       <VideoStudioComposer
         ref="composerRef"
-        jimeng-mode
+        training-mode
         :generating="generating"
         :dramas="dramas"
         :default-drama-id="filterDramaId"
-        :jimeng-models="displayModels"
+        :training-models="displayModels"
         :fixed-model="selectedModel"
-        :duration-min="4"
-        :duration-max="15"
-        :credit-cost-flat="selectedCreditCostFlat"
-        drama-preference-scope="video-jimeng"
+        :duration-min="5"
+        :duration-max="10"
+        :credit-cost-flat="0"
+        :show-voice-picker="false"
+        :show-ref-mode-toggle="false"
+        drama-preference-scope="video-training"
         @update:fixed-model="selectedModel = $event"
         @generate="onGenerate"
       />
@@ -231,20 +234,21 @@ import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
-import { formatRefLimitsHint, JIMENG_REF_LIMITS } from '~/constants/video-channels.js'
+import { formatRefLimitsHint, TRAINING_REF_LIMITS } from '~/constants/video-channels.js'
 
-const JIMENG_MODEL_IDS = [
-  'jimeng-video-seedance-2.0-fast',
-  'jimeng-video-seedance-2.0',
-]
+const TRAINING_MODEL = 'doubao-seedance-2.0-fast-training'
 
-const DEFAULT_JIMENG_MODEL = 'jimeng-video-seedance-2.0-fast'
+const refLimitsHint = computed(() => formatRefLimitsHint(TRAINING_REF_LIMITS))
 
-const refLimitsHint = computed(() => formatRefLimitsHint(JIMENG_REF_LIMITS))
-
-const DEFAULT_JIMENG_MODELS = [
-  { id: 'jimeng-video-seedance-2.0-fast', label: 'Seedance 2.0 Fast VIP', credit_cost_flat: 0, duration_min: 4, duration_max: 15, duration_default: 5 },
-  { id: 'jimeng-video-seedance-2.0', label: 'Seedance 2.0 VIP', credit_cost_flat: 0, duration_min: 4, duration_max: 15, duration_default: 5 },
+const DEFAULT_TRAINING_MODELS = [
+  {
+    id: TRAINING_MODEL,
+    label: 'Seedance 2.0 Fast（培训）',
+    credit_cost_flat: 0,
+    duration_min: 5,
+    duration_max: 10,
+    duration_default: 5,
+  },
 ]
 
 const route = useRoute()
@@ -253,12 +257,15 @@ const { isAdmin } = useAuth()
 const loading = ref(false)
 const loadingMore = ref(false)
 const generating = ref(false)
-const jimengModels = ref([])
-const jimengSessions = ref([])
+const trainingModels = ref([])
+const trainingSessions = ref([])
 const selectedSessionId = ref('')
 const sessionConfigured = ref(false)
 const sessionValid = ref(false)
-const selectedModel = ref(DEFAULT_JIMENG_MODEL)
+const serviceAvailable = ref(false)
+const overlayText = ref('内部培训专用')
+const dailyQuota = ref(5)
+const selectedModel = ref(TRAINING_MODEL)
 const items = ref([])
 const dramas = ref([])
 const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
@@ -284,28 +291,22 @@ const hasActiveTasks = computed(() =>
 )
 
 const displayModels = computed(() =>
-  jimengModels.value.length ? jimengModels.value : DEFAULT_JIMENG_MODELS,
+  trainingModels.value.length ? trainingModels.value : DEFAULT_TRAINING_MODELS,
 )
-
-const serviceAvailable = computed(() => sessionConfigured.value && sessionValid.value)
 
 function sessionOptionLabel(session) {
   const label = session?.label || '未命名'
   const masked = session?.session_id_masked || ''
+  const remaining = session?.quota?.remaining_today
+  const quotaHint = remaining != null ? ` · 剩 ${remaining} 次` : ''
   const status = session?.valid ? '' : '（无效）'
   const active = session?.is_active ? ' · 默认' : ''
-  return `${label} ${masked}${status}${active}`.trim()
+  return `${label} ${masked}${quotaHint}${status}${active}`.trim()
 }
-
-const selectedCreditCostFlat = computed(() => {
-  const model = displayModels.value.find(item => item.id === selectedModel.value)
-  const cost = model?.credit_cost_flat ?? model?.credit_cost
-  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : 0
-})
 
 function modelLabel(modelId) {
   return displayModels.value.find(item => item.id === modelId)?.label
-    || String(modelId || '').replace(/^jimeng-video-/, '即梦 ').replace(/-/g, ' ')
+    || String(modelId || '').replace(/^doubao-/, '豆包 ').replace(/-/g, ' ')
 }
 
 function statsForTab(id) {
@@ -364,7 +365,7 @@ function buildPayloadFromItem(item) {
 
   const payload = {
     prompt: item?.prompt || '',
-    duration: Number(item?.duration || 15),
+    duration: Number(item?.duration || 5),
     aspect_ratio: item?.aspect_ratio || item?.aspectRatio || '9:16',
     drama_id: item?.drama_id ? Number(item.drama_id) : undefined,
   }
@@ -381,7 +382,7 @@ function buildPayloadFromItem(item) {
 async function retryItem(item) {
   if (!item || generating.value) return
   const model = String(item?.model || '').trim()
-  if (model && jimengModels.value.some(m => m.id === model)) {
+  if (model && trainingModels.value.some(m => m.id === model)) {
     selectedModel.value = model
   }
   await composerRef.value?.loadFromItem(item)
@@ -444,8 +445,8 @@ function openDetail(item) {
 
 async function reuseDetail() {
   if (!detailItem.value) return
-  if (detailItem.value.model && JIMENG_MODEL_IDS.includes(detailItem.value.model)) {
-    selectedModel.value = detailItem.value.model
+  if (detailItem.value.model === TRAINING_MODEL) {
+    selectedModel.value = TRAINING_MODEL
   }
   await composerRef.value?.loadFromItem(detailItem.value)
   detailItem.value = null
@@ -500,8 +501,8 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
-    provider: 'jimeng_web',
-    models: JIMENG_MODEL_IDS.join(','),
+    provider: 'doubao_training',
+    models: TRAINING_MODEL,
   }
 }
 
@@ -562,33 +563,36 @@ function setStatus(status) {
   reload()
 }
 
-async function loadJimengOptions() {
+async function loadTrainingOptions() {
   try {
-    const res = await videoAPI.jimengOptions()
-    jimengModels.value = (res?.models || []).map(item => ({
+    const res = await videoAPI.doubaoTrainingOptions()
+    trainingModels.value = (res?.models || []).map(item => ({
       ...item,
       credit_cost_flat: item.credit_cost_flat ?? item.credit_cost ?? 0,
     }))
-    jimengSessions.value = res?.sessions || []
-    sessionConfigured.value = !!res?.session_configured || jimengSessions.value.length > 0
-    sessionValid.value = !!res?.session_valid || jimengSessions.value.some(item => item.valid)
+    trainingSessions.value = res?.sessions || []
+    sessionConfigured.value = !!res?.session_configured || trainingSessions.value.length > 0
+    sessionValid.value = !!res?.session_valid || trainingSessions.value.some(item => item.valid)
+    serviceAvailable.value = !!res?.available
+    overlayText.value = res?.overlay_text || res?.default_overlay_text || '内部培训专用'
+    dailyQuota.value = Number(res?.daily_quota || 5)
     const activeId = res?.active_id
-      || jimengSessions.value.find(item => item.is_active)?.id
-      || jimengSessions.value.find(item => item.valid)?.id
-      || jimengSessions.value[0]?.id
+      || trainingSessions.value.find(item => item.is_active)?.id
+      || trainingSessions.value.find(item => item.valid)?.id
+      || trainingSessions.value[0]?.id
       || ''
-    if (!selectedSessionId.value || !jimengSessions.value.some(item => item.id === selectedSessionId.value)) {
+    if (!selectedSessionId.value || !trainingSessions.value.some(item => item.id === selectedSessionId.value)) {
       selectedSessionId.value = activeId
     }
-    if (jimengModels.value.length && !jimengModels.value.some(item => item.id === selectedModel.value)) {
-      const preferred = jimengModels.value.find(item => item.id === DEFAULT_JIMENG_MODEL)
-      selectedModel.value = preferred?.id || jimengModels.value[0].id
+    if (trainingModels.value.length && !trainingModels.value.some(item => item.id === selectedModel.value)) {
+      selectedModel.value = trainingModels.value[0].id
     }
   } catch {
-    jimengModels.value = []
-    jimengSessions.value = []
+    trainingModels.value = []
+    trainingSessions.value = []
     sessionConfigured.value = false
     sessionValid.value = false
+    serviceAvailable.value = false
     selectedSessionId.value = ''
   }
 }
@@ -598,11 +602,11 @@ async function onGenerate(payload) {
     toast.error('请选择模型')
     return
   }
-  await loadJimengOptions()
+  await loadTrainingOptions()
   if (!serviceAvailable.value) {
     toast.error(sessionConfigured.value
-      ? '即梦视频服务暂时不可用，请稍后再试或联系管理员'
-      : '即梦视频服务尚未启用，请联系管理员')
+      ? '豆包培训通道暂时不可用（Session 无效或今日额度已用完），请稍后再试或联系管理员'
+      : '豆包培训 Session 尚未配置，请联系管理员')
     return
   }
   generating.value = true
@@ -610,12 +614,13 @@ async function onGenerate(payload) {
   try {
     const generation = await videoAPI.generate({
       ...payload,
-      jimeng: true,
-      provider: 'jimeng_web',
+      doubao_training: true,
+      training: true,
+      provider: 'doubao_training',
       model: selectedModel.value,
-      jimeng_session_id: isAdmin.value ? (selectedSessionId.value || undefined) : undefined,
+      doubao_training_session_id: isAdmin.value ? (selectedSessionId.value || undefined) : undefined,
     })
-    toast.success('即梦视频任务已提交')
+    toast.success('培训视频任务已提交')
     filterStatus.value = 'all'
     await reload()
     void pollGeneration(generation?.id)
@@ -638,7 +643,7 @@ async function pollGeneration(generationId) {
       const res = await videoAPI.get(generationId)
       await refreshLedger()
       if (res?.status === 'completed') {
-        toast.success('视频生成完成')
+        toast.success('培训视频生成完成')
         return
       }
       if (res?.status === 'failed') {
@@ -677,7 +682,7 @@ function stopPolling() {
 }
 
 onMounted(async () => {
-  await loadJimengOptions()
+  await loadTrainingOptions()
   const dramaRes = await dramaAPI.list()
   dramas.value = dramaRes?.items || dramaRes || []
   await reload()
@@ -696,8 +701,8 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   background:
-    radial-gradient(circle at top right, rgba(76, 125, 255, 0.1), transparent 42%),
-    radial-gradient(circle at top left, rgba(36, 180, 126, 0.08), transparent 35%),
+    radial-gradient(circle at top right, rgba(255, 170, 76, 0.1), transparent 42%),
+    radial-gradient(circle at top left, rgba(76, 125, 255, 0.08), transparent 35%),
     var(--bg-base);
 }
 
@@ -726,7 +731,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 13px;
   color: var(--text-3);
-  max-width: 560px;
+  max-width: 640px;
 }
 
 .studio-header-actions {

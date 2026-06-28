@@ -4,6 +4,7 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { buildJimengVirtualConfig } from './jimeng-web-video.js'
+import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
 
@@ -140,6 +141,9 @@ export function resolveVideoTaskConfig(record: {
   const provider = String(record.provider || '').trim()
   if (provider === 'jimeng_web') {
     return buildJimengVirtualConfig()
+  }
+  if (provider === 'doubao_training') {
+    return buildDoubaoTrainingVirtualConfig()
   }
   if (!provider) return getActiveConfig('video')
   const rows = db.select().from(schema.aiServiceConfigs)

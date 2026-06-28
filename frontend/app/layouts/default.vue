@@ -144,7 +144,7 @@ const videoNavRef = ref(null)
 
 const isVideoRoute = computed(() => route.path === '/videos' || route.path.startsWith('/videos/'))
 
-const videoNavItems = computed(() => buildVideoNavItems(isAdmin.value))
+const videoNavItems = computed(() => buildVideoNavItems(true))
 
 function toggleVideoMenu() {
   videoMenuOpen.value = !videoMenuOpen.value

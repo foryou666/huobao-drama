@@ -349,9 +349,9 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
 }
 
 async function handleImageComplete(id: number, provider: string, imageUrl: string) {
-  const localPath = await downloadFile(imageUrl, 'images')
   const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
   const record = rows[0]
+  const localPath = await downloadFile(imageUrl, 'images', { dramaId: record?.dramaId })
 
   db.update(schema.imageGenerations)
     .set({ imageUrl, localPath, status: 'completed', updatedAt: now() })
@@ -378,9 +378,9 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
 }
 
 async function handleImageCompleteBase64(id: number, provider: string, base64Data: string, mimeType: string) {
-  const localPath = await saveBase64Image(base64Data, mimeType, 'images')
   const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
   const record = rows[0]
+  const localPath = await saveBase64Image(base64Data, mimeType, 'images', { dramaId: record?.dramaId })
 
   db.update(schema.imageGenerations)
     .set({ localPath, status: 'completed', updatedAt: now() })

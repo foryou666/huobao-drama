@@ -389,9 +389,10 @@ async function loadProjectAssets(id) {
   }
   try {
     const drama = await dramaAPI.get(parsed)
-    projectChars.value = drama?.characters || []
-    projectScenes.value = drama?.scenes || []
-    projectProps.value = drama?.props || []
+    const sortByRecent = (a, b) => String(b?.updated_at || b?.updatedAt || '').localeCompare(String(a?.updated_at || a?.updatedAt || ''))
+    projectChars.value = [...(drama?.characters || [])].sort(sortByRecent)
+    projectScenes.value = [...(drama?.scenes || [])].sort(sortByRecent)
+    projectProps.value = [...(drama?.props || [])].sort(sortByRecent)
   } catch (err) {
     projectChars.value = []
     projectScenes.value = []
@@ -422,11 +423,12 @@ function syncPromptImageHeader() {
   )
 }
 
-function openPropPicker() {
+async function openPropPicker() {
   if (!dramaId.value) {
     toast.warning('请先选择项目')
     return
   }
+  await loadProjectAssets(dramaId.value)
   if (!projectProps.value.length) {
     toast.warning('该项目暂无道具')
     return
@@ -435,7 +437,12 @@ function openPropPicker() {
   entityPickerOpen.value = true
 }
 
-function openCharacterPicker() {
+async function openCharacterPicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  await loadProjectAssets(dramaId.value)
   if (!projectChars.value.length) {
     toast.warning('该项目暂无角色')
     return
@@ -444,7 +451,12 @@ function openCharacterPicker() {
   entityPickerOpen.value = true
 }
 
-function openScenePicker() {
+async function openScenePicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  await loadProjectAssets(dramaId.value)
   if (!projectScenes.value.length) {
     toast.warning('该项目暂无场景')
     return

@@ -13,7 +13,8 @@ import {
   putLocalFileToOss,
   signOssObjectKey,
 } from './oss-upload.js'
-import { projectAssetObjectKey, referenceUploadObjectKey } from './oss-path.js'
+import { projectAssetObjectKey, referenceUploadObjectKey, resolveDramaIdForStaticPath } from './oss-path.js'
+import { uploadStaticToOss } from './oss-upload.js'
 
 function normalizeStaticPath(raw: string): string {
   return String(raw || '').trim().replace(/^\/+/, '')
@@ -247,6 +248,41 @@ export async function trySyncStoryboardImageAfterGeneration(
       path: localPath,
       error: err?.message || String(err),
     })
+  }
+}
+
+/** 通用 static 同步 OSS（生成/合成/回填）；已有映射则跳过上传 */
+export async function trySyncStaticToOss(
+  localPath: string,
+  dramaId?: number | null,
+): Promise<string | null> {
+  if (!isOssConfigured()) return null
+  const normalized = normalizeStaticPath(localPath)
+  if (!normalized.startsWith('static/')) return null
+  if (/\/thumbs?\//i.test(normalized) || /_thumb\.[a-z0-9]+$/i.test(normalized)) return null
+
+  try {
+    const existing = lookupOssObjectKey(normalized)
+    if (existing) return existing
+
+    if (normalized.startsWith('static/uploads/')) {
+      return await syncReferenceUploadToOss(normalized)
+    }
+
+    const resolvedDramaId = dramaId ?? resolveDramaIdForStaticPath(normalized)
+    if (resolvedDramaId) {
+      return await syncProjectAsset(resolvedDramaId, normalized)
+    }
+
+    await uploadStaticToOss(normalized, dramaId)
+    return lookupOssObjectKey(normalized)
+  } catch (err: any) {
+    logTaskWarn('OSS', 'static-sync-failed', {
+      path: normalized,
+      dramaId: dramaId ?? null,
+      error: err?.message || String(err),
+    })
+    return null
   }
 }
 

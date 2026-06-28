@@ -15,6 +15,7 @@ import characters from './routes/characters.js'
 import images from './routes/images.js'
 import videos from './routes/videos.js'
 import jimeng from './routes/jimeng.js'
+import doubaoTraining from './routes/doubao-training.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders } from './routes/aiConfigs.js'
 import agentConfigs from './routes/agentConfigs.js'
@@ -95,6 +96,7 @@ api.route('/assets', assets)
 api.route('/media', media)
 api.route('/images', images)
 api.route('/jimeng', jimeng)
+api.route('/doubao-training', doubaoTraining)
 api.route('/videos', videos)
 api.route('/upload', upload)
 api.route('/ai-configs', aiConfigs)

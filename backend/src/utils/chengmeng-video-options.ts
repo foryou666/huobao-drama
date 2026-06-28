@@ -17,6 +17,7 @@ import {
 import { getConfigById } from '../services/ai.js'
 import { fetchChengmengVideoModels, type ChengmengRemoteModel } from '../services/chengmeng-client.js'
 import { getActionCost, updateCreditPricing } from '../services/credits.js'
+import { filterEnabledChengmengModels } from './chengmeng-model-settings.js'
 import { isPlaceholderApiKey } from './official-volcengine-video.js'
 
 export interface ChengmengModelOption {
@@ -88,6 +89,16 @@ export function normalizeChengmengRemoteModels(raw: ChengmengRemoteModel[]): Che
     models[0].defaultOption = true
   }
   return models
+}
+
+/** 通道1 页面：仅展示管理员启用的上游模型 */
+export function pickChengmengChannel1UiModels(models: ChengmengModelOption[]): ChengmengModelOption[] {
+  const enabled = filterEnabledChengmengModels(models).map(item => ({ ...item }))
+  if (!enabled.length) return []
+  if (!enabled.some(item => item.defaultOption)) {
+    enabled[0]!.defaultOption = true
+  }
+  return enabled
 }
 
 function fallbackChengmengModelOptions(): ChengmengModelOption[] {

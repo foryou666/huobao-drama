@@ -1,7 +1,8 @@
 import { isChengmengProvider, CHENGMENG_VIDEO_MODELS, chengmengModelCreditAction } from './chengmeng.js'
 import { SEEDANCE_MODELS, seedanceDurationBounds } from './seedance.js'
 import { isGrokVideoModel, GROK_VIDEO_MODELS, GROK_VIDEO_CREDIT_COST, resolveGrokBillingSeconds } from './geeknow-grok.js'
-import { isJimengVideoModel, JIMENG_VIDEO_CREDIT_COST } from './jimeng-web.js'
+import { isJimengVideoModel, JIMENG_SEEDANCE_2_0_CREDIT_COST, JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST, JIMENG_VIDEO_MODELS, resolveJimengBillingSeconds, resolveJimengVideoCreditAction } from './jimeng-web.js'
+import { isDoubaoTrainingVideoModel } from './doubao-training.js'
 import { isAistarslabProvider, AISTARSLAB_DEFAULT_CREDIT_COST, AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER } from './aistarslab.js'
 
 /** 积分操作键 — 管理员可在设置中调整单价 */
@@ -25,6 +26,9 @@ export const CREDIT_ACTIONS = {
   VIDEO_GENERATE_GROK_3_PRO: 'video.generate.grok.3_pro',
   VIDEO_GENERATE_GROK_3_MAX: 'video.generate.grok.3_max',
   VIDEO_GENERATE_JIMENG: 'video.generate.jimeng',
+  VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST: 'video.generate.jimeng.seedance2_fast',
+  VIDEO_GENERATE_JIMENG_SEEDANCE_2_0: 'video.generate.jimeng.seedance2',
+  VIDEO_GENERATE_DOUBAO_TRAINING: 'video.generate.doubao_training',
   VIDEO_GENERATE_AISTARSLAB: 'video.generate.aistarslab',
   GRID_GENERATE: 'grid.generate',
   GRID_PROMPT: 'grid.prompt',
@@ -79,7 +83,10 @@ export const DEFAULT_CREDIT_PRICING: CreditActionDef[] = [
   { action: CREDIT_ACTIONS.VIDEO_GENERATE_GROK_1_5_MAX, label: 'Grok 1.5 Max 视频', defaultCost: GROK_VIDEO_CREDIT_COST, description: `GeekNow grok-video-1.5-max（15 秒/条，按次计费，默认 ${GROK_VIDEO_CREDIT_COST} 积分/条）` },
   { action: CREDIT_ACTIONS.VIDEO_GENERATE_GROK_3_PRO, label: 'Grok 3 Pro 视频', defaultCost: GROK_VIDEO_CREDIT_COST, description: `GeekNow grok-video-3-pro（10 秒/条，按次计费，默认 ${GROK_VIDEO_CREDIT_COST} 积分/条）` },
   { action: CREDIT_ACTIONS.VIDEO_GENERATE_GROK_3_MAX, label: 'Grok 3 Max 视频', defaultCost: GROK_VIDEO_CREDIT_COST, description: `GeekNow grok-video-3-max（15 秒/条，按次计费，默认 ${GROK_VIDEO_CREDIT_COST} 积分/条）` },
-  { action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG, label: '视频生成(即梦)', defaultCost: JIMENG_VIDEO_CREDIT_COST, description: `即梦 jimeng.jianying.com Cookie 通道，按条计费（默认 ${JIMENG_VIDEO_CREDIT_COST} 积分/条，可在积分管理中调整）` },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG, label: '视频生成(即梦·兼容)', defaultCost: JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST, description: '即梦通道旧版统一定价（兼容项）；请使用下方「Seedance 2.0 Fast VIP / 2.0 VIP」分项定价' },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST, label: 'Seedance 2.0 Fast VIP（通道4）', defaultCost: JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST, description: '即梦通道4 · Seedance 2.0 Fast VIP（Web dreamina_seedance_40_vision），按条计费' },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0, label: 'Seedance 2.0 VIP（通道4）', defaultCost: JIMENG_SEEDANCE_2_0_CREDIT_COST, description: '即梦通道4 · Seedance 2.0 VIP（Web dreamina_seedance_40_pro_vision），按条计费' },
+  { action: CREDIT_ACTIONS.VIDEO_GENERATE_DOUBAO_TRAINING, label: '豆包培训视频（通道5）', defaultCost: 0, description: '通道5 内部培训 · 豆包免费额度练手，生成后自动叠加「内部培训专用」标识，不扣积分' },
   { action: CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, label: 'Seedance 2.0 VIP（兼容）', defaultCost: AISTARSLAB_DEFAULT_CREDIT_COST, description: `seedance通道3 旧版统一定价（兼容项）；新线路×模型请使用 video.generate.aistarslab.{线路}.{模型}，默认用户价=上游×1.5；含参考视频时 ×${AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER}` },
   { action: CREDIT_ACTIONS.GRID_GENERATE, label: '宫格图生成', defaultCost: IMAGE_CREDIT_COST, description: '九宫格参考图（平台 6 积分/张）' },
   { action: CREDIT_ACTIONS.GRID_PROMPT, label: '宫格提示词', defaultCost: 0, description: '宫格 LLM 提示词生成（免费，仍记录操作日志）' },
@@ -148,7 +155,14 @@ export function resolveVideoCreditCharge(
   }
   if (isJimengVideoModel(normalized)) {
     return {
-      action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
+      action: resolveJimengVideoCreditAction(normalized) as CreditAction,
+      quantity: 1,
+      billedSeconds: resolveJimengBillingSeconds(normalized, duration),
+    }
+  }
+  if (isDoubaoTrainingVideoModel(normalized) || provider === 'doubao_training') {
+    return {
+      action: CREDIT_ACTIONS.VIDEO_GENERATE_DOUBAO_TRAINING,
       quantity: 1,
       billedSeconds: 5,
     }

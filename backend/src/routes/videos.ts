@@ -32,7 +32,8 @@ import {
   listOfficialVolcengineConfigRows,
   resolveOfficialVideoConfigId,
 } from '../utils/official-volcengine-video.js'
-import { findChengmengVideoConfigRow, getChengmengVideoModelOptions, isChengmengVideoModelAllowed, listChengmengModelOptionsForApi } from '../utils/chengmeng-video-options.js'
+import { findChengmengVideoConfigRow, getChengmengVideoModelOptions, isChengmengVideoModelAllowed, listChengmengModelOptionsForApi, pickChengmengChannel1UiModels } from '../utils/chengmeng-video-options.js'
+import { isChengmengModelEnabled } from '../utils/chengmeng-model-settings.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 import {
   assertGeeknowGrokApiKey,
@@ -46,13 +47,25 @@ import {
 import { GROK_VIDEO_DOC_URL } from '../constants/geeknow-grok.js'
 import {
   assertJimengSessionConfigured,
-  getJimengSessionStatus,
+  assertJimengReferencesAllowed,
   isJimengVideoRequest,
+  listJimengSessionSummaries,
   listJimengVideoModelOptions,
+  normalizeJimengSubmitModel,
 } from '../utils/jimeng-web-video-options.js'
-import { isJimengVideoModel, JIMENG_VIDEO_CREDIT_COST } from '../constants/jimeng-web.js'
-import { denyUnlessAdmin } from '../middleware/auth.js'
+import { isJimengVideoModel, isJimengEnabledVideoModel, JIMENG_REF_LIMITS, JIMENG_ASPECT_RATIOS, JIMENG_DEFAULT_ASPECT_RATIO } from '../constants/jimeng-web.js'
 import { buildJimengVirtualConfig } from '../services/jimeng-web-video.js'
+import { buildDoubaoTrainingVirtualConfig } from '../services/doubao-training-video.js'
+import { getActiveJimengSessionId, getJimengWebSession } from '../services/jimeng-web-session.js'
+import { getActiveDoubaoTrainingSessionId, getDoubaoTrainingSession } from '../services/doubao-training-session.js'
+import { isDoubaoTrainingVideoModel } from '../constants/doubao-training.js'
+import {
+  assertDoubaoTrainingSessionConfigured,
+  getDoubaoTrainingOptionsPayload,
+  isDoubaoTrainingVideoRequest,
+  listDoubaoTrainingModelOptions,
+  listDoubaoTrainingSessionSummaries,
+} from '../utils/doubao-training-video-options.js'
 import {
   assertAistarslabApiKey,
   findAistarslabVideoConfigRow,
@@ -69,6 +82,10 @@ import {
   isAistarslabSelectionAllowed,
   bodyHasReferenceVideo,
 } from '../utils/aistarslab-video-options.js'
+import {
+  applyAistarslabChannelVisibility,
+  isAistarslabChannelEnabled,
+} from '../utils/aistarslab-channel-settings.js'
 import { AISTARSLAB_DOC_URL, AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER } from '../constants/aistarslab.js'
 
 const app = new Hono()
@@ -76,6 +93,9 @@ const app = new Hono()
 function resolveVideoConfig(body: Record<string, unknown>) {
   if (isJimengVideoRequest(body)) {
     return buildJimengVirtualConfig(body.model ? String(body.model) : undefined)
+  }
+  if (isDoubaoTrainingVideoRequest(body)) {
+    return buildDoubaoTrainingVirtualConfig(body.model ? String(body.model) : undefined)
   }
 
   const grokConfigId = resolveGrokVideoConfigId(body)
@@ -172,17 +192,44 @@ app.post('/', async (c) => {
   }
 
   if (isJimengVideoRequest(body)) {
-    const denied = denyUnlessAdmin(c)
-    if (denied) return denied
     if (!body.model || !isJimengVideoModel(String(body.model))) {
       return badRequest(c, '即梦视频生成需选择 jimeng-video 模型')
+    }
+    if (!isJimengEnabledVideoModel(String(body.model))) {
+      return badRequest(c, '所选即梦模型不可用，请刷新页面后重选')
+    }
+    try {
+      assertJimengReferencesAllowed(body)
+    } catch (err: any) {
+      return badRequest(c, err.message)
     }
     try {
       assertJimengSessionConfigured()
     } catch (err: any) {
       return badRequest(c, err.message)
     }
+    const jimengSessionId = String(body.jimeng_session_id || body.jimengSessionId || '').trim()
+    if (jimengSessionId && !getJimengWebSession(jimengSessionId)) {
+      return badRequest(c, '所选即梦 Session 不存在')
+    }
     body.provider = 'jimeng_web'
+    normalizeJimengSubmitModel(body)
+  }
+
+  if (isDoubaoTrainingVideoRequest(body)) {
+    if (!body.model || !isDoubaoTrainingVideoModel(String(body.model))) {
+      return badRequest(c, '豆包培训视频需选择培训模型')
+    }
+    try {
+      assertDoubaoTrainingSessionConfigured()
+    } catch (err: any) {
+      return badRequest(c, err.message)
+    }
+    const doubaoSessionId = String(body.doubao_training_session_id || body.doubaoTrainingSessionId || '').trim()
+    if (doubaoSessionId && !getDoubaoTrainingSession(doubaoSessionId)) {
+      return badRequest(c, '所选豆包培训 Session 不存在')
+    }
+    body.provider = 'doubao_training'
   }
 
   if (isAistarslabVideoRequest(body)) {
@@ -213,11 +260,18 @@ app.post('/', async (c) => {
   if (isJimengVideoRequest(body) && videoConfig?.provider !== 'jimeng_web') {
     return badRequest(c, '即梦视频通道不正确')
   }
+  if (isDoubaoTrainingVideoRequest(body) && videoConfig?.provider !== 'doubao_training') {
+    return badRequest(c, '豆包培训视频通道不正确')
+  }
   if (isAistarslabVideoRequest(body) && videoConfig?.provider !== 'aistarslab') {
     return badRequest(c, 'Seedance VIP 视频通道配置不正确')
   }
   if (isChengmengProvider(videoConfig?.provider) && body.model) {
-    const allowedModels = await getChengmengVideoModelOptions(videoConfig)
+    const model = String(body.model).trim()
+    if (!isChengmengModelEnabled(model)) {
+      return badRequest(c, '该模型已停用，请联系管理员在「设置 → 积分」中启用')
+    }
+    const allowedModels = pickChengmengChannel1UiModels(await getChengmengVideoModelOptions(videoConfig))
     const modelError = assertChengmengVideoModel(body, allowedModels)
     if (modelError) return badRequest(c, modelError)
   }
@@ -243,9 +297,14 @@ app.post('/', async (c) => {
     }
     const channel = String(body.aistarslab_channel || body.channel || '').trim()
     const model = String(body.model || '').trim()
+    if (channel && !isAistarslabChannelEnabled(channel)) {
+      return badRequest(c, '该线路已停用，请联系管理员在「设置 → 积分」中启用')
+    }
     if (channel && model && videoConfig && !isPlaceholderApiKey(videoConfig.apiKey)) {
       try {
-        const remote = await loadAistarslabVideoConfigFromProvider(videoConfig)
+        const remote = applyAistarslabChannelVisibility(
+          await loadAistarslabVideoConfigFromProvider(videoConfig),
+        )
         if (remote.channels.length && !isAistarslabSelectionAllowed(remote, channel, model)) {
           return badRequest(c, '所选线路与模型不可用，请刷新页面后重选')
         }
@@ -309,6 +368,12 @@ app.post('/', async (c) => {
       duration: body.duration,
     })
     logTaskPayload('VideoAPI', 'request body', body)
+    const jimengSessionId = isJimengVideoRequest(body)
+      ? String(body.jimeng_session_id || body.jimengSessionId || '').trim() || undefined
+      : undefined
+    const doubaoTrainingSessionId = isDoubaoTrainingVideoRequest(body)
+      ? String(body.doubao_training_session_id || body.doubaoTrainingSessionId || '').trim() || undefined
+      : undefined
     const id = await generateVideo({
       storyboardId: body.storyboard_id,
       dramaId: body.drama_id,
@@ -323,10 +388,16 @@ app.post('/', async (c) => {
       duration: body.duration,
       aspectRatio: body.aspect_ratio,
       configId,
-      provider: isJimengVideoRequest(body) ? 'jimeng_web' : undefined,
+      provider: isJimengVideoRequest(body)
+        ? 'jimeng_web'
+        : isDoubaoTrainingVideoRequest(body)
+          ? 'doubao_training'
+          : undefined,
       aistarslabChannel: isAistarslabVideoRequest(body)
         ? String(body.aistarslab_channel || body.channel || '').trim() || undefined
         : undefined,
+      jimengSessionId,
+      doubaoTrainingSessionId,
       creditTransactionId: billed.charge.transactionId,
       userId: getAuthUser(c).id,
     })
@@ -380,7 +451,10 @@ app.get('/chengmeng-options', async (c) => {
     }
   }
 
-  const models = listChengmengModelOptionsForApi(remoteModels, configId)
+  const models = listChengmengModelOptionsForApi(
+    pickChengmengChannel1UiModels(remoteModels),
+    configId,
+  )
   const defaultModel = models.find(item => item.default_option)?.id
     || models[0]?.id
     || null
@@ -398,29 +472,56 @@ app.get('/chengmeng-options', async (c) => {
   })
 })
 
-// GET /videos/jimeng-options — 即梦视频页（管理员）
-app.get('/jimeng-options', async (c) => {
-  const denied = denyUnlessAdmin(c)
-  if (denied) return denied
-
-  const session = await getJimengSessionStatus()
-  const models = listJimengVideoModelOptions().map(item => ({
+// GET /videos/doubao-training-options — 通道5 培训页：模型与 Session 可用性
+app.get('/doubao-training-options', async (c) => {
+  const sessions = await listDoubaoTrainingSessionSummaries()
+  const activeId = getActiveDoubaoTrainingSessionId()
+  const hasValidSession = sessions.some(item => item.valid)
+  const hasQuota = sessions.some(item => item.valid && (item.quota?.remaining_today ?? 0) > 0)
+  const models = listDoubaoTrainingModelOptions().map(item => ({
     ...item,
-    credit_action: CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
     billing_unit: 'flat',
-    credit_cost: getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG, 1),
+    credit_cost: getActionCost(item.credit_action, 1),
+    credit_cost_flat: getActionCost(item.credit_action, 1),
   }))
 
   return success(c, {
-    available: session.configured && session.valid,
-    session_configured: session.configured,
-    session_valid: session.valid,
-    session_id_masked: session.session_id_masked,
-    session_updated_at: session.updated_at,
+    ...getDoubaoTrainingOptionsPayload(),
+    available: sessions.length > 0 && hasValidSession && hasQuota,
+    session_configured: sessions.length > 0,
+    session_valid: hasValidSession,
+    active_id: activeId,
+    sessions,
+    models,
+  })
+})
+
+// GET /videos/jimeng-options — 即梦视频页：模型与服务可用性
+app.get('/jimeng-options', async (c) => {
+  const sessions = await listJimengSessionSummaries()
+  const activeId = getActiveJimengSessionId()
+  const hasValidSession = sessions.some(item => item.valid)
+  const models = listJimengVideoModelOptions().map(item => ({
+    ...item,
+    billing_unit: 'flat',
+    credit_cost: getActionCost(item.credit_action, 1),
+    credit_cost_flat: getActionCost(item.credit_action, 1),
+  }))
+
+  return success(c, {
+    available: sessions.length > 0 && hasValidSession,
+    session_configured: sessions.length > 0,
+    session_valid: hasValidSession,
+    active_id: activeId,
+    sessions,
     doc_url: 'https://jimeng.jianying.com',
     site_url: 'https://jimeng.jianying.com',
     models,
-    credit_cost_default: JIMENG_VIDEO_CREDIT_COST,
+    credit_cost_default: getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST, 1),
+    ref_limits: JIMENG_REF_LIMITS,
+    ref_limits_hint: `${JIMENG_REF_LIMITS.images}图 ${JIMENG_REF_LIMITS.audios}音 ${JIMENG_REF_LIMITS.videos}视频`,
+    aspect_ratios: [...JIMENG_ASPECT_RATIOS],
+    default_aspect_ratio: JIMENG_DEFAULT_ASPECT_RATIO,
   })
 })
 
@@ -433,7 +534,9 @@ app.get('/aistarslab-options', async (c) => {
 
   if (row && !isPlaceholderApiKey(row.apiKey)) {
     try {
-      remoteConfig = await loadAistarslabVideoConfigFromProvider(row)
+      remoteConfig = applyAistarslabChannelVisibility(
+        await loadAistarslabVideoConfigFromProvider(row),
+      )
     } catch (err: any) {
       configError = err.message
     }

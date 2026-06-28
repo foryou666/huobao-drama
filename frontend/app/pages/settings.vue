@@ -83,6 +83,178 @@
             </button>
           </div>
         </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道4</div>
+              <div class="setup-title">即梦 Session</div>
+              <div class="setup-desc">
+                jimeng.jianying.com Cookie 鉴权，仅管理员在此配置。用户视频页不会展示 Session 内容。
+                <a href="https://jimeng.jianying.com" target="_blank" rel="noopener">打开即梦</a>
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                须粘贴<strong>完整 Cookie</strong>（含 sessionid、_tea_web_id、uid_tt 等），只填 sessionid 易触发「疑似异常行为」。
+                服务器需安装 Chromium（<code>cd backend && npx playwright-core install chromium</code>）用于 Seedance 视频签名。
+                复制方法：F12 → <strong>Network（网络）</strong> → 在即梦页随便点一下（如刷新）→ 选中任意 <code>jimeng.jianying.com</code> 请求
+                → Headers → Request Headers → 找到 <code>Cookie:</code> → 右键该行值 → Copy value，粘贴到下方。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="jimengHasValidSession ? 'tag-accent' : ''">{{ jimengSessionStatusLabel }}</span>
+              <span v-if="jimengSessions.length" class="mono dim">{{ jimengSessions.length }} 个 Session</span>
+            </div>
+          </div>
+          <div v-if="jimengSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in jimengSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span class="mono dim">{{ item.session_id_masked }}</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="jimengSessionSaving"
+                  @click="activateJimengSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="jimengSessionSaving"
+                  @click="validateJimengSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="jimengSessionSaving"
+                  @click="removeJimengSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何 Session</div>
+          <textarea
+            v-model="jimengSessionInput"
+            class="jimeng-session-input"
+            rows="3"
+            placeholder="粘贴 Cookie 或 sessionid，保存为新 Session…"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="jimengSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选）" />
+            <button type="button" class="btn btn-sm btn-primary" :disabled="jimengSessionSaving || !jimengSessionInput.trim()" @click="saveJimengSession">
+              {{ jimengSessionSaving ? '保存中…' : '添加 Session' }}
+            </button>
+            <button
+              v-if="jimengSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="jimengSessionSaving"
+              @click="clearJimengSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道5</div>
+              <div class="setup-title">豆包培训 Session</div>
+              <div class="setup-desc">
+                doubao.com Cookie 鉴权，用于内部培训练手。每账号每日 {{ doubaoTrainingDailyQuota }} 次免费额度，生成后自动叠加培训标识。
+                <a href="https://www.doubao.com/chat/create-video" target="_blank" rel="noopener">打开豆包</a>
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                复制方法：F12 → <strong>Network（网络）</strong> → 在豆包页刷新 → 选中 <code>www.doubao.com</code> 请求
+                → Headers → Request Headers → <code>Cookie:</code> → Copy value，粘贴到下方。
+                可添加多个账号，系统自动轮换有剩余额度的 Session。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="doubaoTrainingHasValidSession ? 'tag-accent' : ''">{{ doubaoTrainingSessionStatusLabel }}</span>
+              <span v-if="doubaoTrainingSessions.length" class="mono dim">{{ doubaoTrainingSessions.length }} 个 Session</span>
+            </div>
+          </div>
+          <div v-if="doubaoTrainingSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in doubaoTrainingSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span class="mono dim">{{ item.session_id_masked }}</span>
+                <span class="tag">{{ item.quota?.remaining_today ?? '?' }}/{{ item.quota?.daily_quota ?? doubaoTrainingDailyQuota }} 次</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="doubaoTrainingSessionSaving"
+                  @click="activateDoubaoTrainingSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="doubaoTrainingSessionSaving"
+                  @click="validateDoubaoTrainingSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="doubaoTrainingSessionSaving"
+                  @click="removeDoubaoTrainingSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何 Session</div>
+          <textarea
+            v-model="doubaoTrainingSessionInput"
+            class="jimeng-session-input"
+            rows="3"
+            placeholder="粘贴 Cookie 或 sessionid，保存为新 Session…"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="doubaoTrainingSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选，如：培训账号1）" />
+            <button type="button" class="btn btn-sm btn-primary" :disabled="doubaoTrainingSessionSaving || !doubaoTrainingSessionInput.trim()" @click="saveDoubaoTrainingSession">
+              {{ doubaoTrainingSessionSaving ? '保存中…' : '添加 Session' }}
+            </button>
+            <button
+              v-if="doubaoTrainingSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="doubaoTrainingSessionSaving"
+              @click="clearDoubaoTrainingSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
         <div class="sections">
           <section v-for="st in serviceTypes" :key="st.type">
             <div class="section-head">
@@ -302,15 +474,142 @@
             </tbody>
           </table>
         </section>
+        <section v-if="chengmengPricingGroups.length" class="setup-panel card">
+          <div class="setup-title">橙盟模型（通道1）</div>
+          <p class="dim setup-pricing-hint">每个上游 model_id 可单独启用或禁用；<strong>禁用后前台通道1页不再显示该模型</strong>（默认定价项仍保留，重新启用后可继续调价）。在「AI 服务」中刷新橙盟配置可同步新模型定价项。</p>
+          <table class="user-table aistarslab-pricing-table">
+            <thead>
+              <tr><th>模型</th><th>单价</th><th>启用</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="group in chengmengPricingGroups"
+                :key="`cm-${group.modelId}`"
+                :class="{ 'aistarslab-pricing-model-disabled': !group.enabled }"
+              >
+                <td>
+                  <span class="tag tag-accent">model {{ group.modelId }}</span>
+                  <span class="aistarslab-pricing-channel-title">{{ group.title }}</span>
+                  <div v-for="item in group.items" :key="item.action" class="dim mono aistarslab-pricing-action">{{ item.action }}</div>
+                </td>
+                <td>
+                  <div v-for="item in group.items" :key="`${item.action}-cost`" class="pricing-input-row">
+                    <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" :disabled="!group.enabled" />
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    class="btn btn-sm"
+                    :class="group.enabled ? 'btn-primary' : 'btn-ghost'"
+                    :disabled="chengmengModelSaving === group.modelId"
+                    @click="toggleChengmengModel(group)"
+                  >
+                    {{ chengmengModelSaving === group.modelId ? '保存中…' : (group.enabled ? '已启用' : '已禁用') }}
+                  </button>
+                </td>
+                <td>
+                  <button
+                    v-for="item in group.items"
+                    :key="`${item.action}-save`"
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="!group.enabled"
+                    @click="savePricing(item)"
+                  >
+                    保存
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section v-if="aistarslabPricingGroups.length" class="setup-panel card">
+          <div class="setup-title">Seedance VIP 线路（通道3）</div>
+          <p class="dim setup-pricing-hint">每条线路可单独启用或禁用；<strong>禁用后前台通道3页不再显示该线路</strong>（默认定价项仍保留，重新启用后可继续调价）。</p>
+          <table class="user-table aistarslab-pricing-table">
+            <thead>
+              <tr><th>线路</th><th>模型定价</th><th>单价</th><th>启用</th><th></th></tr>
+            </thead>
+            <tbody>
+              <template v-for="group in aistarslabPricingGroups" :key="`ch-${group.channel}`">
+                <tr class="aistarslab-pricing-channel-row">
+                  <td colspan="2">
+                    <span class="tag tag-accent">线路 {{ group.channel }}</span>
+                    <span class="aistarslab-pricing-channel-title">{{ group.title }}</span>
+                    <span class="dim">（{{ group.items.length }} 个模型）</span>
+                  </td>
+                  <td></td>
+                  <td>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      :class="group.enabled ? 'btn-primary' : 'btn-ghost'"
+                      :disabled="aistarslabChannelSaving === group.channel"
+                      @click="toggleAistarslabChannel(group)"
+                    >
+                      {{ aistarslabChannelSaving === group.channel ? '保存中…' : (group.enabled ? '已启用' : '已禁用') }}
+                    </button>
+                  </td>
+                  <td></td>
+                </tr>
+                <tr v-for="item in group.items" :key="item.action" :class="{ 'aistarslab-pricing-model-disabled': !group.enabled }">
+                  <td></td>
+                  <td>
+                    <div>{{ item.label }}</div>
+                    <div class="dim mono aistarslab-pricing-action">{{ item.action }}</div>
+                  </td>
+                  <td>
+                    <div class="pricing-input-row">
+                      <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" :disabled="!group.enabled" />
+                      <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                    </div>
+                  </td>
+                  <td></td>
+                  <td>
+                    <button type="button" class="btn btn-sm" :disabled="!group.enabled" @click="savePricing(item)">保存</button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </section>
+        <section v-if="jimengPricingItems.length" class="setup-panel card">
+          <div class="setup-title">Seedance 通道4（即梦）</div>
+          <p class="dim setup-pricing-hint">前台仅展示 Seedance 2.0 Fast VIP / 2.0 VIP 两档；Session 由管理员在「AI 服务」中配置，用户可直接使用当前启用 Session 生成。</p>
+          <table class="user-table">
+            <thead>
+              <tr><th>模型</th><th>单价</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in jimengPricingItems" :key="item.action">
+                <td>
+                  <div>{{ item.label }}</div>
+                  <div class="dim mono aistarslab-pricing-action">{{ item.action }}</div>
+                </td>
+                <td>
+                  <div class="pricing-input-row">
+                    <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" />
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                  </div>
+                </td>
+                <td>
+                  <button type="button" class="btn btn-sm" @click="savePricing(item)">保存</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
         <section class="setup-panel card">
           <div class="setup-title">操作定价</div>
-          <p class="dim setup-pricing-hint">seedance通道2 相关项填<strong>每秒</strong>积分；seedance通道1/3/4 与 grok视频 填<strong>每条</strong>积分。「Seedance 2.0 VIP」为用户扣费单价（按条），与上游成本无关。</p>
+          <p class="dim setup-pricing-hint">seedance通道2 相关项填<strong>每秒</strong>积分；seedance通道1/3/4 与 grok视频 填<strong>每条</strong>积分。「Seedance 2.0 VIP」为用户扣费单价（按条），与上游成本无关。通道1 各模型见上方「橙盟模型（通道1）」；通道3 各线路×模型定价见上方表格；通道4 见上方「Seedance 通道4」。</p>
           <table class="user-table">
             <thead>
               <tr><th>操作</th><th>说明</th><th>单价</th><th></th></tr>
             </thead>
             <tbody>
-              <tr v-for="item in creditPricing" :key="item.action">
+              <tr v-for="item in generalCreditPricing" :key="item.action">
                 <td>{{ item.label }}</td>
                 <td class="dim">{{ item.description }}</td>
                 <td>
@@ -672,7 +971,7 @@
 import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, Users, Coins, Building2 } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI } from '~/composables/useApi'
+import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI, jimengSessionAPI, doubaoTrainingSessionAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
 import { VIDEO_CHANNEL_ADMIN_GUIDE } from '~/constants/video-channels.js'
 
@@ -719,6 +1018,204 @@ const cfgTesting = ref(false)
 const cfgTestResult = ref(null)
 const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', modelStr: '', service_type: 'text', priority: 0 })
 const huobaoForm = reactive({ apiKey: '' })
+
+const jimengSessions = ref([])
+const jimengSessionInput = ref('')
+const jimengSessionLabel = ref('')
+const jimengSessionSaving = ref(false)
+
+const doubaoTrainingSessions = ref([])
+const doubaoTrainingSessionInput = ref('')
+const doubaoTrainingSessionLabel = ref('')
+const doubaoTrainingSessionSaving = ref(false)
+const doubaoTrainingDailyQuota = ref(5)
+
+const jimengHasValidSession = computed(() => jimengSessions.value.some(item => item.valid))
+const jimengSessionConfigured = computed(() => jimengSessions.value.length > 0)
+
+const jimengSessionStatusLabel = computed(() => {
+  if (jimengHasValidSession.value) return '有可用 Session'
+  if (jimengSessionConfigured.value) return 'Session 均无效或已过期'
+  return '未配置'
+})
+
+const doubaoTrainingHasValidSession = computed(() => doubaoTrainingSessions.value.some(item => item.valid))
+const doubaoTrainingSessionConfigured = computed(() => doubaoTrainingSessions.value.length > 0)
+
+const doubaoTrainingSessionStatusLabel = computed(() => {
+  if (doubaoTrainingHasValidSession.value) return '有可用 Session'
+  if (doubaoTrainingSessionConfigured.value) return 'Session 均无效或已过期'
+  return '未配置'
+})
+
+async function loadDoubaoTrainingSessionStatus() {
+  if (!isAdmin.value) return
+  try {
+    const res = await doubaoTrainingSessionAPI.list()
+    doubaoTrainingSessions.value = res?.items || []
+  } catch {
+    doubaoTrainingSessions.value = []
+  }
+}
+
+async function saveDoubaoTrainingSession() {
+  if (!doubaoTrainingSessionInput.value.trim()) return
+  doubaoTrainingSessionSaving.value = true
+  try {
+    const raw = doubaoTrainingSessionInput.value.trim()
+    const payload = raw.includes('=')
+      ? { cookie: raw, label: doubaoTrainingSessionLabel.value || undefined, set_active: true }
+      : { session_id: raw, label: doubaoTrainingSessionLabel.value || undefined, set_active: true }
+    await doubaoTrainingSessionAPI.save(payload)
+    doubaoTrainingSessionInput.value = ''
+    doubaoTrainingSessionLabel.value = ''
+    toast.success('豆包培训 Session 已保存')
+    await loadDoubaoTrainingSessionStatus()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    doubaoTrainingSessionSaving.value = false
+  }
+}
+
+async function validateDoubaoTrainingSessionItem(id) {
+  doubaoTrainingSessionSaving.value = true
+  try {
+    const res = await doubaoTrainingSessionAPI.validate(id)
+    toast.success(res?.valid ? 'Session 有效' : 'Session 无效或已过期')
+    await loadDoubaoTrainingSessionStatus()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    doubaoTrainingSessionSaving.value = false
+  }
+}
+
+async function activateDoubaoTrainingSession(id) {
+  doubaoTrainingSessionSaving.value = true
+  try {
+    await doubaoTrainingSessionAPI.setActive(id)
+    toast.success('已切换当前 Session')
+    await loadDoubaoTrainingSessionStatus()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    doubaoTrainingSessionSaving.value = false
+  }
+}
+
+async function removeDoubaoTrainingSession(id) {
+  doubaoTrainingSessionSaving.value = true
+  try {
+    await doubaoTrainingSessionAPI.remove(id)
+    toast.success('Session 已删除')
+    await loadDoubaoTrainingSessionStatus()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    doubaoTrainingSessionSaving.value = false
+  }
+}
+
+async function clearDoubaoTrainingSession() {
+  doubaoTrainingSessionSaving.value = true
+  try {
+    await doubaoTrainingSessionAPI.clear()
+    doubaoTrainingSessionInput.value = ''
+    doubaoTrainingSessionLabel.value = ''
+    doubaoTrainingSessions.value = []
+    toast.success('已清除全部 Session')
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    doubaoTrainingSessionSaving.value = false
+  }
+}
+
+async function loadJimengSessionStatus() {
+  if (!isAdmin.value) return
+  try {
+    const res = await jimengSessionAPI.list()
+    jimengSessions.value = res?.items || res?.sessions || []
+  } catch {
+    jimengSessions.value = []
+  }
+}
+
+async function saveJimengSession() {
+  if (!jimengSessionInput.value.trim()) return
+  jimengSessionSaving.value = true
+  try {
+    const raw = jimengSessionInput.value.trim()
+    const payload = raw.includes('=')
+      ? { cookie: raw, label: jimengSessionLabel.value || undefined, set_active: true }
+      : { session_id: raw, label: jimengSessionLabel.value || undefined, set_active: true }
+    const res = await jimengSessionAPI.save(payload)
+    jimengSessionInput.value = ''
+    jimengSessionLabel.value = ''
+    await loadJimengSessionStatus()
+    toast.success(res?.valid ? 'Session 已添加且有效' : 'Session 已添加，但验证未通过')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
+async function validateJimengSessionItem(id) {
+  jimengSessionSaving.value = true
+  try {
+    const res = await jimengSessionAPI.validate(id)
+    await loadJimengSessionStatus()
+    toast.success(res?.valid ? 'Session 有效' : 'Session 无效，请重新登录即梦并复制 Cookie')
+  } catch (err) {
+    toast.error(err?.message || '验证失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
+async function activateJimengSession(id) {
+  jimengSessionSaving.value = true
+  try {
+    await jimengSessionAPI.setActive(id)
+    await loadJimengSessionStatus()
+    toast.success('已设为当前启用 Session')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
+async function removeJimengSession(id) {
+  jimengSessionSaving.value = true
+  try {
+    await jimengSessionAPI.remove(id)
+    await loadJimengSessionStatus()
+    toast.success('Session 已删除')
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
+async function clearJimengSession() {
+  jimengSessionSaving.value = true
+  try {
+    await jimengSessionAPI.clear()
+    jimengSessionInput.value = ''
+    jimengSessionLabel.value = ''
+    jimengSessions.value = []
+    toast.success('已清除全部 Session')
+  } catch (err) {
+    toast.error(err?.message || '清除失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
 const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
 const providerLabels = {
@@ -1560,15 +2057,140 @@ async function saveSkill(id) {
 
 // ===== Credits =====
 const creditPricing = ref([])
+const aistarslabChannelEnabled = ref({})
+const chengmengModelEnabled = ref({})
+const aistarslabChannelSaving = ref('')
+const chengmengModelSaving = ref('')
 const videoChannelGuide = VIDEO_CHANNEL_ADMIN_GUIDE
 const grantForm = reactive({ user_id: null, amount: 1000, summary: '' })
+
+const AISTARSLAB_CHANNEL_ACTION_RE = /^video\.generate\.aistarslab\.(\d+)\./i
+
+function parseChengmengModelFromAction(action) {
+  const key = String(action || '')
+  if (key === 'video.generate.chengmeng') return '53'
+  if (key === 'video.generate.chengmeng_seedance2') return '32'
+  const m = key.match(/^video\.generate\.chengmeng\.(\d+)$/i)
+  return m?.[1] ?? null
+}
+
+function isChengmengPricingAction(action) {
+  return !!parseChengmengModelFromAction(action)
+}
+
+function parseAistarslabChannelFromAction(action) {
+  const m = String(action || '').match(AISTARSLAB_CHANNEL_ACTION_RE)
+  return m?.[1] ?? null
+}
+
+const chengmengPricingGroups = computed(() => {
+  const map = new Map()
+  for (const item of creditPricing.value) {
+    const modelId = parseChengmengModelFromAction(item.action)
+    if (!modelId) continue
+    if (!map.has(modelId)) {
+      map.set(modelId, {
+        modelId,
+        title: String(item.label || '').trim() || `模型 ${modelId}`,
+        items: [],
+      })
+    }
+    map.get(modelId).items.push(item)
+  }
+  return [...map.values()]
+    .sort((a, b) => Number(a.modelId) - Number(b.modelId))
+    .map(group => ({
+      ...group,
+      enabled: chengmengModelEnabled.value[group.modelId] !== false,
+    }))
+})
+
+const aistarslabPricingGroups = computed(() => {
+  const map = new Map()
+  for (const item of creditPricing.value) {
+    const channel = parseAistarslabChannelFromAction(item.action)
+    if (!channel) continue
+    if (!map.has(channel)) {
+      const title = String(item.label || '')
+        .split('·')[0]
+        ?.replace(/^VIP\s*/i, '')
+        .trim() || `线路 ${channel}`
+      map.set(channel, { channel, title, items: [] })
+    }
+    map.get(channel).items.push(item)
+  }
+  return [...map.values()]
+    .sort((a, b) => Number(a.channel) - Number(b.channel))
+    .map(group => ({
+      ...group,
+      enabled: aistarslabChannelEnabled.value[group.channel] !== false,
+    }))
+})
+
+const generalCreditPricing = computed(() =>
+  creditPricing.value.filter(item =>
+    !parseAistarslabChannelFromAction(item.action)
+    && !isChengmengPricingAction(item.action)
+    && !isJimengPricingAction(item.action)
+    && item.action !== 'video.generate.doubao_training',
+  ),
+)
+
+const jimengPricingItems = computed(() =>
+  creditPricing.value
+    .filter(item => isJimengPricingAction(item.action) && item.action !== 'video.generate.jimeng')
+    .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN')),
+)
+
+function isJimengPricingAction(action) {
+  const key = String(action || '')
+  return key === 'video.generate.jimeng'
+    || key === 'video.generate.jimeng.seedance2_fast'
+    || key === 'video.generate.jimeng.seedance2'
+}
 
 async function loadCreditPricing() {
   try {
     const res = await creditsAPI.pricing()
     creditPricing.value = res.items || []
+    aistarslabChannelEnabled.value = { ...(res.aistarslab_channel_enabled || {}) }
+    chengmengModelEnabled.value = { ...(res.chengmeng_model_enabled || {}) }
   } catch (e) {
     toast.error(e.message)
+  }
+}
+
+async function toggleChengmengModel(group) {
+  const nextEnabled = !group.enabled
+  chengmengModelSaving.value = group.modelId
+  try {
+    await creditsAPI.setChengmengModelEnabled(group.modelId, nextEnabled)
+    chengmengModelEnabled.value = {
+      ...chengmengModelEnabled.value,
+      [group.modelId]: nextEnabled,
+    }
+    toast.success(`模型 ${group.modelId} 已${nextEnabled ? '启用' : '禁用'}`)
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    chengmengModelSaving.value = ''
+  }
+}
+
+async function toggleAistarslabChannel(group) {
+  const nextEnabled = !group.enabled
+  aistarslabChannelSaving.value = group.channel
+  try {
+    await creditsAPI.setAistarslabChannelEnabled(group.channel, nextEnabled)
+    aistarslabChannelEnabled.value = {
+      ...aistarslabChannelEnabled.value,
+      [group.channel]: nextEnabled,
+    }
+    toast.success(`线路 ${group.channel} 已${nextEnabled ? '启用' : '禁用'}`)
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    aistarslabChannelSaving.value = ''
   }
 }
 
@@ -1580,6 +2202,9 @@ const FLAT_VIDEO_PRICING_ACTIONS = new Set([
   'video.generate.grok.3_pro',
   'video.generate.grok.3_max',
   'video.generate.jimeng',
+  'video.generate.jimeng.seedance2_fast',
+  'video.generate.jimeng.seedance2',
+  'video.generate.doubao_training',
   'video.generate.aistarslab',
 ])
 
@@ -1799,6 +2424,8 @@ onMounted(() => {
     loadAgents()
     loadAllSkills()
     loadTeamUsers()
+    loadJimengSessionStatus()
+    loadDoubaoTrainingSessionStatus()
   }
   if (canManageMembers.value) {
     refreshTeams()
@@ -1866,6 +2493,106 @@ onMounted(() => {
 .pricing-unit {
   font-size: 12px;
   white-space: nowrap;
+}
+
+.jimeng-session-panel .setup-panel-head.compact {
+  align-items: flex-start;
+}
+
+.jimeng-session-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.jimeng-cookie-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+.jimeng-cookie-hint code {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.jimeng-session-input {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+}
+
+.jimeng-session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.jimeng-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.jimeng-session-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.jimeng-session-row.active {
+  border-color: var(--accent, #6366f1);
+}
+
+.jimeng-session-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.jimeng-session-row-label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.jimeng-session-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.jimeng-session-label {
+  min-width: 160px;
+  flex: 1;
+  max-width: 240px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: 12px;
 }
 
 .settings-layout { display: flex; height: 100%; background: var(--bg-base); }
@@ -2207,6 +2934,24 @@ onMounted(() => {
   text-decoration: underline;
 }
 
+.aistarslab-pricing-table .aistarslab-pricing-channel-row td {
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  padding-top: 12px;
+  padding-bottom: 8px;
+}
+.aistarslab-pricing-channel-title {
+  margin-left: 8px;
+  font-weight: 600;
+}
+.aistarslab-pricing-action {
+  font-size: 11px;
+  margin-top: 2px;
+  word-break: break-all;
+}
+.aistarslab-pricing-model-disabled td {
+  opacity: 0.55;
+}
 .aistarslab-remote-panel {
   margin-top: 10px;
   padding: 12px;

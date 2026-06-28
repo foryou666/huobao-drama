@@ -134,6 +134,8 @@
               <span class="composer-ref-add-icon">+</span>
               <span class="composer-ref-add-label">参考内容</span>
             </label>
+            <span v-if="jimengMode" class="composer-ref-hint dim">{{ jimengRefHint }}</span>
+            <span v-if="trainingMode" class="composer-ref-hint dim">{{ trainingRefHint }}</span>
           </div>
 
           <div
@@ -260,7 +262,7 @@
               </select>
             </label>
 
-            <div v-if="showRefModeToggle && !grokMode && !jimengMode" class="composer-pills">
+            <div v-if="showRefModeToggle && !grokMode && !jimengMode && !trainingMode" class="composer-pills">
               <button
                 type="button"
                 class="composer-pill"
@@ -292,7 +294,7 @@
               </button>
             </div>
 
-            <div v-if="(grokMode && grokDurationRangeEnabled) || (jimengMode && jimengDurationRangeEnabled)" class="composer-duration-range">
+            <div v-if="(grokMode && grokDurationRangeEnabled) || (jimengMode && jimengDurationRangeEnabled) || (trainingMode && trainingDurationRangeEnabled)" class="composer-duration-range">
               <select
                 class="composer-select composer-duration-select"
                 :value="duration"
@@ -368,10 +370,10 @@
           <button
             type="button"
             class="composer-submit"
-            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengMode || aistarslabMode) && !fixedModel)"
+            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengMode || trainingMode || aistarslabMode) && !fixedModel)"
             @click="submit"
           >
-            <span>{{ generating ? '生成中…' : (jimengMode ? '即梦生成' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频')))) }}</span>
+            <span>{{ generating ? '生成中…' : (trainingMode ? '通道5' : (jimengMode ? '通道4' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频'))))) }}</span>
             <span v-if="displayCreditHint && !generating" class="composer-submit-cost">{{ displayCreditHint }}</span>
           </button>
         </div>
@@ -473,7 +475,7 @@ import {
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
 import { parseVoiceRefs, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
-import { resolveStudioDramaId, setLastStudioDramaId } from '~/utils/studio-drama-preference.js'
+import { formatRefLimitsHint, JIMENG_REF_LIMITS, TRAINING_REF_LIMITS, CHENGMENT_REF_LIMITS } from '~/constants/video-channels.js'
 import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
 
@@ -485,8 +487,10 @@ const props = defineProps({
   officialMode: { type: Boolean, default: false },
   /** Grok 视频页：走 GeekNow Grok API */
   grokMode: { type: Boolean, default: false },
-  /** 即梦视频页（管理员）：走 jimeng.jianying.com Cookie API */
+  /** 即梦视频页：走 jimeng.jianying.com Cookie API */
   jimengMode: { type: Boolean, default: false },
+  /** 豆包培训页：走 doubao.com Cookie API（通道5） */
+  trainingMode: { type: Boolean, default: false },
   /** AIStartLab 视频页：走 OpenAPI Seedance 2.0 */
   aistarslabMode: { type: Boolean, default: false },
   /** 官方页可选模型列表 */
@@ -495,6 +499,8 @@ const props = defineProps({
   grokModels: { type: Array, default: () => [] },
   /** 即梦页可选模型列表 */
   jimengModels: { type: Array, default: () => [] },
+  /** 培训页可选模型列表 */
+  trainingModels: { type: Array, default: () => [] },
   /** 橙盟视频页可选模型列表 */
   chengmengModels: { type: Array, default: () => [] },
   /** AIStartLab 页可选模型列表 */
@@ -529,21 +535,40 @@ const props = defineProps({
 
 const emit = defineEmits(['generate', 'update:fixedModel'])
 
-const maxImages = computed(() => (props.grokMode ? 6 : props.jimengMode ? 2 : 9))
+const maxImages = computed(() => {
+  if (props.grokMode) return 6
+  if (props.trainingMode) return TRAINING_REF_LIMITS.images
+  if (props.jimengMode) return JIMENG_REF_LIMITS.images
+  if (isChengmengStudio.value) return CHENGMENT_REF_LIMITS.images
+  return 9
+})
+const jimengRefHint = computed(() => (
+  props.jimengMode
+    ? `全能参考：最多 ${JIMENG_REF_LIMITS.images} 图 ${JIMENG_REF_LIMITS.audios} 音 ${JIMENG_REF_LIMITS.videos} 视频`
+    : ''
+))
+const trainingRefHint = computed(() => (
+  props.trainingMode
+    ? `培训通道：可选 ${TRAINING_REF_LIMITS.images} 张参考图，生成后自动叠加培训标识`
+    : ''
+))
 const MAX_VIDEO_REFS = 3
 const isChengmengStudio = computed(() =>
   props.chengmengModels.length > 0
   && !props.officialMode
   && !props.grokMode
   && !props.jimengMode
+  && !props.trainingMode
   && !props.aistarslabMode,
 )
-const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value)
+const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value || props.jimengMode)
 const videoRefLabelKind = computed(() => (isChengmengStudio.value ? 'material' : 'video'))
 const maxVideoRefs = computed(() => (videoRefUploadEnabled.value ? MAX_VIDEO_REFS : 0))
 const defaultAspectRatios = ['9:16', '16:9']
 const grokAspectRatios = ['2:3', '3:2', '1:1']
-const jimengAspectRatios = ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3']
+const jimengAspectRatios = ['16:9', '9:16']
+const trainingAspectRatios = ['9:16', '16:9']
+const trainingDurations = [5, 10]
 const durations = [10, 15]
 
 const prompt = ref('')
@@ -570,6 +595,7 @@ const duration = ref(15)
 
 const effectiveAspectRatios = computed(() => {
   if (props.grokMode) return grokAspectRatios
+  if (props.trainingMode) return trainingAspectRatios
   if (props.jimengMode) return jimengAspectRatios
   return defaultAspectRatios
 })
@@ -584,12 +610,28 @@ const selectedJimengModel = computed(() => {
   return props.jimengModels.find(item => item.id === props.fixedModel) || null
 })
 
+const selectedTrainingModel = computed(() => {
+  if (!props.trainingMode || !props.fixedModel) return null
+  return props.trainingModels.find(item => item.id === props.fixedModel) || null
+})
+
 watch(
   () => props.jimengMode,
   (enabled) => {
     if (!enabled) return
-    if (!jimengAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '16:9'
+    if (!jimengAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '9:16'
     refMode.value = 'reference'
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.trainingMode,
+  (enabled) => {
+    if (!enabled) return
+    if (!trainingAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '9:16'
+    refMode.value = 'reference'
+    if (!trainingDurations.includes(duration.value)) duration.value = 5
   },
   { immediate: true },
 )
@@ -605,7 +647,14 @@ watch(
 )
 
 const effectiveDurationMin = computed(() => {
+  if (props.trainingMode) {
+    if (props.durationMin != null) return props.durationMin
+    const model = selectedTrainingModel.value
+    if (model?.duration_min != null) return Number(model.duration_min)
+    return 5
+  }
   if (props.jimengMode) {
+    if (props.durationMin != null) return props.durationMin
     const model = selectedJimengModel.value
     if (model?.duration_min != null) return Number(model.duration_min)
     return 5
@@ -621,7 +670,14 @@ const effectiveDurationMin = computed(() => {
 })
 
 const effectiveDurationMax = computed(() => {
+  if (props.trainingMode) {
+    if (props.durationMax != null) return props.durationMax
+    const model = selectedTrainingModel.value
+    if (model?.duration_max != null) return Number(model.duration_max)
+    return 10
+  }
   if (props.jimengMode) {
+    if (props.durationMax != null) return props.durationMax
     const model = selectedJimengModel.value
     if (model?.duration_max != null) return Number(model.duration_max)
     return 10
@@ -643,6 +699,7 @@ const durationRangeEnabled = computed(() => {
 })
 
 const durationSelectOptions = computed(() => {
+  if (props.trainingMode) return [...trainingDurations]
   const min = effectiveDurationMin.value
   const max = effectiveDurationMax.value
   if (min == null || max == null || max < min) return []
@@ -693,6 +750,7 @@ watch(
 
 const grokDurationRangeEnabled = computed(() => props.grokMode && durationRangeEnabled.value)
 const jimengDurationRangeEnabled = computed(() => props.jimengMode && durationRangeEnabled.value)
+const trainingDurationRangeEnabled = computed(() => props.trainingMode && durationRangeEnabled.value)
 
 function onDurationSelect(event) {
   duration.value = clampDuration(event?.target?.value)
@@ -701,6 +759,7 @@ function onDurationSelect(event) {
 const displayCreditHint = computed(() => {
   const flat = props.creditCostFlat
   if (flat != null && Number.isFinite(Number(flat))) {
+    if (Number(flat) === 0 && props.trainingMode) return '免费 · 不扣积分'
     let cost = Number(flat)
     const mult = Number(props.referenceVideoMultiplier)
     if (props.aistarslabMode && uploadedVideoRefs.value.length > 0 && Number.isFinite(mult) && mult > 1) {
@@ -931,9 +990,10 @@ async function loadProjectAssets(id) {
   }
   try {
     const drama = await dramaAPI.get(parsed)
-    projectChars.value = drama?.characters || []
-    projectScenes.value = drama?.scenes || []
-    projectProps.value = drama?.props || []
+    const sortByRecent = (a, b) => String(b?.updated_at || b?.updatedAt || '').localeCompare(String(a?.updated_at || a?.updatedAt || ''))
+    projectChars.value = [...(drama?.characters || [])].sort(sortByRecent)
+    projectScenes.value = [...(drama?.scenes || [])].sort(sortByRecent)
+    projectProps.value = [...(drama?.props || [])].sort(sortByRecent)
     await loadVoiceAssets()
   } catch (err) {
     projectChars.value = []
@@ -956,7 +1016,12 @@ function onDramaChange() {
   }
 }
 
-function openCharacterPicker() {
+async function openCharacterPicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  await loadProjectAssets(dramaId.value)
   if (!projectChars.value.length) {
     toast.warning('该项目暂无角色')
     return
@@ -990,7 +1055,12 @@ function unbindVoiceByIndex(index) {
   syncPromptMediaHeader()
 }
 
-function openScenePicker() {
+async function openScenePicker() {
+  if (!dramaId.value) {
+    toast.warning('请先选择项目')
+    return
+  }
+  await loadProjectAssets(dramaId.value)
   if (!projectScenes.value.length) {
     toast.warning('该项目暂无场景')
     return
@@ -1419,6 +1489,13 @@ function buildSimplePromptHeader(text, count) {
 }
 
 function applyFixedOfficialPayload(payload) {
+  if (props.trainingMode) {
+    payload.doubao_training = true
+    payload.training = true
+    payload.provider = 'doubao_training'
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
   if (props.jimengMode) {
     payload.jimeng = true
     payload.provider = 'jimeng_web'
@@ -1546,6 +1623,12 @@ function submit() {
 
 function normalizeLoadedAspectRatio(value) {
   const ratio = String(value || '').trim()
+  if (props.trainingMode) {
+    if (trainingAspectRatios.includes(ratio)) return ratio
+    if (ratio === '9:16' || ratio === 'portrait' || ratio === '2:3') return '9:16'
+    if (ratio === '16:9' || ratio === 'landscape' || ratio === '3:2') return '16:9'
+    return '9:16'
+  }
   if (props.jimengMode) {
     if (jimengAspectRatios.includes(ratio)) return ratio
     if (ratio === '9:16' || ratio === 'portrait' || ratio === '2:3') return '9:16'
@@ -1571,7 +1654,8 @@ async function loadFromItem(item) {
   aspectRatio.value = normalizeLoadedAspectRatio(item?.aspect_ratio || item?.aspectRatio || '9:16')
   duration.value = clampDuration(Number(
     item?.duration
-    || (props.jimengMode ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15)),
+    || (props.trainingMode ? (selectedTrainingModel.value?.duration_default || 5)
+      : (props.jimengMode ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15))),
   ))
 
   const mode = item?.reference_mode || item?.referenceMode
@@ -1908,6 +1992,14 @@ defineExpose({ loadFromItem, clearPrompt })
   line-height: 1.1;
   text-align: center;
   padding: 0 4px;
+}
+
+.composer-ref-hint {
+  flex-shrink: 0;
+  margin-left: 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  max-width: 160px;
 }
 
 .composer-video-ref-row {

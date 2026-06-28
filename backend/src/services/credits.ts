@@ -8,8 +8,31 @@ import { getAppMeta, setAppMeta } from '../db/index.js'
 const CREDIT_PRICING_MIGRATION_KEY = 'credit_pricing_defaults_v2'
 const SEEDANCE_PER_SECOND_MIGRATION_KEY = 'credit_pricing_seedance_per_second_v1'
 const JIMENG_PRICING_LABEL_KEY = 'credit_pricing_jimeng_label_v1'
+const JIMENG_PER_MODEL_PRICING_KEY = 'credit_pricing_jimeng_per_model_v1'
 const AISTARSLAB_PRICING_FLAT_FIX_KEY = 'credit_pricing_aistarslab_flat_fix_v1'
 const AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY = 'credit_pricing_aistarslab_ref_video_v1'
+
+/** 从旧即梦统一定价项复制单价到分项模型定价 */
+function migrateJimengPerModelPricing() {
+  if (getAppMeta(JIMENG_PER_MODEL_PRICING_KEY)) return
+  const [legacy] = db.select().from(schema.creditPricing)
+    .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG))
+    .all()
+  const legacyCost = legacy?.cost ?? 0
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0,
+  ]) {
+    const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+    if (row && row.cost === 0 && legacyCost > 0) {
+      db.update(schema.creditPricing)
+        .set({ cost: legacyCost, updatedAt: now() })
+        .where(eq(schema.creditPricing.action, action))
+        .run()
+    }
+  }
+  setAppMeta(JIMENG_PER_MODEL_PRICING_KEY, now())
+}
 
 /** 将即梦定价项标签与导航「视频生成(即梦)」对齐 */
 function migrateJimengPricingLabel() {
@@ -136,6 +159,7 @@ export function seedCreditPricing() {
       updatedAt: ts,
     }).run()
   }
+  migrateJimengPerModelPricing()
 }
 
 /** 一次性将已有库中的积分单价同步到最新默认值（不覆盖管理员后续手动调整前的首次迁移） */

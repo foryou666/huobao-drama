@@ -9,6 +9,7 @@ import { v4 as uuid } from 'uuid'
 import { getAudioConfigById } from './ai.js'
 import { getTTSAdapter } from './adapters/registry.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, redactUrl } from '../utils/task-logger.js'
+import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -93,6 +94,7 @@ export async function generateTTS(params: TTSParams): Promise<string> {
     bytes: buffer.length,
     audioMs: parsed.audioLength,
   })
+  await trySyncStaticToOss(relativePath)
   return relativePath
 }
 

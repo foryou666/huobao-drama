@@ -101,6 +101,7 @@ export interface VideoGenerationRecord {
   duration?: number | null
   aspectRatio?: string | null
   providerChannel?: string | null
+  style?: string | null
   // ... 其他字段
 }
 

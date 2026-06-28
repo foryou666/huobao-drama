@@ -17,6 +17,9 @@ export const CHENGMENG_VIDEO_MODELS = {
   SEEDANCE_2_0: CHENGMENG_SEEDANCE_2_0_MODEL_ID,
 } as const
 
+/** 通道1 前台展示：仅取上游同步列表的后 N 个模型 */
+export const CHENGMENG_CHANNEL1_UI_MODEL_COUNT = 2
+
 export function isChengmengVideoModelId(model?: string | null): boolean {
   const normalized = String(model || '').trim()
   return normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST

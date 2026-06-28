@@ -10,6 +10,7 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { now } from '../utils/response.js'
 import { logTaskError, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -124,6 +125,11 @@ async function doMerge(mergeId: number, episodeId: number, videos: string[]) {
     .where(eq(schema.episodes.id, episodeId)).run()
 
   logTaskSuccess('MergeTask', 'episode-merge', { mergeId, episodeId, output: mergedRelative, duration, clips: videos.length })
+  const [ep] = db.select({ dramaId: schema.episodes.dramaId })
+    .from(schema.episodes)
+    .where(eq(schema.episodes.id, episodeId))
+    .all()
+  await trySyncStaticToOss(mergedRelative, ep?.dramaId)
 }
 
 function getVideoDuration(filePath: string): Promise<number> {

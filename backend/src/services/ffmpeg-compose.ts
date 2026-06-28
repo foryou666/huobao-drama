@@ -12,6 +12,7 @@ import { eq } from 'drizzle-orm'
 import { now } from '../utils/response.js'
 import { generateTTS } from './tts-generation.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
+import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
@@ -178,6 +179,11 @@ export async function composeStoryboard(storyboardId: number): Promise<string> {
       storyboardNumber: sb.storyboardNumber,
       output: composedRelative,
     })
+    const [ep] = db.select({ dramaId: schema.episodes.dramaId })
+      .from(schema.episodes)
+      .where(eq(schema.episodes.id, sb.episodeId))
+      .all()
+    await trySyncStaticToOss(composedRelative, ep?.dramaId)
     return composedRelative
   } catch (err) {
     db.update(schema.storyboards)
