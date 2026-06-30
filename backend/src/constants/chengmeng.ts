@@ -20,6 +20,16 @@ export const CHENGMENG_VIDEO_MODELS = {
 /** 通道1 前台展示：仅取上游同步列表的后 N 个模型 */
 export const CHENGMENG_CHANNEL1_UI_MODEL_COUNT = 2
 
+/** 通道1 前台隐藏：上游折算 15 秒成本超过此值（元）的模型 */
+export const CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S = 5
+
+/** 通道1 本站用户价：最低档积分/条，其余线路按上游 15 秒成本同比缩放 */
+export const CHENGMENG_CHANNEL1_BASE_USER_CREDITS = 750
+
+/** 通道1 比例价超过此值时，统一按 HIGH_TIER_CAP 计费 */
+export const CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD = 1000
+export const CHENGMENG_CHANNEL1_HIGH_TIER_CAP = 950
+
 export function isChengmengVideoModelId(model?: string | null): boolean {
   const normalized = String(model || '').trim()
   return normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST

@@ -52,7 +52,7 @@
       </div>
 
       <div class="composer-main">
-        <div class="composer-input-wrap">
+        <div class="composer-input-wrap" @paste="onPaste">
           <div
             v-if="showRefStrip"
             class="composer-ref-stack"
@@ -88,8 +88,20 @@
               </button>
               <span class="composer-ref-card-tag">{{ item.tagLabel }}</span>
             </div>
+            <div
+              v-for="item in pendingUploads"
+              :key="item.id"
+              class="composer-ref-card composer-ref-card-pending"
+              aria-busy="true"
+            >
+              <div class="composer-ref-card-thumb composer-ref-card-thumb-pending">
+                <img v-if="item.preview" :src="item.preview" alt="" class="composer-ref-pending-preview" />
+                <span class="composer-ref-upload-spinner" aria-hidden="true" />
+              </div>
+              <span class="composer-ref-card-tag">上传中</span>
+            </div>
             <label
-              v-if="uploadedRefs.length < maxImages"
+              v-if="uploadedRefs.length + pendingUploads.length < maxImages"
               class="composer-ref-add-card"
               title="上传参考图"
               @click.stop
@@ -239,6 +251,8 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { toast } from 'vue-sonner'
 import { dramaAPI, imageAPI, uploadAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
+import { handlePasteImageUpload } from '~/utils/clipboard-image.js'
+import { startReferenceImageUpload } from '~/utils/reference-image-upload.js'
 import { assetCategoryLabel } from '~/utils/asset-categories.js'
 import {
   applyStudioPromptImageHeader,
@@ -275,6 +289,7 @@ const aspectRatios = ['9:16', '16:9']
 
 const prompt = ref('')
 const uploadedRefs = ref([])
+const pendingUploads = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
@@ -313,7 +328,7 @@ const visualRefItems = computed(() =>
   buildStudioRefStripItems(binding, projectChars.value, projectScenes.value, projectProps.value, uploadedRefs.value, gridUrl),
 )
 
-const showRefStrip = computed(() => dramaLinked.value || visualRefItems.value.length > 0)
+const showRefStrip = computed(() => dramaLinked.value || visualRefItems.value.length > 0 || pendingUploads.value.length > 0)
 
 const mentionableRefItems = computed(() =>
   visualRefItems.value.filter(item => item.path && !item.missing),
@@ -587,29 +602,35 @@ function addReferencePath(path, meta = {}) {
   return true
 }
 
-async function onUpload(event) {
-  const files = Array.from(event?.target?.files || [])
-  if (!files.length) return
-  const remain = maxImages.value - uploadedRefs.value.length
-  if (remain <= 0) {
-    toast.warning(`最多上传 ${maxImages.value} 张参考图`)
-    return
-  }
-  for (const file of files.slice(0, remain)) {
-    try {
-      const res = await uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null)
+function uploadImageFiles(files, { source = 'pick' } = {}) {
+  startReferenceImageUpload({
+    files,
+    maxRemain: maxImages.value - uploadedRefs.value.length - pendingUploads.value.length,
+    pendingUploadsRef: pendingUploads,
+    feedback: {
+      source,
+      limitMessage: `最多上传 ${maxImages.value} 张参考图`,
+    },
+    uploadOne: (file) => uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null),
+    onSuccess: async ({ file, res }) => {
       const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
       if (!path) throw new Error('上传失败')
       const label = res?.name || file.name?.replace(/\.[^.]+$/, '') || `参考图${uploadedRefs.value.length + 1}`
       addReferencePath(path, { ossUrl: res?.oss_url || res?.ossUrl || null, label, assetId: res?.asset_id || res?.assetId || null })
       pushSessionReferenceAsset({ path, label, assetId: res?.asset_id || res?.assetId || null })
       if (!res?.oss_url && !res?.ossUrl) await prefetchMediaUrls([path])
-    } catch (err) {
-      toast.error(err?.message || '上传失败')
-    }
-  }
+      syncPromptImageHeader()
+    },
+  })
+}
+
+function onUpload(event) {
+  uploadImageFiles(event?.target?.files || [], { source: 'pick' })
   if (event?.target) event.target.value = ''
-  syncPromptImageHeader()
+}
+
+function onPaste(event) {
+  handlePasteImageUpload(event, uploadImageFiles)
 }
 
 function pushSessionReferenceAsset({ path, label, assetId }) {
@@ -942,6 +963,43 @@ defineExpose({ loadFromItem, clearPrompt })
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.composer-ref-card-pending .composer-ref-card-thumb {
+  cursor: default;
+  pointer-events: none;
+}
+
+.composer-ref-card-thumb-pending {
+  position: relative;
+}
+
+.composer-ref-pending-preview {
+  opacity: 0.55;
+  filter: saturate(0.85);
+}
+
+.composer-ref-upload-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.composer-ref-upload-spinner::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(76, 125, 255, 0.25);
+  border-top-color: var(--accent, #4c7dff);
+  border-radius: 50%;
+  animation: composer-ref-spin 0.75s linear infinite;
+}
+
+@keyframes composer-ref-spin {
+  to { transform: rotate(360deg); }
 }
 
 .composer-ref-add-card {

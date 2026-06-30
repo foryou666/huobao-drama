@@ -141,6 +141,36 @@ export function replaceMentionWithImageLabel(prompt, mentionStart, cursorEnd, in
   return insertPromptImageLabel(prompt, mentionStart, cursorEnd, index, label)
 }
 
+export function replaceMentionWithVideoRef(prompt, mentionStart, cursorEnd, index) {
+  const before = String(prompt || '').slice(0, mentionStart)
+  const after = String(prompt || '').slice(cursorEnd)
+  const snippet = `@视频${index}`
+  const needsSep = before.trim() && !/[，,。\n\s]$/.test(before.slice(-1))
+  const text = `${before}${needsSep ? ' ' : ''}${snippet}${after}`
+  return { text, cursor: before.length + (needsSep ? 1 : 0) + snippet.length }
+}
+
+export function buildVideoMentionItems(uploadedVideoRefs, options = {}) {
+  const useMaterial = options?.labelKind === 'material'
+  return (uploadedVideoRefs || [])
+    .filter(item => item?.path)
+    .map((item, index) => {
+      const videoIndex = index + 1
+      const defaultLabel = useMaterial ? `参考素材${videoIndex}` : `参考视频${videoIndex}`
+      const label = item.label || defaultLabel
+      return {
+        type: 'video',
+        key: `video:${normalizeStripPath(item.path)}`,
+        path: normalizeStripPath(item.path),
+        label,
+        promptLabel: label,
+        sub: useMaterial ? '参考素材' : '参考视频',
+        thumb: null,
+        videoIndex,
+      }
+    })
+}
+
 export function buildAutoPromptHeader(sb, prompt, chars, scenes, helpers) {
   const items = buildPromptOrderedDisplayItems(sb, prompt, chars, scenes, helpers)
     .filter(item => item.type === 'image' && item.imageIndex && !item.technical)
@@ -594,8 +624,8 @@ function stripItemToMention(item) {
   return null
 }
 
-/** @ 菜单仅列出参考图栏中已出现的图片（角色/场景/上传图） */
-export function buildMentionOptions(stripItems, query) {
+/** @ 菜单：参考图栏图片 + 可选参考视频 */
+export function buildMentionOptions(stripItems, query, extraItems = []) {
   const q = String(query || '').trim().toLowerCase()
   const items = []
 
@@ -604,6 +634,12 @@ export function buildMentionOptions(stripItems, query) {
     if (!mention) continue
     if (!matchesMentionQuery(q, mention.label, mention.sub)) continue
     items.push(mention)
+  }
+
+  for (const item of extraItems || []) {
+    if (!item?.path) continue
+    if (!matchesMentionQuery(q, item.label, item.sub)) continue
+    items.push(item)
   }
 
   return items.slice(0, MENTION_LIMITS.strip)

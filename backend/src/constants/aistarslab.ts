@@ -89,3 +89,19 @@ export function aistarslabModelLabel(modelId?: string | null): string {
   if (id.includes('seedance-2.0')) return 'Seedance 2.0 VIP'
   return modelId || 'Seedance 2.0'
 }
+
+/** 用户可见文案：去除上游标题/描述中的人民币价格提示（如「3元/4元」） */
+export function sanitizeAistarslabUserFacingText(text?: string | null): string {
+  let value = String(text ?? '').trim()
+  if (!value) return value
+  // （3元/4元）、（约 5 元）、(10元/条) 等
+  value = value.replace(/[（(][^）)]*?\d+(?:\.\d+)?\s*元[^）)]*?[）)]/gu, '')
+  // 独立的 3元/4元、10元 等
+  value = value.replace(/\d+(?:\.\d+)?\s*元(?:\s*[\/／]\s*\d+(?:\.\d+)?\s*元)?/gu, '')
+  value = value.replace(/[-—·]+\s*$/u, '').replace(/\s{2,}/gu, ' ').trim()
+  return value || String(text ?? '').trim()
+}
+
+export function sanitizeAistarslabChannelTitle(title?: string | null): string {
+  return sanitizeAistarslabUserFacingText(title)
+}

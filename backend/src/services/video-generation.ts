@@ -18,6 +18,7 @@ import { normalizeDoubaoTrainingAspectRatio, normalizeDoubaoTrainingDuration } f
 import { processDoubaoTrainingVideoGeneration } from './doubao-training-video.js'
 import { applyTrainingVideoOverlay } from '../utils/training-video-overlay.js'
 import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
+import { ensureVideoPoster } from '../utils/video-poster.js'
 import { buildJimengVirtualConfig, processJimengWebVideoGeneration } from './jimeng-web-video.js'
 import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import {
@@ -717,6 +718,7 @@ export async function handleVideoComplete(id: number, videoUrl: string, duration
     }
     logTaskSuccess('VideoTask', 'downloaded', { id, localPath, storyboardId: sbId, applyToStoryboard, duration })
     await trySyncStaticToOss(localPath, videoMeta?.dramaId)
+    await ensureVideoPoster(localPath).catch(() => {})
   } catch (err: any) {
     logTaskWarn('VideoTask', 'download-failed', {
       id,

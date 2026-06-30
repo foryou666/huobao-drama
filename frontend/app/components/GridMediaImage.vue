@@ -13,7 +13,7 @@
 </template>
 
 <script setup>
-import { mediaGridUrl, normalizeMediaPath, thumbPathFromSource } from '~/utils/media-url.js'
+import { cacheVersion, mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, thumbPathFromSource } from '~/utils/media-url.js'
 
 const props = defineProps({
   src: { type: String, default: '' },
@@ -27,9 +27,10 @@ const failed = ref(false)
 const useFullFallback = ref(false)
 
 const resolvedSrc = computed(() => {
+  void cacheVersion.value
   if (failed.value) return ''
   if (useFullFallback.value) {
-    return mediaGridUrl(props.src)
+    return mediaDisplayUrl(normalizeMediaPath(props.src))
   }
   return mediaGridUrl(props.src, props.thumb)
 })
@@ -39,6 +40,10 @@ const fitClass = computed(() => `is-${props.fit || 'cover'}`)
 watch(() => [props.src, props.thumb], () => {
   failed.value = false
   useFullFallback.value = false
+})
+
+watch(() => cacheVersion.value, () => {
+  failed.value = false
 })
 
 function onError() {

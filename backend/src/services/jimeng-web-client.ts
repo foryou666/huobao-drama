@@ -309,10 +309,15 @@ export function parseJimengHistoryStatus(historyData: any): {
   const itemList = Array.isArray(historyData.item_list) ? historyData.item_list : []
 
   if (code === 30) {
-    return {
-      status: 'failed',
-      error: String(historyData.fail_starling_message || historyData.fail_msg || '即梦视频生成失败'),
+    const raw = String(historyData.fail_starling_message || historyData.fail_msg || '即梦视频生成失败').trim()
+    const failCode = String(historyData.fail_code || '').trim()
+    let error = raw
+    if (raw === 'Param' || failCode === '1001') {
+      error = '即梦参数校验失败（Param）：常见原因包括参考音频总时长超过 15 秒、参考素材数量/格式不符或提示词过长，请检查后重试'
+    } else if (raw === 'SystemBusy') {
+      error = '即梦服务繁忙，请稍后重试'
     }
+    return { status: 'failed', error }
   }
 
   if (code === 10 || code === 50) {

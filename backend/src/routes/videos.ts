@@ -32,7 +32,7 @@ import {
   listOfficialVolcengineConfigRows,
   resolveOfficialVideoConfigId,
 } from '../utils/official-volcengine-video.js'
-import { findChengmengVideoConfigRow, getChengmengVideoModelOptions, isChengmengVideoModelAllowed, listChengmengModelOptionsForApi, pickChengmengChannel1UiModels } from '../utils/chengmeng-video-options.js'
+import { findChengmengVideoConfigRow, getChengmengVideoModelOptions, isChengmengVideoModelAllowed, listChengmengModelOptionsForApi, pickChengmengChannel1UiModels, syncChengmengModelCreditPricing } from '../utils/chengmeng-video-options.js'
 import { isChengmengModelEnabled } from '../utils/chengmeng-model-settings.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 import {
@@ -451,6 +451,7 @@ app.get('/chengmeng-options', async (c) => {
     }
   }
 
+  syncChengmengModelCreditPricing(remoteModels)
   const models = listChengmengModelOptionsForApi(
     pickChengmengChannel1UiModels(remoteModels),
     configId,

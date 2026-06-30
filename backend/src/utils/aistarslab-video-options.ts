@@ -13,6 +13,8 @@ import {
   isAistarslabVideoModel,
   normalizeAistarslabDuration,
   aistarslabModelLabel,
+  sanitizeAistarslabChannelTitle,
+  sanitizeAistarslabUserFacingText,
 } from '../constants/aistarslab.js'
 import { CREDIT_ACTIONS } from '../constants/credit-actions.js'
 import { getActionCost, updateCreditPricing } from '../services/credits.js'
@@ -124,10 +126,11 @@ function normalizeChannelOption(raw: any): AistarslabChannelOption | null {
   const aspectRatios = Array.isArray(raw?.aspectRatios)
     ? raw.aspectRatios.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
     : ['16:9', '9:16', '1:1']
+  const rawTitle = String(raw?.title ?? channel).trim() || channel
   return {
     channel,
-    title: String(raw?.title ?? channel).trim() || channel,
-    description: String(raw?.description ?? '').trim(),
+    title: sanitizeAistarslabChannelTitle(rawTitle) || rawTitle,
+    description: sanitizeAistarslabUserFacingText(String(raw?.description ?? '').trim()),
     secondsMin,
     secondsMax,
     aspectRatios,

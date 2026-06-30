@@ -51,7 +51,7 @@ class JimengBrowserService {
 
     this.launching = (async () => {
       const { chromium } = await this.loadPlaywright()
-      this.browser = await chromium.launch({
+      const launchOptions: Parameters<typeof chromium.launch>[0] = {
         headless: true,
         args: [
           '--no-sandbox',
@@ -60,7 +60,21 @@ class JimengBrowserService {
           '--disable-gpu',
           '--no-first-run',
         ],
-      })
+      }
+      const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim()
+      if (executablePath) launchOptions.executablePath = executablePath
+
+      try {
+        this.browser = await chromium.launch(launchOptions)
+      } catch (err: any) {
+        const message = String(err?.message || err || '')
+        if (/libatk|shared libraries|chrome-headless-shell/i.test(message)) {
+          throw new Error(
+            'Playwright Chromium 缺少系统依赖。请在服务器 backend 目录执行: npx playwright-core install-deps chromium',
+          )
+        }
+        throw err
+      }
       this.browser.on('disconnected', () => {
         this.browser = null
         this.sessions.clear()

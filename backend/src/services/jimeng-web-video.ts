@@ -5,6 +5,8 @@ import {
   JIMENG_DEFAULT_VIDEO_MODEL,
   JIMENG_DRAFT_VERSION_OMNI,
   JIMENG_OMNI_MAX_TOTAL_REFS,
+  JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS,
+  JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS,
   JIMENG_REF_LIMITS,
   JIMENG_VIDEO_REFERER,
   JIMENG_WEB_VERSION,
@@ -23,6 +25,7 @@ import {
   uploadJimengMedia,
 } from './jimeng-web-client.js'
 import { getAbsolutePath, parseDataUrl } from '../utils/storage.js'
+import { openMediaReadStream } from '../utils/media-download.js'
 import { parseVideoContentRefs, type VideoContentRef } from '../utils/seedance-content.js'
 import type { VideoGenerationRecord } from './adapters/types.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
@@ -61,7 +64,7 @@ function detectMediaTypeFromPath(filePath: string): JimengMaterialType {
   return EXT_MEDIA_TYPE[ext] || 'image'
 }
 
-function readMediaBuffer(ref: string): { buffer: Buffer; filename: string; mediaType: JimengMaterialType } | null {
+async function readMediaBuffer(ref: string): Promise<{ buffer: Buffer; filename: string; mediaType: JimengMaterialType } | null> {
   const raw = String(ref || '').trim()
   if (!raw) return null
 
@@ -82,12 +85,30 @@ function readMediaBuffer(ref: string): { buffer: Buffer; filename: string; media
   const staticPath = raw.replace(/^\/+/, '')
   if (staticPath.startsWith('static/')) {
     const absPath = getAbsolutePath(staticPath)
-    if (!fs.existsSync(absPath)) return null
-    const ext = path.extname(absPath).toLowerCase() || '.bin'
-    return {
-      buffer: fs.readFileSync(absPath),
-      filename: `reference${ext}`,
-      mediaType: detectMediaTypeFromPath(absPath),
+    if (fs.existsSync(absPath)) {
+      const ext = path.extname(absPath).toLowerCase() || '.bin'
+      return {
+        buffer: fs.readFileSync(absPath),
+        filename: `reference${ext}`,
+        mediaType: detectMediaTypeFromPath(absPath),
+      }
+    }
+    try {
+      const { stream } = await openMediaReadStream(staticPath)
+      const chunks: Buffer[] = []
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+        stream.on('end', () => resolve())
+        stream.on('error', reject)
+      })
+      const ext = path.extname(staticPath).toLowerCase() || '.bin'
+      return {
+        buffer: Buffer.concat(chunks),
+        filename: `reference${ext}`,
+        mediaType: detectMediaTypeFromPath(staticPath),
+      }
+    } catch {
+      return null
     }
   }
 
@@ -161,9 +182,10 @@ async function uploadOmniMaterials(
   const orderedRefs = [...refs.images, ...refs.videos, ...refs.audios]
   const materials: UploadedJimengMaterial[] = []
   let totalVideoDurationSec = 0
+  let totalAudioDurationSec = 0
 
   for (const ref of orderedRefs) {
-    const file = readMediaBuffer(ref.url)
+    const file = await readMediaBuffer(ref.url)
     if (!file) {
       throw new Error(`无法读取参考${ref.type === 'image' ? '图' : ref.type === 'video' ? '视频' : '音频'}：${ref.url}`)
     }
@@ -182,6 +204,8 @@ async function uploadOmniMaterials(
     const vod = await uploadJimengMedia(session!, file.buffer, mediaType)
     if (mediaType === 'video') {
       totalVideoDurationSec += vod.durationMs / 1000
+    } else {
+      totalAudioDurationSec += vod.durationMs / 1000
     }
     materials.push({
       type: mediaType,
@@ -194,8 +218,14 @@ async function uploadOmniMaterials(
     })
   }
 
-  if (totalVideoDurationSec > 15) {
-    throw new Error(`参考视频总时长 ${totalVideoDurationSec.toFixed(1)}s 超过 15 秒上限`)
+  if (totalVideoDurationSec > JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS) {
+    throw new Error(`参考视频总时长 ${totalVideoDurationSec.toFixed(1)}s 超过 ${JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS} 秒上限`)
+  }
+  if (totalAudioDurationSec > JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS) {
+    throw new Error(
+      `参考音频总时长 ${totalAudioDurationSec.toFixed(1)}s 超过即梦 ${JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS} 秒上限`
+      + '，请减少音色数量或换更短的参考音频后重试',
+    )
   }
 
   return materials

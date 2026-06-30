@@ -421,5 +421,20 @@ onUnmounted(() => {
 .film-frame:nth-child(3) { opacity: 0.3; }
 
 /* Content */
-.content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Nuxt 页面根节点需参与 flex 高度链；滚动交给 .page / .studio-feed 自身 */
+.content > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
 </style>

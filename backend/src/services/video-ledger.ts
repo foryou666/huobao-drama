@@ -1,13 +1,15 @@
 import { db, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
+import { resolvePosterDisplayUrl } from '../utils/video-poster.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
 import type { AuthUser } from '../middleware/auth.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 
-function parseReferenceImages(row: {
+/** 列表接口只返回路径（卡片仅展示数量，避免逐条 OSS 签名） */
+function parseReferenceImagePaths(row: {
   imageUrl?: string | null
   firstFrameUrl?: string | null
   lastFrameUrl?: string | null
@@ -22,7 +24,6 @@ function parseReferenceImages(row: {
       const path = String(ref.url || '').trim().replace(/^\/+/, '')
       return {
         path,
-        display_url: resolveDisplayMediaUrl(path),
         label: ref.label || null,
       }
     }).filter(item => item.path)
@@ -50,10 +51,7 @@ function parseReferenceImages(row: {
     if (ref.type === 'image') push(ref.url)
   }
 
-  return paths.map(path => ({
-    path,
-    display_url: resolveDisplayMediaUrl(path),
-  }))
+  return paths.map(path => ({ path }))
 }
 
 function parseReferenceVideos(row: { referencePayload?: string | null }) {
@@ -83,6 +81,9 @@ export interface VideoLedgerQuery {
   models?: string[]
 }
 
+const OWNER_MAPS_TTL_MS = 60_000
+let ownerMapsCache: { at: number; maps: ReturnType<typeof buildVideoOwnerMaps> } | null = null
+
 function buildVideoOwnerMaps() {
   const creditTxUser = new Map<number, number>()
   for (const tx of db.select({
@@ -106,6 +107,16 @@ function buildVideoOwnerMaps() {
   }
 
   return { creditTxUser, generationOwner }
+}
+
+function getVideoOwnerMaps() {
+  const now = Date.now()
+  if (ownerMapsCache && now - ownerMapsCache.at < OWNER_MAPS_TTL_MS) {
+    return ownerMapsCache.maps
+  }
+  const maps = buildVideoOwnerMaps()
+  ownerMapsCache = { at: now, maps }
+  return maps
 }
 
 function resolveVideoOwnerUserId(
@@ -135,56 +146,89 @@ function buildAccessibleDramaIds(user: AuthUser, activeTeamId: number | null | u
   return ids
 }
 
+function buildLedgerSqlConditions(query: VideoLedgerQuery): SQL[] {
+  const conditions: SQL[] = [isNull(schema.videoGenerations.deletedAt)]
+
+  if (query.dramaId) {
+    conditions.push(eq(schema.videoGenerations.dramaId, query.dramaId))
+  }
+  if (query.provider?.trim()) {
+    conditions.push(eq(schema.videoGenerations.provider, query.provider.trim()))
+  }
+  if (query.status && query.status !== 'all') {
+    if (query.status === 'processing') {
+      conditions.push(or(
+        eq(schema.videoGenerations.status, 'processing'),
+        eq(schema.videoGenerations.status, 'pending'),
+      )!)
+    } else {
+      conditions.push(eq(schema.videoGenerations.status, query.status))
+    }
+  }
+  if (query.models?.length) {
+    const allowed = query.models.map(item => item.trim()).filter(Boolean)
+    if (allowed.length) {
+      conditions.push(inArray(schema.videoGenerations.model, allowed))
+    }
+  }
+  if (query.keyword?.trim()) {
+    const kw = `%${query.keyword.trim().replace(/[%_]/g, '')}%`
+    conditions.push(sql`lower(${schema.videoGenerations.prompt}) like lower(${kw})`)
+  }
+  if (query.mineOnly) {
+    conditions.push(or(
+      eq(schema.videoGenerations.userId, query.user.id),
+      isNull(schema.videoGenerations.userId),
+    )!)
+  }
+
+  return conditions
+}
+
 export function listVideoLedger(query: VideoLedgerQuery) {
   const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100)
   const offset = Math.max(Number(query.offset || 0), 0)
   const accessibleDramaIds = buildAccessibleDramaIds(query.user, query.activeTeamId)
 
-  const storyboards = db.select().from(schema.storyboards).all()
-  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
-  const episodes = db.select().from(schema.episodes).all().filter(e => !e.deletedAt)
-  const epMap = new Map(episodes.map(e => [e.id, e]))
-  const dramas = db.select().from(schema.dramas).all().filter(d => !d.deletedAt)
-  const dramaMap = new Map(dramas.map(d => [d.id, d]))
+  const sqlConditions = buildLedgerSqlConditions(query)
+  let rows = db.select().from(schema.videoGenerations)
+    .where(and(...sqlConditions))
+    .all()
+    .filter(r => !r.dramaId || accessibleDramaIds.has(r.dramaId))
 
-  let rows = db.select().from(schema.videoGenerations).all()
-    .filter(r => !r.deletedAt)
-    .filter(r => {
-      if (!r.dramaId) return true
-      return accessibleDramaIds.has(r.dramaId)
+  if (query.mineOnly && rows.some(r => r.userId == null)) {
+    const ownerMaps = getVideoOwnerMaps()
+    rows = rows.filter(r => {
+      if (r.userId) return r.userId === query.user.id
+      return resolveVideoOwnerUserId(r, ownerMaps) === query.user.id
     })
+  }
 
-  if (query.dramaId) rows = rows.filter(r => r.dramaId === query.dramaId)
+  const storyboardIds = [...new Set(rows.map(r => r.storyboardId).filter((id): id is number => !!id))]
+  const storyboards = storyboardIds.length
+    ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
+    : []
+  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+
   if (query.episodeId) {
     rows = rows.filter(r => {
       const sb = r.storyboardId ? sbMap.get(r.storyboardId) : null
       return sb?.episodeId === query.episodeId
     })
   }
-  if (query.status && query.status !== 'all') {
-    if (query.status === 'processing') {
-      rows = rows.filter(r => r.status === 'processing' || r.status === 'pending')
-    } else {
-      rows = rows.filter(r => String(r.status || 'pending') === query.status)
-    }
-  }
-  if (query.keyword?.trim()) {
-    const kw = query.keyword.trim().toLowerCase()
-    rows = rows.filter(r => String(r.prompt || '').toLowerCase().includes(kw))
-  }
-  if (query.provider?.trim()) {
-    const provider = query.provider.trim().toLowerCase()
-    rows = rows.filter(r => String(r.provider || '').toLowerCase() === provider)
-  }
-  if (query.models?.length) {
-    const allowed = new Set(query.models.map(item => item.trim()).filter(Boolean))
-    rows = rows.filter(r => allowed.has(String(r.model || '')))
-  }
 
-  const ownerMaps = query.mineOnly ? buildVideoOwnerMaps() : null
-  if (query.mineOnly) {
-    rows = rows.filter(r => resolveVideoOwnerUserId(r, ownerMaps!) === query.user.id)
-  }
+  const episodeIds = [...new Set(storyboards.map(sb => sb.episodeId).filter((id): id is number => !!id))]
+  const dramaIds = [...new Set(rows.map(r => r.dramaId).filter((id): id is number => !!id))]
+
+  const episodes = episodeIds.length
+    ? db.select().from(schema.episodes).where(inArray(schema.episodes.id, episodeIds)).all().filter(e => !e.deletedAt)
+    : []
+  const epMap = new Map(episodes.map(e => [e.id, e]))
+
+  const dramas = dramaIds.length
+    ? db.select().from(schema.dramas).where(inArray(schema.dramas.id, dramaIds)).all().filter(d => !d.deletedAt)
+    : []
+  const dramaMap = new Map(dramas.map(d => [d.id, d]))
 
   rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
 
@@ -220,7 +264,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       updated_at: row.updatedAt,
       completed_at: row.completedAt,
       display_video_url: resolveDisplayMediaUrl(rawVideo),
-      reference_images: parseReferenceImages(row),
+      display_poster_url: resolvePosterDisplayUrl(rawVideo),
+      reference_images: parseReferenceImagePaths(row),
       reference_videos: parseReferenceVideos(row),
       reference_payload: row.referencePayload,
       is_manual: !row.storyboardId,

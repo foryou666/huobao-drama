@@ -174,9 +174,20 @@ export async function uploadJimengImageViaImagex(
     },
     body: new Uint8Array(buffer),
   })
-  const uploadResult = await parseJsonResponse(uploadResp, '上传数据')
-  if (uploadResult?.code != null && Number(uploadResult.code) !== 2000) {
-    throw new Error(`即梦图片上传失败: ${uploadResult.message || uploadResult.code}`)
+  const uploadText = await uploadResp.text()
+  if (!uploadResp.ok) {
+    throw new Error(`即梦图片上传 HTTP ${uploadResp.status}: ${uploadText.slice(0, 200)}`)
+  }
+  if (uploadText.trim()) {
+    let uploadResult: any
+    try {
+      uploadResult = JSON.parse(uploadText)
+    } catch {
+      throw new Error(`即梦图片上传响应非 JSON (${uploadResp.status}): ${uploadText.slice(0, 200)}`)
+    }
+    if (uploadResult?.code != null && Number(uploadResult.code) !== 2000) {
+      throw new Error(`即梦图片上传失败: ${uploadResult.message || uploadResult.code}`)
+    }
   }
 
   const commitParams = {
@@ -184,7 +195,10 @@ export async function uploadJimengImageViaImagex(
     ServiceId: IMAGEX_SERVICE_ID,
     Version: '2018-08-01',
   }
-  const commitBody = { SessionKey: uploadAddress.SessionKey }
+  const commitBody = {
+    SessionKey: uploadAddress.SessionKey,
+    SuccessOids: [storeInfo.StoreUri],
+  }
   const commitSigned = generateAuthorization(
     auth.access_key_id,
     auth.secret_access_key,
@@ -207,7 +221,15 @@ export async function uploadJimengImageViaImagex(
     throw new Error(`即梦图片提交失败: ${commitResult.Response.Error.Message || '未知错误'}`)
   }
 
-  const uri = commitResult?.Result?.PluginResult?.[0]?.ImageUri
-  if (!uri) throw new Error('即梦图片上传未返回 ImageUri')
+  const plugin = commitResult?.Result?.PluginResult?.[0]
+  const uri = plugin?.ImageUri
+    || plugin?.image_uri
+    || commitResult?.Result?.Results?.[0]?.Uri
+    || commitResult?.Result?.Results?.[0]?.uri
+    || storeInfo.StoreUri
+  if (!uri) {
+    const snippet = JSON.stringify(commitResult?.Result || commitResult).slice(0, 400)
+    throw new Error(`即梦图片上传未返回 ImageUri: ${snippet}`)
+  }
   return String(uri)
 }

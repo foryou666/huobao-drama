@@ -61,41 +61,19 @@
           class="studio-card"
           @click="openDetail(item)"
         >
-          <div class="studio-card-media" :class="cardRatioClass(item)">
-            <video
-              v-if="playableUrl(item)"
-              :src="displayUrl(playableUrl(item))"
-              muted
-              playsinline
-              preload="metadata"
-              @mouseenter="playPreview"
-              @mouseleave="pausePreview"
-            />
-            <div v-else-if="isProcessing(item)" class="studio-card-loading">
-              <div class="studio-spinner" />
-              <span>{{ statusLabel(item.status) }}</span>
-            </div>
-            <div v-else class="studio-card-fallback">
-              <span>{{ statusLabel(item.status) }}</span>
-              <p v-if="item.error_msg" class="studio-card-error">{{ item.error_msg }}</p>
-            </div>
-
-            <div v-if="item.reference_images?.length" class="studio-card-ref-badge">
-              {{ item.reference_images.length }} 图
-            </div>
-            <div class="studio-card-status">
-              <span class="tag" :class="statusTagClass(item.status)">{{ statusLabel(item.status) }}</span>
-            </div>
-            <button
-              v-if="playableUrl(item)"
-              type="button"
-              class="studio-card-download"
-              title="下载视频"
-              @click.stop="downloadItem(item)"
-            >
-              ↓
-            </button>
-          </div>
+          <StudioVideoCardMedia
+            :poster-src="videoPosterDisplayUrl(item)"
+            :playable="!!playableUrl(item)"
+            :processing="isProcessing(item)"
+            :ratio-class="cardRatioClass(item)"
+            :status-label="statusLabel(item.status)"
+            :status-class="statusTagClass(item.status)"
+            :processing-label="statusLabel(item.status)"
+            :fallback-label="statusLabel(item.status)"
+            :error-msg="item.error_msg"
+            :ref-count="item.reference_images?.length || 0"
+            @download="downloadItem(item)"
+          />
 
           <div class="studio-card-body">
             <p class="studio-card-prompt">{{ previewPrompt(item.prompt) }}</p>
@@ -211,7 +189,8 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, videoAPI } from '~/composables/useApi'
-import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
+import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
+import { mediaDisplayUrl, prefetchMediaUrls, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
@@ -304,6 +283,7 @@ function normalizeItem(row) {
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
+    display_poster_url: row.display_poster_url || '',
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -365,19 +345,6 @@ function episodeLink(item) {
   return `/drama/${item.drama_id}/episode/${item.episode_number}`
 }
 
-function playPreview(event) {
-  const video = event?.target
-  if (!video || video.tagName !== 'VIDEO') return
-  video.play().catch(() => {})
-}
-
-function pausePreview(event) {
-  const video = event?.target
-  if (!video || video.tagName !== 'VIDEO') return
-  video.pause()
-  video.currentTime = 0
-}
-
 function openDetail(item) {
   detailItem.value = item
 }
@@ -412,10 +379,9 @@ function videoDownloadName(item) {
 }
 
 async function downloadItem(item) {
-  const raw = playableUrl(item)
-  if (!raw) return
+  if (!playableUrl(item)) return
   try {
-    await downloadMediaFile(raw, videoDownloadName(item))
+    await downloadMediaFile(null, videoDownloadName(item), { item, videoGenerationId: item.id })
     toast.success('开始下载')
   } catch (e) {
     toast.error(e?.message || '下载失败')
@@ -460,11 +426,14 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  const mediaPaths = nextItems.flatMap(item => [
-    item.local_path,
-    ...(item.reference_images || []).map(ref => ref.path),
-  ]).filter(Boolean)
-  await prefetchMediaUrls(mediaPaths)
+  const mediaPaths = collectMediaPrefetchPaths(
+    ...nextItems.flatMap(item => [
+      item.local_path,
+      item.video_url,
+      ...(item.reference_images || []).map(ref => ref.path),
+    ]),
+  )
+  if (mediaPaths.length) await prefetchMediaUrls(mediaPaths)
 }
 
 async function refreshLedger() {

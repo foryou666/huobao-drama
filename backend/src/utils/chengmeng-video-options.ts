@@ -6,12 +6,15 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_DOC_URL,
+  CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S,
+  CHENGMENG_CHANNEL1_BASE_USER_CREDITS,
+  CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD,
+  CHENGMENG_CHANNEL1_HIGH_TIER_CAP,
   chengmengModelCreditAction,
   isChengmengDynamicCreditAction,
   isChengmengProvider,
 } from '../constants/chengmeng.js'
 import {
-  CREDITS_PER_YUAN,
   VIDEO_BILLING_SECONDS,
 } from '../constants/credit-actions.js'
 import { getConfigById } from '../services/ai.js'
@@ -91,9 +94,31 @@ export function normalizeChengmengRemoteModels(raw: ChengmengRemoteModel[]): Che
   return models
 }
 
-/** 通道1 页面：仅展示管理员启用的上游模型 */
+/** 将上游单价折算为 15 秒成本（元）：元/次按次计，元/秒 × 15 */
+export function resolveChengmengUpstreamYuanPer15Seconds(model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>): number | null {
+  const price = model.basePriceYuan
+  if (price == null || !Number.isFinite(price) || price <= 0) return null
+  const unit = String(model.unitLabel || '').trim()
+  if (unit.includes('秒')) {
+    return price * VIDEO_BILLING_SECONDS
+  }
+  return price
+}
+
+export function isChengmengModelWithinChannel1UpstreamBudget(
+  model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>,
+  maxYuan = CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S,
+): boolean {
+  const cost = resolveChengmengUpstreamYuanPer15Seconds(model)
+  if (cost == null) return true
+  return cost <= maxYuan
+}
+
+/** 通道1 页面：仅展示管理员启用且上游 15 秒成本 ≤ 5 元的模型 */
 export function pickChengmengChannel1UiModels(models: ChengmengModelOption[]): ChengmengModelOption[] {
-  const enabled = filterEnabledChengmengModels(models).map(item => ({ ...item }))
+  const enabled = filterEnabledChengmengModels(models)
+    .filter(item => isChengmengModelWithinChannel1UpstreamBudget(item))
+    .map(item => ({ ...item }))
   if (!enabled.length) return []
   if (!enabled.some(item => item.defaultOption)) {
     enabled[0]!.defaultOption = true
@@ -176,56 +201,77 @@ export function isChengmengVideoModelAllowed(
   return allowed.some(item => item.id === normalized)
 }
 
-function legacyCreditCostForModel(modelId: string): number | null {
-  if (modelId === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
-    return getActionCost('video.generate.chengmeng', 1)
-  }
-  if (modelId === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0) {
-    return getActionCost('video.generate.chengmeng_seedance2', 1)
-  }
-  return null
+function defaultCreditCostForModel(model: ChengmengModelOption, minUpstreamYuan: number | null): number {
+  return computeChengmengUserCreditCost(model, minUpstreamYuan)
 }
 
-function defaultCreditCostForModel(model: ChengmengModelOption): number {
-  const legacy = legacyCreditCostForModel(model.id)
-  if (legacy != null && legacy > 0) return legacy
-  if (model.basePriceYuan != null && model.basePriceYuan > 0) {
-    return Math.max(1, Math.round(model.basePriceYuan * CREDITS_PER_YUAN))
-  }
-  return 800
+function resolveMinUpstreamYuanForChannel1(models: ChengmengModelOption[]): number | null {
+  const pool = pickChengmengChannel1UiModels(models)
+  const costs = (pool.length ? pool : models)
+    .map(item => resolveChengmengUpstreamYuanPer15Seconds(item))
+    .filter((value): value is number => value != null && value > 0)
+  if (!costs.length) return null
+  return Math.min(...costs)
 }
 
-function pricingDescriptionForModel(model: ChengmengModelOption, cost: number): string {
-  const upstream = model.basePriceYuan != null && model.basePriceYuan > 0
-    ? `上游约 ${model.basePriceYuan} 元/条`
+/** 本站用户积分：750 起步，按上游 15 秒成本比例缩放；超过 1000 则按 950 */
+export function computeChengmengUserCreditCost(
+  model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>,
+  minUpstreamYuan: number | null,
+  baseCredits = CHENGMENG_CHANNEL1_BASE_USER_CREDITS,
+): number {
+  const upstream = resolveChengmengUpstreamYuanPer15Seconds(model)
+  if (upstream == null || minUpstreamYuan == null || minUpstreamYuan <= 0) {
+    return baseCredits
+  }
+  const scaled = Math.round(baseCredits * (upstream / minUpstreamYuan))
+  let cost = Math.max(baseCredits, scaled)
+  if (cost > CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD) {
+    cost = CHENGMENG_CHANNEL1_HIGH_TIER_CAP
+  }
+  return cost
+}
+
+function pricingDescriptionForModel(
+  model: ChengmengModelOption,
+  cost: number,
+  minUpstreamYuan: number | null,
+): string {
+  const upstream = resolveChengmengUpstreamYuanPer15Seconds(model)
+  const upstreamText = upstream != null && upstream > 0
+    ? `${upstream} 元/15秒`
     : '上游按次计费'
-  return `seedance通道1 · 橙盟 model_id=${model.id} / group_id=${model.groupId}（${VIDEO_BILLING_SECONDS} 秒/条，${upstream}，默认 ${cost} 积分/条）`
+  const ratioText = upstream != null && minUpstreamYuan != null && minUpstreamYuan > 0
+    ? `，比例 ${(upstream / minUpstreamYuan).toFixed(2)}×`
+    : ''
+  return `seedance通道1 · 橙盟 model_id=${model.id} / group_id=${model.groupId}（${VIDEO_BILLING_SECONDS} 秒/条，上游 ${upstreamText}${ratioText}；本站 ${CHENGMENG_CHANNEL1_BASE_USER_CREDITS} 积分起步，超 ${CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD} 按 ${CHENGMENG_CHANNEL1_HIGH_TIER_CAP}，当前 ${cost} 积分/条）`
 }
 
-/** 确保每个上游模型在积分管理中都有可编辑的定价项 */
-export function ensureChengmengModelCreditPricing(models: ChengmengModelOption[]) {
+/** 同步每个上游模型的积分定价（750 起步，按上游 15 秒成本比例） */
+export function syncChengmengModelCreditPricing(models: ChengmengModelOption[]) {
+  if (!models.length) return
+  const minUpstreamYuan = resolveMinUpstreamYuanForChannel1(models)
   for (const model of models) {
     const action = chengmengModelCreditAction(model.id)
-    const [existing] = db.select().from(schema.creditPricing)
-      .where(eq(schema.creditPricing.action, action))
-      .all()
-    if (existing) continue
-
-    const cost = defaultCreditCostForModel(model)
+    const cost = defaultCreditCostForModel(model, minUpstreamYuan)
     updateCreditPricing(
       action,
       cost,
       `橙盟 ${model.label}`,
-      pricingDescriptionForModel(model, cost),
+      pricingDescriptionForModel(model, cost, minUpstreamYuan),
     )
   }
+}
+
+/** @deprecated 请使用 syncChengmengModelCreditPricing */
+export function ensureChengmengModelCreditPricing(models: ChengmengModelOption[]) {
+  syncChengmengModelCreditPricing(models)
 }
 
 export function listChengmengModelOptionsForApi(
   models: ChengmengModelOption[],
   configId: number | null,
 ) {
-  ensureChengmengModelCreditPricing(models)
   return models.map(item => ({
     id: item.id,
     label: item.label,

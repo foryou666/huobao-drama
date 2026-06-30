@@ -106,19 +106,25 @@ function onPreviewVideoClick(event) {
 }
 .prod-video-cover-compact {
   aspect-ratio: auto;
-  height: 310px;
+  min-height: 310px;
+  height: auto;
+  overflow: visible;
 }
 .prod-video-cover-portrait.prod-video-cover-compact {
-  height: 310px;
+  min-height: 310px;
+  height: auto;
 }
 .prod-video-cover-player-wrap {
   position: relative;
   width: 100%;
+  min-height: 310px;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: zoom-in;
+  padding-bottom: 40px;
+  box-sizing: border-box;
 }
 .prod-video-cover-player-wrap :deep(video::-webkit-media-controls-enclosure) {
   cursor: default;

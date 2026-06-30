@@ -17,7 +17,7 @@ import { isImageStaticPath } from './thumbnail.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
 import { now } from './response.js'
 import { db, schema } from '../db/index.js'
-import { ossKeyPrefix, projectAssetObjectKey, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
+import { ossKeyPrefix, projectAssetObjectKey, referenceUploadObjectKey, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
 
 let client: OSS | null = null
 
@@ -123,6 +123,45 @@ export function lookupOssObjectKey(localPath: string): string | null {
   if (scene?.ossObjectKey) return scene.ossObjectKey
 
   return null
+}
+
+/** 按 static 逻辑路径列出可能存在的 OSS objectKey（线上无本地文件时依次尝试） */
+export function resolveOssObjectKeyCandidates(localPath: string): string[] {
+  const normalized = String(localPath || '').trim().replace(/^\/+/, '')
+  if (!normalized.startsWith('static/')) return []
+
+  const keys: string[] = []
+  const seen = new Set<string>()
+  const push = (key: string | null | undefined) => {
+    const k = String(key || '').trim()
+    if (!k || seen.has(k)) return
+    seen.add(k)
+    keys.push(k)
+  }
+
+  push(lookupOssObjectKey(normalized))
+
+  const [vg] = db.select({ dramaId: schema.videoGenerations.dramaId })
+    .from(schema.videoGenerations)
+    .where(eq(schema.videoGenerations.localPath, normalized))
+    .all()
+  if (vg?.dramaId) push(projectAssetObjectKey(vg.dramaId, normalized))
+
+  const [ig] = db.select({ dramaId: schema.imageGenerations.dramaId })
+    .from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.localPath, normalized))
+    .all()
+  if (ig?.dramaId) push(projectAssetObjectKey(ig.dramaId, normalized))
+
+  push(resolveProjectObjectKeyForStaticPath(normalized))
+
+  if (normalized.startsWith('static/uploads/')) {
+    push(referenceUploadObjectKey(normalized))
+  }
+
+  push(buildFallbackObjectKey(normalized))
+
+  return keys
 }
 
 function applyPublicBase(signedUrl: string): string {
@@ -257,4 +296,9 @@ export async function resolveMediaUrlForExternalApi(
   }
 
   return null
+}
+
+export async function getOssReadStream(objectKey: string) {
+  const result = await getClient().getStream(objectKey)
+  return result.stream
 }

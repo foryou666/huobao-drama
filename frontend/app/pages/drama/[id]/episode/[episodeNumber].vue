@@ -2991,7 +2991,9 @@ async function downloadStoryboardVideo(sb, index = null) {
   if (!raw || videoDownloadShotId.value != null) return
   videoDownloadShotId.value = sb.id
   try {
-    await downloadMediaFile(raw, storyboardVideoDownloadName(sb, index))
+    await downloadMediaFile(raw, storyboardVideoDownloadName(sb, index), {
+      item: { local_path: sb?.local_path || sb?.localPath, video_url: raw },
+    })
     toast.success('开始下载')
   } catch (e) {
     toast.error(e?.message || '下载失败')
@@ -3009,7 +3011,7 @@ async function downloadCurrentVideo() {
       dramaTitle: drama.value?.title,
       episodeNumber: episodeNumber.value,
       title: videoViewer.value.title,
-    }))
+    }), { item: { local_path: raw } })
     toast.success('开始下载')
   } catch (e) {
     toast.error(e?.message || '下载失败')

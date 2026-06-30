@@ -1,0 +1,21 @@
+[Unit]
+Description=Hongguo Drama (红果短剧)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hongguoduanju/backend
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=5679
+Environment=LOCAL_MEDIA_PREFER_DAYS=0
+EnvironmentFile=-/opt/hongguoduanju/backend/.env
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hongguoduanju
+
+[Install]
+WantedBy=multi-user.target

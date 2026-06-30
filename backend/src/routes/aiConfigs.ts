@@ -19,6 +19,7 @@ import {
 import {
   getChengmengVideoModelOptions,
   listChengmengModelOptionsForApi,
+  syncChengmengModelCreditPricing,
 } from '../utils/chengmeng-video-options.js'
 
 const app = new Hono()
@@ -255,6 +256,7 @@ app.get('/chengmeng-config', async (c) => {
 
   try {
     const remoteModels = await getChengmengVideoModelOptions({ baseUrl, apiKey }, { refresh: true })
+    syncChengmengModelCreditPricing(remoteModels)
     const models = listChengmengModelOptionsForApi(remoteModels, null)
     const modelIds = models.map(item => item.model_id)
 

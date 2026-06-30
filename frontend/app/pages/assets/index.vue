@@ -296,7 +296,7 @@
 <script setup>
 import { dramaAPI, assetAPI, characterAPI } from '~/composables/useApi'
 import { ASSET_CATEGORIES, assetCategoryLabel } from '~/utils/asset-categories.js'
-import { mediaDisplayUrl, normalizeMediaPath } from '~/utils/media-url.js'
+import { mediaDisplayUrl, normalizeMediaPath, prefetchMediaUrls, collectMediaPrefetchPaths } from '~/utils/media-url.js'
 import GridMediaImage from '~/components/GridMediaImage.vue'
 import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
 import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
@@ -647,6 +647,14 @@ async function loadAssets() {
       drama_id: dramaId || undefined,
       q: keyword.value.trim() || undefined,
     }) || []
+    const mediaPaths = assets.value.flatMap(item => collectMediaPrefetchPaths(
+      item.url,
+      item.local_path,
+      item.localPath,
+      item.thumbnail_url,
+      item.thumbnailUrl,
+    ))
+    if (mediaPaths.length) await prefetchMediaUrls(mediaPaths)
     resetVisibleCount()
   } catch (e) {
     toast.error(e?.message || '加载资产失败')

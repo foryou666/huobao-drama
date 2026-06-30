@@ -60,6 +60,8 @@ export const JIMENG_REF_LIMITS = {
 } as const
 
 export const JIMENG_OMNI_MAX_TOTAL_REFS = 12
+export const JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS = 15
+export const JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS = 15.4
 
 export const JIMENG_DRAFT_VERSION_OMNI = '3.3.9'
 

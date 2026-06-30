@@ -219,10 +219,60 @@ select.input { appearance: none; cursor: pointer; background-image: url("data:im
 .card-active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 
 /* === Scrollbar === */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Studio 列表区：中间 feed 滚动，底部 composer 固定占位 */
+.studio-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.studio-feed {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 资产库等普通页面：layout 不再 overflow:hidden，由此处负责滚动 */
+.page {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 视频详情弹层：避免 aspect-ratio + overflow:hidden 裁切原生控制条 */
+.studio-detail .studio-detail-media {
+  aspect-ratio: unset !important;
+  overflow: visible;
+  max-height: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  padding-bottom: 4px;
+}
+.studio-detail .studio-detail-player {
+  width: 100%;
+  max-width: 100%;
+  max-height: min(72vh, 820px);
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
 
 /* === Animations === */
 @keyframes spin { to { transform: rotate(360deg); } }

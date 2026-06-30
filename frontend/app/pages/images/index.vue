@@ -401,7 +401,7 @@ async function downloadItem(item) {
   const raw = playableUrl(item)
   if (!raw) return
   try {
-    await downloadMediaFile(raw, imageDownloadName(item).replace(/\.mp4$/i, '.png'))
+    await downloadMediaFile(raw, imageDownloadName(item).replace(/\.mp4$/i, '.png'), { item })
     toast.success('开始下载')
   } catch (e) {
     toast.error(e?.message || '下载失败')

@@ -71,6 +71,7 @@
         <div
           class="composer-input-wrap"
           :class="{ 'is-prompt-expanded': isPromptComposerExpanded }"
+          @paste="onPaste"
         >
           <div
             v-if="showRefStrip"
@@ -124,13 +125,31 @@
               </button>
               <span class="composer-ref-card-tag">{{ item.tagLabel }}</span>
             </div>
+            <div
+              v-for="item in pendingUploads"
+              :key="item.id"
+              class="composer-ref-card composer-ref-card-pending"
+              aria-busy="true"
+            >
+              <div class="composer-ref-card-thumb composer-ref-card-thumb-pending">
+                <img v-if="item.preview" :src="item.preview" alt="" class="composer-ref-pending-preview" />
+                <span class="composer-ref-upload-spinner" aria-hidden="true" />
+              </div>
+              <span class="composer-ref-card-tag">上传中</span>
+            </div>
             <label
-              v-if="uploadedRefs.length < maxImages"
+              v-if="uploadedRefs.length + pendingUploads.length < maxImages"
               class="composer-ref-add-card"
-              title="上传参考图"
+              :title="videoRefUploadEnabled ? '上传参考图或视频' : '上传参考图'"
               @click.stop
             >
-              <input type="file" accept="image/*" multiple hidden @change="onUpload" />
+              <input
+                type="file"
+                :accept="refContentAccept"
+                multiple
+                hidden
+                @change="onRefContentUpload"
+              />
               <span class="composer-ref-add-icon">+</span>
               <span class="composer-ref-add-label">参考内容</span>
             </label>
@@ -139,7 +158,7 @@
           </div>
 
           <div
-            v-if="videoRefUploadEnabled && uploadedVideoRefs.length"
+            v-if="videoRefUploadEnabled && (uploadedVideoRefs.length || pendingVideoUploads > 0)"
             class="composer-video-ref-row"
           >
             <div
@@ -157,6 +176,15 @@
               >
                 ×
               </button>
+            </div>
+            <div
+              v-for="n in pendingVideoUploads"
+              :key="`pending-video-${n}`"
+              class="composer-video-ref-chip composer-video-ref-chip-pending"
+              aria-busy="true"
+            >
+              <span class="composer-ref-upload-spinner composer-video-ref-spinner" aria-hidden="true" />
+              <span class="composer-video-ref-label">上传中…</span>
             </div>
           </div>
 
@@ -343,7 +371,7 @@
             >
               <input
                 type="file"
-                accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm"
+                accept="video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v"
                 hidden
                 @change="onVideoUpload"
               />
@@ -448,6 +476,9 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { toast } from 'vue-sonner'
 import { dramaAPI, uploadAPI, assetAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
+import { handlePasteImageUpload } from '~/utils/clipboard-image.js'
+import { startReferenceImageUpload } from '~/utils/reference-image-upload.js'
+import { isImageUploadFile, isVideoUploadFile, startReferenceVideoUpload } from '~/utils/reference-video-upload.js'
 import {
   bindCharacter,
   bindScene,
@@ -457,6 +488,7 @@ import {
   buildMentionOptions,
   buildStudioContentRefs,
   buildStudioRefStripItems,
+  buildVideoMentionItems,
   canUnlinkStudioRef,
   collectPreservedMediaLabels,
   createStudioBindingState,
@@ -466,6 +498,7 @@ import {
   nextPromptImageIndex,
   removePromptImageLabel,
   replaceMentionWithImageLabel,
+  replaceMentionWithVideoRef,
   restoreStudioBindingsFromVideoItem,
   sceneDisplayLabel,
   toggleCharacterBinding,
@@ -476,6 +509,11 @@ import {
 } from '~/utils/studio-video-refs.js'
 import { parseVoiceRefs, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
 import { formatRefLimitsHint, JIMENG_REF_LIMITS, TRAINING_REF_LIMITS, CHENGMENT_REF_LIMITS } from '~/constants/video-channels.js'
+import {
+  clearStudioVideoDraft,
+  loadStudioVideoDraft,
+  saveStudioVideoDraft,
+} from '~/utils/studio-video-draft.js'
 import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
 
@@ -527,6 +565,8 @@ const props = defineProps({
   rememberDramaId: { type: Boolean, default: true },
   /** localStorage 作用域键（区分视频/官方等页面） */
   dramaPreferenceScope: { type: String, default: 'video' },
+  /** 刷新后恢复底部输入框草稿（提示词、参考图、选项等） */
+  persistDraft: { type: Boolean, default: true },
   /** 是否显示参考图/首尾帧切换（橙盟通道不支持首尾帧） */
   showRefModeToggle: { type: Boolean, default: true },
   /** 是否显示音色选择（Grok 不支持音色） */
@@ -564,6 +604,11 @@ const isChengmengStudio = computed(() =>
 const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value || props.jimengMode)
 const videoRefLabelKind = computed(() => (isChengmengStudio.value ? 'material' : 'video'))
 const maxVideoRefs = computed(() => (videoRefUploadEnabled.value ? MAX_VIDEO_REFS : 0))
+const refContentAccept = computed(() => (
+  videoRefUploadEnabled.value
+    ? 'image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v'
+    : 'image/*'
+))
 const defaultAspectRatios = ['9:16', '16:9']
 const grokAspectRatios = ['2:3', '3:2', '1:1']
 const jimengAspectRatios = ['16:9', '9:16']
@@ -573,6 +618,8 @@ const durations = [10, 15]
 
 const prompt = ref('')
 const uploadedRefs = ref([])
+const pendingUploads = ref([])
+const pendingVideoUploads = ref(0)
 const uploadedVideoRefs = ref([])
 const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
@@ -788,6 +835,8 @@ const refStackExpanded = ref(false)
 const refDragIndex = ref(-1)
 const refDropIndex = ref(-1)
 const promptFocused = ref(false)
+const draftReady = ref(false)
+let persistDraftTimer = null
 
 const dramaLinked = computed(() => !!dramaId.value)
 
@@ -830,23 +879,149 @@ const visualRefItems = computed(() =>
 )
 
 const showRefStrip = computed(() =>
-  dramaLinked.value || visualRefItems.value.length > 0 || (videoRefUploadEnabled.value && uploadedVideoRefs.value.length > 0),
+  dramaLinked.value
+  || visualRefItems.value.length > 0
+  || pendingUploads.value.length > 0
+  || pendingVideoUploads.value > 0
+  || (videoRefUploadEnabled.value && uploadedVideoRefs.value.length > 0),
 )
 
 const canDragRefStrip = computed(() => visualRefItems.value.length > 1)
 
-const mentionableRefItems = computed(() =>
-  visualRefItems.value.filter(item => item.path && !item.missing),
-)
+const mentionableRefItems = computed(() => {
+  const images = visualRefItems.value.filter(item => item.path && !item.missing)
+  if (!videoRefUploadEnabled.value) return images
+  return [
+    ...images,
+    ...buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value }),
+  ]
+})
 
 const mentionOptions = computed(() => buildMentionOptions(
-  mentionableRefItems.value,
+  visualRefItems.value.filter(item => item.path && !item.missing),
   mentionQuery.value,
+  videoRefUploadEnabled.value
+    ? buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value })
+    : [],
 ))
 
 function persistDramaPreference(id = dramaId.value) {
   if (!props.rememberDramaId) return
   setLastStudioDramaId(props.dramaPreferenceScope, id)
+}
+
+function collectDraftSnapshot() {
+  return {
+    dramaId: dramaId.value || '',
+    prompt: prompt.value,
+    aspectRatio: aspectRatio.value,
+    duration: duration.value,
+    refMode: refMode.value,
+    fixedModel: props.fixedModel || '',
+    binding: {
+      character_ids: [...(binding.character_ids || [])],
+      character_image_refs: { ...(binding.character_image_refs || {}) },
+      scene_ids: [...(binding.scene_ids || [])],
+      scene_id: binding.scene_id ?? null,
+      scene_image_refs: { ...(binding.scene_image_refs || {}) },
+      prop_ids: [...(binding.prop_ids || [])],
+      prop_image_refs: { ...(binding.prop_image_refs || {}) },
+      reference_images: [...(binding.reference_images || [])],
+      voice_refs: [...(binding.voice_refs || [])],
+      ref_strip_order: [...(binding.ref_strip_order || [])],
+    },
+    uploadedRefs: uploadedRefs.value.map(item => ({
+      path: item.path,
+      label: item.label || null,
+      assetId: item.assetId || null,
+    })),
+    uploadedVideoRefs: uploadedVideoRefs.value.map(item => ({
+      path: item.path,
+      label: item.label || null,
+    })),
+  }
+}
+
+function schedulePersistDraft() {
+  if (!props.persistDraft || !draftReady.value) return
+  if (persistDraftTimer) clearTimeout(persistDraftTimer)
+  persistDraftTimer = setTimeout(() => {
+    saveStudioVideoDraft(props.dramaPreferenceScope, collectDraftSnapshot())
+  }, 350)
+}
+
+async function restoreComposerDraft() {
+  if (!props.persistDraft) return
+  const draft = loadStudioVideoDraft(props.dramaPreferenceScope)
+  if (!draft) return
+
+  if (draft.dramaId) {
+    applyComposerDramaId(String(draft.dramaId))
+    if (dramaId.value) await loadProjectAssets(dramaId.value)
+  }
+
+  if (draft.aspectRatio) {
+    aspectRatio.value = normalizeLoadedAspectRatio(draft.aspectRatio)
+  }
+  if (draft.duration != null) {
+    duration.value = clampDuration(draft.duration)
+  }
+  if (draft.refMode && props.showRefModeToggle) {
+    refMode.value = draft.refMode === 'first_last' ? 'first_last' : 'reference'
+  }
+
+  if (draft.binding && typeof draft.binding === 'object') {
+    Object.assign(binding, createStudioBindingState(), draft.binding)
+  }
+
+  if (Array.isArray(draft.uploadedRefs)) {
+    uploadedRefs.value = draft.uploadedRefs
+      .map(item => {
+        const path = normalizeMediaPath(item?.path)
+        if (!path) return null
+        return {
+          path,
+          preview: gridUrl(path),
+          label: item.label || null,
+          assetId: item.assetId || null,
+          ossUrl: null,
+        }
+      })
+      .filter(Boolean)
+    syncUploadPaths()
+  }
+
+  if (Array.isArray(draft.uploadedVideoRefs)) {
+    uploadedVideoRefs.value = draft.uploadedVideoRefs
+      .map(item => {
+        const path = normalizeMediaPath(item?.path)
+        if (!path) return null
+        return { path, label: item.label || null, ossUrl: null }
+      })
+      .filter(Boolean)
+  }
+
+  if (typeof draft.prompt === 'string') {
+    prompt.value = draft.prompt
+  }
+
+  if (
+    uploadedVideoRefs.value.length
+    || uploadedRefs.value.length
+    || (binding.voice_refs?.length > 0)
+  ) {
+    syncPromptMediaHeader()
+  }
+
+  if (draft.fixedModel && draft.fixedModel !== props.fixedModel) {
+    emit('update:fixedModel', draft.fixedModel)
+  }
+
+  const paths = [
+    ...uploadedRefs.value.map(item => item.path),
+    ...uploadedVideoRefs.value.map(item => item.path),
+  ]
+  if (paths.length) prefetchMediaUrls(paths).catch(() => {})
 }
 
 function applyComposerDramaId(nextId) {
@@ -953,13 +1128,40 @@ function onPreviewKeydown(event) {
   if (event.key === 'Escape' && imagePreview.value.open) closeImagePreview()
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('keydown', onPreviewKeydown)
+  await nextTick()
+  await restoreComposerDraft()
+  draftReady.value = true
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onPreviewKeydown)
+  if (persistDraftTimer) clearTimeout(persistDraftTimer)
 })
+
+watch(
+  () => [
+    prompt.value,
+    dramaId.value,
+    aspectRatio.value,
+    duration.value,
+    refMode.value,
+    props.fixedModel,
+    binding.character_ids,
+    binding.scene_ids,
+    binding.prop_ids,
+    binding.voice_refs,
+    binding.ref_strip_order,
+    binding.character_image_refs,
+    binding.scene_image_refs,
+    binding.prop_image_refs,
+    uploadedRefs.value,
+    uploadedVideoRefs.value,
+  ],
+  () => schedulePersistDraft(),
+  { deep: true },
+)
 
 function resetBinding() {
   Object.assign(binding, createStudioBindingState())
@@ -1279,17 +1481,17 @@ function addReferencePath(path, meta = {}) {
   return true
 }
 
-async function onUpload(event) {
-  const files = Array.from(event?.target?.files || [])
-  if (!files.length) return
-  const remain = maxImages.value - uploadedRefs.value.length
-  if (remain <= 0) {
-    toast.warning(`最多上传 ${maxImages.value} 张参考图`)
-    return
-  }
-  for (const file of files.slice(0, remain)) {
-    try {
-      const res = await uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null)
+function uploadImageFiles(files, { source = 'pick' } = {}) {
+  startReferenceImageUpload({
+    files,
+    maxRemain: maxImages.value - uploadedRefs.value.length - pendingUploads.value.length,
+    pendingUploadsRef: pendingUploads,
+    feedback: {
+      source,
+      limitMessage: `最多上传 ${maxImages.value} 张参考图`,
+    },
+    uploadOne: (file) => uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null),
+    onSuccess: async ({ file, res }) => {
       const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
       if (!path) throw new Error('上传失败')
       const ossUrl = res?.oss_url || res?.ossUrl || null
@@ -1298,14 +1500,18 @@ async function onUpload(event) {
       addReferencePath(path, { ossUrl, label, assetId })
       pushSessionReferenceAsset({ path, label, assetId })
       if (!ossUrl) await prefetchMediaUrls([path])
-      if (assetId) toast.success('已上传并入库参考图')
-      else toast.warning('图片已添加，但未入库（请重启后端后重试上传）')
-    } catch (err) {
-      toast.error(err?.message || '上传失败')
-    }
-  }
+      syncPromptImageHeader()
+    },
+  })
+}
+
+function onUpload(event) {
+  uploadImageFiles(event?.target?.files || [], { source: 'pick' })
   if (event?.target) event.target.value = ''
-  syncPromptImageHeader()
+}
+
+function onPaste(event) {
+  handlePasteImageUpload(event, uploadImageFiles)
 }
 
 function addVideoPath(path, meta = {}) {
@@ -1327,29 +1533,58 @@ function addVideoPath(path, meta = {}) {
   return true
 }
 
-async function onVideoUpload(event) {
-  const file = event?.target?.files?.[0]
-  if (!file) return
-  if (uploadedVideoRefs.value.length >= maxVideoRefs.value) {
-    toast.warning(`最多上传 ${maxVideoRefs.value} 个参考视频`)
-    if (event?.target) event.target.value = ''
-    return
+function uploadVideoFiles(files, { source = 'pick' } = {}) {
+  startReferenceVideoUpload({
+    files,
+    maxRemain: maxVideoRefs.value - uploadedVideoRefs.value.length,
+    pendingUploadsRef: pendingVideoUploads,
+    uploadOne: (file) => uploadAPI.video(file, dramaId.value ? Number(dramaId.value) : null),
+    onSuccess: async ({ file, res }) => {
+      const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
+      if (!path) throw new Error('上传失败')
+      const defaultName = videoRefLabelKind.value === 'material' ? '参考素材' : '参考视频'
+      const label = res?.name || file.name?.replace(/\.[^.]+$/, '') || `${defaultName}${uploadedVideoRefs.value.length + 1}`
+      addVideoPath(path, { label, ossUrl: res?.oss_url || res?.ossUrl || null })
+      if (!res?.oss_url && !res?.ossUrl) {
+        toast.warning('视频已添加，但未同步 OSS（生成前请配置 OSS）')
+      }
+    },
+    feedback: {
+      source,
+      limitMessage: `最多上传 ${maxVideoRefs.value} 个参考视频`,
+      invalidMessage: '请选择 MP4 / MOV / WebM 视频',
+    },
+  })
+}
+
+function onRefContentUpload(event) {
+  const files = Array.from(event?.target?.files || [])
+  if (!files.length) return
+
+  const imageFiles = files.filter(isImageUploadFile)
+  const videoFiles = files.filter(isVideoUploadFile)
+  const unknownFiles = files.filter(file => !isImageUploadFile(file) && !isVideoUploadFile(file))
+
+  if (imageFiles.length) {
+    uploadImageFiles(imageFiles, { source: 'pick' })
   }
-  try {
-    const res = await uploadAPI.video(file, dramaId.value ? Number(dramaId.value) : null)
-    const path = normalizeMediaPath(res?.path || res?.url || res?.local_path || res?.localPath)
-    if (!path) throw new Error('上传失败')
-    const defaultName = videoRefLabelKind.value === 'material' ? '参考素材' : '参考视频'
-    const label = res?.name || file.name?.replace(/\.[^.]+$/, '') || `${defaultName}${uploadedVideoRefs.value.length + 1}`
-    addVideoPath(path, { label, ossUrl: res?.oss_url || res?.ossUrl || null })
-    if (!res?.oss_url && !res?.ossUrl) {
-      toast.warning('视频已添加，但未同步 OSS（生成前请配置 OSS）')
+  if (videoFiles.length) {
+    if (videoRefUploadEnabled.value) {
+      uploadVideoFiles(videoFiles, { source: 'pick' })
     } else {
-      toast.success('参考视频已上传')
+      toast.warning('当前通道不支持参考视频')
     }
-  } catch (err) {
-    toast.error(err?.message || '视频上传失败')
   }
+  if (!imageFiles.length && !videoFiles.length && unknownFiles.length) {
+    toast.warning(videoRefUploadEnabled.value ? '请选择图片或视频文件' : '请选择图片文件')
+  }
+
+  if (event?.target) event.target.value = ''
+}
+
+function onVideoUpload(event) {
+  const files = event?.target?.files || []
+  uploadVideoFiles(files, { source: 'pick' })
   if (event?.target) event.target.value = ''
 }
 
@@ -1444,7 +1679,7 @@ function onPromptKeydown(event) {
 
 function openMentionMenu() {
   if (!mentionableRefItems.value.length) {
-    toast.warning('请先在上方参考图栏添加图片')
+    toast.warning('请先在上方添加参考图或参考视频')
     return
   }
   const el = promptEl.value
@@ -1459,19 +1694,30 @@ function openMentionMenu() {
 }
 
 function pickMention(option) {
-  if (!option.path) return
+  if (!option.path && option.type !== 'video') return
   const el = promptEl.value
   const cursor = el?.selectionEnd ?? prompt.value.length
-  const index = nextPromptImageIndex(prompt.value)
   const label = option.promptLabel || option.label
 
-  const result = replaceMentionWithImageLabel(
-    prompt.value,
-    mentionStart.value,
-    cursor,
-    index,
-    label,
-  )
+  let result
+  if (option.type === 'video' && option.videoIndex) {
+    result = replaceMentionWithVideoRef(
+      prompt.value,
+      mentionStart.value,
+      cursor,
+      option.videoIndex,
+    )
+  } else {
+    const index = nextPromptImageIndex(prompt.value)
+    result = replaceMentionWithImageLabel(
+      prompt.value,
+      mentionStart.value,
+      cursor,
+      index,
+      label,
+    )
+  }
+
   prompt.value = result.text
   mentionOpen.value = false
   nextTick(() => {
@@ -1734,9 +1980,14 @@ async function loadFromItem(item) {
 
 function clearPrompt() {
   prompt.value = ''
+  schedulePersistDraft()
 }
 
-defineExpose({ loadFromItem, clearPrompt })
+function clearDraft() {
+  clearStudioVideoDraft(props.dramaPreferenceScope)
+}
+
+defineExpose({ loadFromItem, clearPrompt, clearDraft })
 </script>
 
 <style scoped>
@@ -1932,6 +2183,43 @@ defineExpose({ loadFromItem, clearPrompt })
   pointer-events: none;
 }
 
+.composer-ref-card-pending .composer-ref-card-thumb {
+  cursor: default;
+  pointer-events: none;
+}
+
+.composer-ref-card-thumb-pending {
+  position: relative;
+}
+
+.composer-ref-pending-preview {
+  opacity: 0.55;
+  filter: saturate(0.85);
+}
+
+.composer-ref-upload-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.composer-ref-upload-spinner::after {
+  content: '';
+  width: 22px;
+  height: 22px;
+  border: 2px solid rgba(76, 125, 255, 0.25);
+  border-top-color: var(--accent, #4c7dff);
+  border-radius: 50%;
+  animation: composer-ref-spin 0.75s linear infinite;
+}
+
+@keyframes composer-ref-spin {
+  to { transform: rotate(360deg); }
+}
+
 .composer-ref-card-remove {
   position: absolute;
   top: -6px;
@@ -2050,6 +2338,16 @@ defineExpose({ loadFromItem, clearPrompt })
 .composer-video-ref-remove:hover {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+.composer-video-ref-chip-pending {
+  opacity: 0.85;
+}
+
+.composer-video-ref-spinner {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
 }
 
 .composer-input {

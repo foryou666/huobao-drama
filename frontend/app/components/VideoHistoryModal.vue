@@ -212,7 +212,10 @@ async function downloadSelected() {
   if (!item || !url || downloading.value) return
   downloading.value = true
   try {
-    await downloadMediaFile(url, buildVideoDownloadFilename({ id: item.id, title: props.storyboardTitle }))
+    await downloadMediaFile(null, buildVideoDownloadFilename({ id: item.id, title: props.storyboardTitle }), {
+      item,
+      videoGenerationId: item.id,
+    })
     toast.success('开始下载')
   } catch (e) {
     toast.error(e?.message || '下载失败')

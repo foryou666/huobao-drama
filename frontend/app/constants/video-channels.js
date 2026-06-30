@@ -1,6 +1,6 @@
 /** 各通道参考素材上限（与后端 / Composer 一致） */
 export const VIDEO_CHANNEL_REF_LIMITS = {
-  '/videos': { images: 4, audios: 3, videos: 3 },
+  '/videos': { images: 9, audios: 3, videos: 3 },
   '/videos/official': { images: 9, audios: 3, videos: 0 },
   '/videos/aistarslab': { images: 9, audios: 3, videos: 3 },
   '/videos/jimeng': { images: 9, audios: 3, videos: 3 },
@@ -12,16 +12,15 @@ export const JIMENG_REF_LIMITS = VIDEO_CHANNEL_REF_LIMITS['/videos/jimeng']
 export const TRAINING_REF_LIMITS = VIDEO_CHANNEL_REF_LIMITS['/videos/training']
 export const CHENGMENT_REF_LIMITS = VIDEO_CHANNEL_REF_LIMITS['/videos']
 
-/** 支持过人脸的通道标注 */
+/** 支持过人脸的通道标注（通道1 已改为 9 图全能参考，导航不再单独标注） */
 export const VIDEO_CHANNEL_FACE_PASS = {
-  '/videos': '过人脸(95%)',
   '/videos/aistarslab': '过人脸(95%)',
   '/videos/grok': '过人脸(95%)',
 }
 
 export function formatRefLimitsHint(limits) {
   if (!limits) return ''
-  return `${limits.images}图 ${limits.audios}音 ${limits.videos}视频`
+  return `${limits.images}图 ${limits.audios}音频 ${limits.videos}视频`
 }
 
 export function formatChannelRefHint(path) {
@@ -55,7 +54,7 @@ export const VIDEO_CHANNEL_ADMIN_GUIDE = [
     path: '/videos',
     internalName: '视频生成（原 · 橙盟 Seedance）',
     upstream: 'api.chengmeng.site',
-    features: '4 图参考、多模型（Fast / 标准版）',
+    features: '9图 3音频 3视频参考、多模型',
     pricingLabels: '「橙盟 Seedance 2.0 Fast」「橙盟 Seedance 2.0」及 API 同步的其他模型定价项',
     billing: '积分/条',
   },

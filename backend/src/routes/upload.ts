@@ -69,8 +69,9 @@ app.post('/video', async (c) => {
     || lowerName.endsWith('.mp4')
     || lowerName.endsWith('.mov')
     || lowerName.endsWith('.webm')
+    || lowerName.endsWith('.m4v')
   if (!isVideo) {
-    return badRequest(c, '仅支持 MP4 / MOV / WebM 视频')
+    return badRequest(c, '仅支持 MP4 / MOV / WebM / M4V 视频')
   }
 
   const dramaIdRaw = body['drama_id']
