@@ -85,7 +85,7 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     return { method: 'POST', url: url.toString(), headers: geminiHeaders(apiKey, true), body: {} }
   }
 
-  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'geeknow') {
+  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'geeknow' || p === 'qilingze') {
     return {
       method: 'GET',
       url: joinProviderUrl(baseUrl, '/v1', '/models'),

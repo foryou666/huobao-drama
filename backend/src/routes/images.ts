@@ -79,12 +79,22 @@ app.post('/', async (c) => {
       ? body.reference_images.map(String).filter(Boolean)
       : undefined
 
+    let model: string | undefined
+    try {
+      model = resolveImageModel(body, imageConfig)
+    } catch (err: any) {
+      return badRequest(c, err.message || '无效的图片模型')
+    }
+
     if (referenceImages?.length) {
-      const maxRefs = getMaxImageReferenceCount(imageConfig)
+      const refConfig = imageConfig
+        ? { provider: imageConfig.provider, model: model || imageConfig.model }
+        : null
+      const maxRefs = getMaxImageReferenceCount(refConfig)
       if (referenceImages.length > maxRefs) {
         return badRequest(c, `参考图最多 ${maxRefs} 张`)
       }
-      if (imageConfig && !supportsImageReference(imageConfig.provider, imageConfig.model)) {
+      if (imageConfig && !supportsImageReference(imageConfig.provider, model)) {
         return badRequest(c, imageReferenceSupportHint())
       }
     }
@@ -107,7 +117,7 @@ app.post('/', async (c) => {
       sceneId: body.scene_id,
       characterId: body.character_id,
       prompt: body.prompt,
-      model: body.model,
+      model,
       size,
       referenceImages,
       frameType: body.frame_type,
@@ -151,16 +161,41 @@ app.post('/', async (c) => {
   }
 })
 
+const STUDIO_IMAGE_MODELS = ['gpt-image-2', 'nano-banana-2'] as const
+
+function resolveStudioModels(config: ReturnType<typeof getActiveConfig>) {
+  const configured = config?.models?.length
+    ? config.models
+    : (config?.model ? [config.model] : [])
+  const allowed = STUDIO_IMAGE_MODELS.filter(m => configured.includes(m))
+  return allowed.length ? allowed : [...STUDIO_IMAGE_MODELS]
+}
+
+function resolveImageModel(body: Record<string, unknown>, config: ReturnType<typeof getActiveConfig>) {
+  const requested = String(body.model || '').trim()
+  if (!requested) return config?.model || STUDIO_IMAGE_MODELS[0]
+  const configured = config?.models?.length
+    ? config.models
+    : (config?.model ? [config.model] : [...STUDIO_IMAGE_MODELS])
+  if (!configured.includes(requested)) {
+    throw new Error(`模型 ${requested} 不在当前图片服务配置中`)
+  }
+  return requested
+}
+
 // GET /images/studio/capabilities — 工作台能力（参考图上限等）
 app.get('/studio/capabilities', async (c) => {
   const config = getActiveConfig('image')
+  const studioModels = resolveStudioModels(config)
+  const defaultModel = studioModels[0] || STUDIO_IMAGE_MODELS[0]
   const maxReferenceImages = getMaxImageReferenceCount(config)
   return success(c, {
     max_reference_images: maxReferenceImages,
-    supports_reference: config ? supportsImageReference(config.provider, config.model) : false,
+    supports_reference: config ? supportsImageReference(config.provider, defaultModel) : false,
     reference_hint: imageReferenceSupportHint(),
     provider: config?.provider || null,
-    model: config?.model || null,
+    model: defaultModel,
+    models: studioModels,
     aspect_ratios: ['9:16', '16:9'],
   })
 })

@@ -166,6 +166,19 @@
               </button>
             </div>
 
+            <div v-if="modelOptions.length" class="composer-pills composer-pills-models">
+              <button
+                v-for="model in modelOptions"
+                :key="model"
+                type="button"
+                class="composer-pill"
+                :class="{ active: selectedModel === model }"
+                @click="selectModel(model)"
+              >
+                {{ modelLabel(model) }}
+              </button>
+            </div>
+
             <label class="composer-upload-btn">
               <input type="file" accept="image/*" multiple hidden @change="onUpload" />
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -274,6 +287,12 @@ import {
   unbindScene,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
+import {
+  resolveStudioImageModel,
+  setLastStudioImageModel,
+  STUDIO_IMAGE_MODEL_DEFAULT,
+  STUDIO_IMAGE_MODEL_OPTIONS,
+} from '~/utils/studio-image-model-preference.js'
 
 const props = defineProps({
   generating: { type: Boolean, default: false },
@@ -286,6 +305,26 @@ const emit = defineEmits(['generate'])
 const maxImages = ref(6)
 const supportsReference = ref(true)
 const aspectRatios = ['9:16', '16:9']
+const modelOptions = ref([...STUDIO_IMAGE_MODEL_OPTIONS])
+const selectedModel = ref(STUDIO_IMAGE_MODEL_DEFAULT)
+
+const MODEL_LABELS = {
+  'gpt-image-2': 'GPT Image 2',
+  'nano-banana-2': 'Nano Banana 2',
+}
+
+function modelLabel(model) {
+  return MODEL_LABELS[model] || model
+}
+
+function selectModel(model) {
+  selectedModel.value = model
+  setLastStudioImageModel(model)
+}
+
+function modelSupportsReference(model) {
+  return /gpt-image|chatgpt-image/i.test(String(model || ''))
+}
 
 const prompt = ref('')
 const uploadedRefs = ref([])
@@ -337,6 +376,7 @@ const mentionableRefItems = computed(() =>
 const mentionOptions = computed(() => buildMentionOptions(mentionableRefItems.value, mentionQuery.value))
 
 const maxImagesHint = computed(() => {
+  if (!modelSupportsReference(selectedModel.value)) return '当前模型不支持参考图'
   if (!supportsReference.value) return '当前模型不支持参考图'
   return `最多 ${maxImages.value} 张参考图`
 })
@@ -388,8 +428,13 @@ async function loadCapabilities() {
     const caps = await imageAPI.capabilities()
     if (caps?.max_reference_images) maxImages.value = Number(caps.max_reference_images)
     supportsReference.value = caps?.supports_reference !== false
+    const models = Array.isArray(caps?.models) && caps.models.length
+      ? caps.models.map(String)
+      : [...STUDIO_IMAGE_MODEL_OPTIONS]
+    modelOptions.value = models
+    selectedModel.value = resolveStudioImageModel(models)
   } catch {
-    // keep defaults
+    selectedModel.value = resolveStudioImageModel(modelOptions.value)
   }
 }
 
@@ -768,6 +813,7 @@ function submit() {
   const payload = {
     aspect_ratio: aspectRatio.value,
     image_type: 'studio',
+    model: selectedModel.value,
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
 
@@ -808,6 +854,11 @@ function submit() {
 function loadFromItem(item) {
   prompt.value = String(item?.prompt || '')
   aspectRatio.value = item?.aspect_ratio || item?.aspectRatio || '9:16'
+  const itemModel = String(item?.model || '').trim()
+  if (itemModel && modelOptions.value.includes(itemModel)) {
+    selectedModel.value = itemModel
+    setLastStudioImageModel(itemModel)
+  }
   if (item?.drama_id) {
     dramaId.value = String(item.drama_id)
     loadProjectAssets(dramaId.value)
@@ -1108,7 +1159,11 @@ defineExpose({ loadFromItem, clearPrompt })
   color: var(--text-1);
 }
 
-.composer-pills { display: inline-flex; gap: 4px; }
+.composer-pills { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+.composer-pills-models {
+  max-width: 100%;
+}
 
 .composer-pill {
   padding: 5px 10px;

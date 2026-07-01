@@ -25,9 +25,10 @@ export const imageAdapters: Record<string, ImageProviderAdapter> = {
   gemini: new GeminiImageAdapter(),
   volcengine: new VolcEngineImageAdapter(),
   ali: new AliImageAdapter(),
-  // Chatfire / GeekNow(NewAPI) — OpenAI 兼容 /v1/images/generations
+  // Chatfire / GeekNow / 启灵泽(NewAPI) — OpenAI 兼容 /v1/images/generations
   chatfire: new OpenAIImageAdapter(),
   geeknow: new OpenAIImageAdapter(),
+  qilingze: new OpenAIImageAdapter(),
 }
 
 // 视频 Adapter 注册表

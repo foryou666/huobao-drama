@@ -1217,7 +1217,7 @@ async function clearJimengSession() {
 }
 
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
-const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
+const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'qilingze', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
 const providerLabels = {
   ali: '阿里百炼（北京）',
   'ali-intl': '阿里百炼（新加坡）',
@@ -1226,6 +1226,7 @@ const providerLabels = {
   chengmeng: '橙盟 Seedance 2.0 9图过人脸',
   aistarslab: 'Seedance 2.0 VIP',
   geeknow: 'GeekNow (NewAPI)',
+  qilingze: '启灵泽 (NewAPI)',
   gemini: 'Gemini',
   minimax: 'MiniMax',
   openai: 'OpenAI',
@@ -1271,6 +1272,12 @@ const providerPresets = {
       baseUrl: 'https://geek.closeai.icu',
       models: ['gpt-image-2'],
       hint: 'NewAPI 网关，OpenAI 兼容；Base URL 填站点根地址（勿重复 /v1），默认模型 gpt-image-2',
+    },
+    qilingze: {
+      label: '启灵泽',
+      baseUrl: 'https://api.qilingze.com',
+      models: ['gpt-image-2', 'nano-banana-2'],
+      hint: '独立 NewAPI 上游；Base URL 填 https://api.qilingze.com（勿重复 /v1）；支持 gpt-image-2、nano-banana-2 等',
     },
     chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['doubao-seedream-4-5-251128'] },
     openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com', models: ['dall-e-3', 'gpt-image-1'] },
@@ -1338,6 +1345,7 @@ const huobaoPresetCards = [
 const endpointPrefixes = {
   chatfire: '/v1',
   geeknow: '/v1',
+  qilingze: '/v1',
   openai: '/v1',
   openrouter: '/v1',
   minimax: '/v1',
@@ -1590,6 +1598,11 @@ const modelFieldHints = {
       summary: '默认模型 gpt-image-2；多个模型用逗号分隔，第一个为默认。图片尺寸请在各剧集工作台顶部设置。',
       docLabel: 'GeekNow 控制台',
       docUrl: 'https://geek.closeai.icu/',
+    },
+    qilingze: {
+      summary: '推荐 gpt-image-2 或 nano-banana-2；多个模型用逗号分隔，第一个为默认。图片尺寸请在各剧集工作台顶部设置。',
+      docLabel: '启灵泽 API',
+      docUrl: 'https://api.qilingze.com/',
     },
     openai: {
       summary: 'OpenAI 图像模型，如 dall-e-3、gpt-image-1；逗号分隔，第一个为默认。',

@@ -44,7 +44,7 @@ function rowToAIConfig(row: typeof schema.aiServiceConfigs.$inferSelect): AIConf
 export function getTextProviderBaseUrl(config: AIConfig) {
   const provider = config.provider.toLowerCase()
 
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire' || provider === 'geeknow') {
+  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire' || provider === 'geeknow' || provider === 'qilingze') {
     return joinProviderUrl(config.baseUrl, '/v1', '')
   }
 
