@@ -18,7 +18,7 @@ import {
 } from '../services/wechat-pay.js'
 import {
   getAlipayConfig,
-  isAlipayConfigured,
+  isAlipayEnabled,
   parseAlipayNotifyBody,
   verifyAlipayNotifyParams,
 } from '../services/alipay-pay.js'
@@ -107,8 +107,8 @@ app.get('/config', (c) => {
   const rechargeAllowed = requestAllowsRecharge(c)
   return success(c, {
     wechat_enabled: rechargeAllowed && isWechatPayConfigured(),
-    alipay_enabled: rechargeAllowed && isAlipayConfigured(),
-    recharge_enabled: rechargeAllowed && (isWechatPayConfigured() || isAlipayConfigured()),
+    alipay_enabled: rechargeAllowed && isAlipayEnabled(),
+    recharge_enabled: rechargeAllowed && (isWechatPayConfigured() || isAlipayEnabled()),
     mode: wechatConfig?.mode || null,
     mch_id: wechatConfig?.mode === 'partner' ? wechatConfig?.subMchId || null : wechatConfig?.mchId || null,
     sp_mch_id: wechatConfig?.mode === 'partner' ? wechatConfig?.mchId || null : null,
@@ -163,8 +163,8 @@ app.post('/alipay/orders', async (c) => {
   if (!requestAllowsRecharge(c)) {
     return badRequest(c, '请通过官方域名 https://ai.weikuaiche.cn 使用充值功能')
   }
-  if (!isAlipayConfigured()) {
-    return badRequest(c, '支付宝尚未配置完成，请联系管理员')
+  if (!isAlipayEnabled()) {
+    return badRequest(c, '支付宝支付暂未开放')
   }
 
   const body = await c.req.json().catch(() => ({}))

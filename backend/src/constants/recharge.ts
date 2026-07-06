@@ -10,7 +10,6 @@ export interface RechargePackage {
 
 /** 充值档位：1 元 = 100 积分，无赠送 */
 export const RECHARGE_PACKAGES: RechargePackage[] = [
-  { id: 'p001', label: '0.01 元（测试）', yuan: 0.01, credits: 1 },
   { id: 'p1000', label: '1000 元', yuan: 1000, credits: 1000 * CREDITS_PER_YUAN },
   { id: 'p5000', label: '5000 元', yuan: 5000, credits: 5000 * CREDITS_PER_YUAN },
   { id: 'p10000', label: '10000 元', yuan: 10000, credits: 10000 * CREDITS_PER_YUAN },

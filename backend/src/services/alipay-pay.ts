@@ -73,6 +73,13 @@ export function isAlipayConfigured(): boolean {
   return getAlipayConfig() != null
 }
 
+/** 支付宝支付入口是否对用户开放（需配置完成且 ALIPAY_ENABLED=1） */
+export function isAlipayEnabled(): boolean {
+  if (!isAlipayConfigured()) return false
+  const flag = String(process.env.ALIPAY_ENABLED ?? '').trim().toLowerCase()
+  return flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on'
+}
+
 function formatYuanAmount(yuan: number): string {
   return yuan.toFixed(2)
 }

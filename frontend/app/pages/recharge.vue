@@ -3,7 +3,7 @@
     <div class="recharge-card card">
       <div class="recharge-head">
         <h1 class="recharge-title">积分充值</h1>
-        <p class="dim">1 元 = 100 积分 · 微信扫码 / 支付宝网页支付</p>
+        <p class="dim">{{ paySubtitle }}</p>
         <p v-if="balance != null" class="recharge-balance">当前余额：<strong>{{ balance }}</strong> 积分</p>
       </div>
 
@@ -42,7 +42,13 @@
         </div>
 
         <div v-if="!activeOrder" class="recharge-actions">
-          <button type="button" class="btn btn-primary" :disabled="!selectedId || paying" @click="createOrder">
+          <button
+            type="button"
+            class="btn pay-submit-btn"
+            :class="payMethod === 'wechat' ? 'btn-wechat' : 'btn-primary'"
+            :disabled="!selectedId || paying"
+            @click="createOrder"
+          >
             {{ paying ? '创建订单中…' : payButtonLabel }}
           </button>
           <p v-if="orderStatusText && !activeOrder" class="pay-status is-error">{{ orderStatusText }}</p>
@@ -64,8 +70,7 @@
               （到账 <strong>{{ activeOrder.credits }}</strong> 积分）
             </p>
             <div class="qr-wrap">
-              <img v-if="qrImageUrl" :src="qrImageUrl" alt="支付二维码" class="qr-image" />
-              <div v-else class="dim">二维码生成中…</div>
+              <img v-if="qrDataUrl" :src="qrDataUrl" alt="支付二维码" class="qr-image" />
             </div>
             <p class="dim pay-hint">支付完成后页面将自动刷新余额；若长时间未到账可点击下方按钮查询。</p>
           </template>
@@ -79,11 +84,17 @@
         </div>
       </template>
     </div>
+
+    <p v-if="rechargeReady && !configLoading" class="recharge-agreement">
+      支付即表示您已阅读并同意
+      <NuxtLink to="/recharge-agreement" target="_blank" rel="noopener">《积分充值与支付协议》</NuxtLink>
+    </p>
   </div>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import QRCode from 'qrcode'
 import { paymentsAPI, creditsAPI } from '~/composables/useApi'
 import { useAuth } from '~/composables/useAuth'
 import { useRechargeAccess } from '~/composables/useRechargeAccess'
@@ -103,6 +114,7 @@ const payMethod = ref('wechat')
 const paying = ref(false)
 const polling = ref(false)
 const activeOrder = ref(null)
+const qrDataUrl = ref('')
 const balance = ref(null)
 const orderStatusText = ref('')
 let pollTimer = null
@@ -117,16 +129,17 @@ const payMethods = computed(() => {
 
 const rechargeReady = computed(() => payMethods.value.length > 0)
 
+const paySubtitle = computed(() => {
+  const parts = ['1 元 = 100 积分']
+  if (wechatEnabled.value && alipayEnabled.value) parts.push('微信扫码 / 支付宝网页支付')
+  else if (wechatEnabled.value) parts.push('微信扫码支付')
+  else if (alipayEnabled.value) parts.push('支付宝网页支付')
+  return parts.join(' · ')
+})
+
 const payButtonLabel = computed(() => {
   if (payMethod.value === 'alipay') return '跳转支付宝支付'
   return '微信扫码支付'
-})
-
-const qrImageUrl = computed(() => {
-  if (activeOrder.value?.provider === 'alipay') return ''
-  const url = activeOrder.value?.code_url
-  if (!url) return ''
-  return `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(url)}`
 })
 
 const orderStatusClass = computed(() => {
@@ -158,6 +171,14 @@ async function loadConfig() {
   }
 }
 
+async function buildWechatQrDataUrl(codeUrl) {
+  return QRCode.toDataURL(String(codeUrl || '').trim(), {
+    width: 260,
+    margin: 1,
+    errorCorrectionLevel: 'M',
+  })
+}
+
 async function createOrder() {
   if (!selectedId.value) return
   paying.value = true
@@ -169,7 +190,10 @@ async function createOrder() {
       window.location.href = order.code_url
       return
     }
-    activeOrder.value = await paymentsAPI.createWechatOrder({ package_id: selectedId.value })
+    const order = await paymentsAPI.createWechatOrder({ package_id: selectedId.value })
+    if (!order?.code_url) throw new Error('未获取到支付二维码')
+    qrDataUrl.value = await buildWechatQrDataUrl(order.code_url)
+    activeOrder.value = order
     startPolling()
   } catch (err) {
     orderStatusText.value = err?.message || '创建订单失败'
@@ -234,6 +258,7 @@ function resetOrder() {
   }
   stopPolling()
   activeOrder.value = null
+  qrDataUrl.value = ''
   orderStatusText.value = ''
   if (route.query.order_id) {
     void router.replace({ path: '/recharge' })
@@ -357,6 +382,36 @@ onBeforeUnmount(() => {
 .pay-status { margin-top: 12px; }
 .pay-status.is-success { color: #66bb6a; }
 .pay-status.is-error { color: #ef5350; }
+.pay-submit-btn {
+  min-width: 160px;
+  font-weight: 600;
+}
+.btn-wechat {
+  background: #07c160;
+  border: 1px solid #07c160;
+  color: #fff;
+}
+.btn-wechat:hover:not(:disabled) {
+  background: #06ad56;
+  border-color: #06ad56;
+}
+.btn-wechat:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.recharge-agreement {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-1);
+}
+.recharge-agreement a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+.recharge-agreement a:hover {
+  text-decoration: underline;
+}
 @media (max-width: 560px) {
   .package-grid { grid-template-columns: 1fr; }
 }
