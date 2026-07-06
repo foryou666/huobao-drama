@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, created, badRequest } from '../utils/response.js'
+import { success, created, badRequest, forbidden } from '../utils/response.js'
 import { generateVideo, refreshVideoFromProvider } from '../services/video-generation.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
@@ -19,6 +19,7 @@ import { isChengmengProvider, CHENGMENG_VIDEO_MODELS, CHENGMENT_DOC_URL } from '
 import { SEEDANCE_MODELS, SEEDANCE_ARK_BASE_URL, SEEDANCE_DOC_URL } from '../constants/seedance.js'
 import { getActionCost, type ChargeContext } from '../services/credits.js'
 import { resolveActiveTeamId } from '../services/team-access.js'
+import { getTeamMemberUserIds } from '../services/team-audit.js'
 import { listVideoLedger } from '../services/video-ledger.js'
 import { toSnakeCase } from '../utils/transform.js'
 import {
@@ -81,6 +82,7 @@ import {
   resolveAistarslabCreditAction,
   isAistarslabSelectionAllowed,
   bodyHasReferenceVideo,
+  syncAistarslabModelCreditPricing,
 } from '../utils/aistarslab-video-options.js'
 import {
   applyAistarslabChannelVisibility,
@@ -535,9 +537,9 @@ app.get('/aistarslab-options', async (c) => {
 
   if (row && !isPlaceholderApiKey(row.apiKey)) {
     try {
-      remoteConfig = applyAistarslabChannelVisibility(
-        await loadAistarslabVideoConfigFromProvider(row),
-      )
+      const loaded = await loadAistarslabVideoConfigFromProvider(row)
+      syncAistarslabModelCreditPricing(loaded)
+      remoteConfig = applyAistarslabChannelVisibility(loaded)
     } catch (err: any) {
       configError = err.message
     }
@@ -663,9 +665,32 @@ app.get('/ledger', async (c) => {
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
   const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
   const mineOnlyRaw = c.req.query('mine_only')
-  const mineOnly = mineOnlyRaw == null || mineOnlyRaw === ''
-    ? true
-    : !['0', 'false', 'no'].includes(String(mineOnlyRaw).toLowerCase())
+  const userIdParam = c.req.query('user_id') ? Number(c.req.query('user_id')) : undefined
+  let filterUserId: number | undefined
+  if (userIdParam && Number.isFinite(userIdParam) && userIdParam > 0) {
+    if (userIdParam === user.id) {
+      filterUserId = userIdParam
+    } else if (user.role === 'admin') {
+      filterUserId = userIdParam
+    } else {
+      const teamId = activeTeamId
+      if (!teamId) return forbidden(c, '需要选择团队后才能查看其他成员')
+      const memberIds = getTeamMemberUserIds(teamId)
+      if (!memberIds.includes(user.id)) {
+        return forbidden(c, '无权查看团队成员视频')
+      }
+      if (!memberIds.includes(userIdParam)) {
+        return forbidden(c, '该用户不在当前团队')
+      }
+      filterUserId = userIdParam
+    }
+  }
+
+  const mineOnly = filterUserId
+    ? false
+    : mineOnlyRaw == null || mineOnlyRaw === ''
+      ? true
+      : !['0', 'false', 'no'].includes(String(mineOnlyRaw).toLowerCase())
   const provider = c.req.query('provider') || undefined
   const modelsRaw = c.req.query('models') || undefined
   const models = modelsRaw
@@ -682,6 +707,7 @@ app.get('/ledger', async (c) => {
     limit,
     offset,
     mineOnly,
+    userId: filterUserId,
     provider,
     models,
   })

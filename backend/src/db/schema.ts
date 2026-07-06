@@ -435,7 +435,27 @@ export const creditTransactions = sqliteTable('credit_transactions', {
   createdAt: text('created_at').notNull(),
 })
 
-export type CreditTransactionType = 'charge' | 'grant' | 'refund'
+export type CreditTransactionType = 'charge' | 'grant' | 'refund' | 'recharge'
+
+export const paymentOrders = sqliteTable('payment_orders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  orderNo: text('order_no').notNull().unique(),
+  userId: integer('user_id').notNull(),
+  provider: text('provider').notNull().default('wechat'),
+  packageId: text('package_id'),
+  amountYuan: integer('amount_yuan').notNull(),
+  amountFen: integer('amount_fen').notNull(),
+  credits: integer('credits').notNull(),
+  status: text('status').notNull().default('pending'),
+  codeUrl: text('code_url'),
+  wxPrepayId: text('wx_prepay_id'),
+  wxTransactionId: text('wx_transaction_id'),
+  creditTransactionId: integer('credit_transaction_id'),
+  errorMsg: text('error_msg'),
+  paidAt: text('paid_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
 
 /** static/ 本地路径 → OSS objectKey，角色/场景图在生成或上传时写入 */
 export const ossStaticMappings = sqliteTable('oss_static_mappings', {
@@ -507,4 +527,40 @@ export const assistantMessages = sqliteTable('assistant_messages', {
   attachments: text('attachments'),
   sortOrder: integer('sort_order').notNull().default(0),
   createdAt: text('created_at').notNull(),
+})
+
+export const videoRepaintJobs = sqliteTable('video_repaint_jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  title: text('title').notNull(),
+  dramaId: integer('drama_id'),
+  episodeId: integer('episode_id'),
+  userId: integer('user_id').notNull(),
+  teamId: integer('team_id'),
+  status: text('status').notNull().default('uploaded'),
+  stage: text('stage').notNull().default('upload'),
+  sourceVideoPath: text('source_video_path'),
+  sourceDuration: real('source_duration'),
+  mergedVideoPath: text('merged_video_path'),
+  analysisJson: text('analysis_json'),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  deletedAt: text('deleted_at'),
+})
+
+export const videoRepaintSegments = sqliteTable('video_repaint_segments', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  jobId: integer('job_id').notNull(),
+  segmentIndex: integer('segment_index').notNull(),
+  startSec: real('start_sec').notNull(),
+  endSec: real('end_sec').notNull(),
+  durationSec: real('duration_sec').notNull(),
+  shotIds: text('shot_ids'),
+  videoPrompt: text('video_prompt'),
+  contentRefs: text('content_refs'),
+  videoGenerationId: integer('video_generation_id'),
+  status: text('status').default('draft'),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
 })

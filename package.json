@@ -1,0 +1,10 @@
+{
+  "name": "huobao-drama",
+  "private": true,
+  "scripts": {
+    "build:frontend": "npm run generate --prefix frontend && node scripts/sync-frontend-dist.mjs",
+    "serve:user": "npm run build:frontend && npm run start --prefix backend",
+    "sync:frontend": "node scripts/sync-frontend-dist.mjs",
+    "start:backend": "npm run start --prefix backend"
+  }
+}

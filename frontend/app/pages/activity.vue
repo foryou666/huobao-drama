@@ -22,6 +22,8 @@
 
         </div>
 
+        <NuxtLink v-if="rechargeEnabled" to="/recharge" class="btn btn-primary btn-sm recharge-link">充值</NuxtLink>
+
         <label v-if="canManageTeam && !isAdmin" class="toggle-all">
 
           <input v-model="showTeam" type="checkbox" @change="onScopeChange" />
@@ -63,6 +65,10 @@
       </div>
 
     </div>
+
+
+
+    <p v-if="rechargeSuccess" class="recharge-success-banner">充值成功，积分已到账，可在下方积分明细中查看。</p>
 
 
 
@@ -388,11 +394,16 @@ import { activityAPI, creditsAPI, teamsAPI, ACTION_LABELS } from '~/composables/
 
 const { isAdmin, refreshBalance } = useAuth()
 
+const route = useRoute()
+const router = useRouter()
+
 const { canManageTeam, activeTeamId } = useTeam()
+const { rechargeEnabled } = useRechargeAccess()
 
 const loading = ref(false)
 
 const tab = ref('activity')
+const rechargeSuccess = ref(false)
 
 const activityItems = ref([])
 
@@ -666,6 +677,18 @@ watch(tab, (value) => {
 
 onMounted(async () => {
 
+  const qTab = String(route.query.tab || '')
+  if (qTab === 'credits' || qTab === 'stats' || qTab === 'activity') {
+    tab.value = qTab
+  }
+  if (route.query.recharge === 'success') {
+    rechargeSuccess.value = true
+    const nextQuery = { ...route.query }
+    delete nextQuery.recharge
+    void router.replace({ query: nextQuery })
+    setTimeout(() => { rechargeSuccess.value = false }, 5000)
+  }
+
   await loadTeamMembers()
 
   await reload()
@@ -702,6 +725,8 @@ onMounted(async () => {
 }
 
 .head-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.recharge-link { text-decoration: none; white-space: nowrap; }
 
 .page-title { font-family: var(--font-display); font-size: 24px; margin: 0 0 6px; }
 
@@ -764,6 +789,16 @@ onMounted(async () => {
 }
 
 .record-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+
+.recharge-success-banner {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(102, 187, 106, 0.12);
+  border: 1px solid rgba(102, 187, 106, 0.35);
+  color: #81c784;
+  font-size: 14px;
+}
 
 .record-tab {
 

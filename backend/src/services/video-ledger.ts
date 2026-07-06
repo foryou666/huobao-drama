@@ -77,6 +77,8 @@ export interface VideoLedgerQuery {
   limit?: number
   offset?: number
   mineOnly?: boolean
+  /** 指定成员（与 mineOnly 互斥，由路由校验团队权限） */
+  userId?: number
   provider?: string
   models?: string[]
 }
@@ -175,9 +177,10 @@ function buildLedgerSqlConditions(query: VideoLedgerQuery): SQL[] {
     const kw = `%${query.keyword.trim().replace(/[%_]/g, '')}%`
     conditions.push(sql`lower(${schema.videoGenerations.prompt}) like lower(${kw})`)
   }
-  if (query.mineOnly) {
+  const targetUserId = query.userId ?? (query.mineOnly ? query.user.id : null)
+  if (targetUserId) {
     conditions.push(or(
-      eq(schema.videoGenerations.userId, query.user.id),
+      eq(schema.videoGenerations.userId, targetUserId),
       isNull(schema.videoGenerations.userId),
     )!)
   }
@@ -196,11 +199,12 @@ export function listVideoLedger(query: VideoLedgerQuery) {
     .all()
     .filter(r => !r.dramaId || accessibleDramaIds.has(r.dramaId))
 
-  if (query.mineOnly && rows.some(r => r.userId == null)) {
+  const targetUserId = query.userId ?? (query.mineOnly ? query.user.id : null)
+  if (targetUserId && rows.some(r => r.userId == null)) {
     const ownerMaps = getVideoOwnerMaps()
     rows = rows.filter(r => {
-      if (r.userId) return r.userId === query.user.id
-      return resolveVideoOwnerUserId(r, ownerMaps) === query.user.id
+      if (r.userId) return r.userId === targetUserId
+      return resolveVideoOwnerUserId(r, ownerMaps) === targetUserId
     })
   }
 

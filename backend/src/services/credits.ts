@@ -1,6 +1,6 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction } from '../constants/credit-actions.js'
+import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction, isVideoCreditAction, applyMinUserVideoCreditCost } from '../constants/credit-actions.js'
 import { AISTARSLAB_DEFAULT_CREDIT_COST } from '../constants/aistarslab.js'
 import { now } from '../utils/response.js'
 import { getAppMeta, setAppMeta } from '../db/index.js'
@@ -11,6 +11,22 @@ const JIMENG_PRICING_LABEL_KEY = 'credit_pricing_jimeng_label_v1'
 const JIMENG_PER_MODEL_PRICING_KEY = 'credit_pricing_jimeng_per_model_v1'
 const AISTARSLAB_PRICING_FLAT_FIX_KEY = 'credit_pricing_aistarslab_flat_fix_v1'
 const AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY = 'credit_pricing_aistarslab_ref_video_v1'
+const MIN_VIDEO_CREDIT_FLOOR_KEY = 'credit_pricing_min_video_750_v1'
+
+/** 将库内已有视频定价项抬升到最低 750（一次性迁移 + 后续由 updateCreditPricing 保底） */
+export function clampVideoCreditPricingToMinimum() {
+  if (getAppMeta(MIN_VIDEO_CREDIT_FLOOR_KEY)) return
+  const rows = db.select().from(schema.creditPricing).all()
+  for (const row of rows) {
+    if (!isVideoCreditAction(row.action)) continue
+    if ((row.cost ?? 0) <= 0) continue
+    const next = applyMinUserVideoCreditCost(row.cost ?? 0, row.action)
+    if (next !== row.cost) {
+      updateCreditPricing(row.action, next, row.label ?? undefined, row.description ?? undefined)
+    }
+  }
+  setAppMeta(MIN_VIDEO_CREDIT_FLOOR_KEY, now())
+}
 
 /** 从旧即梦统一定价项复制单价到分项模型定价 */
 function migrateJimengPerModelPricing() {
@@ -176,7 +192,8 @@ export function applyCreditPricingDefaultsIfNeeded() {
 export function getActionCost(action: string, quantity = 1): number {
   const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
   const unit = row?.cost ?? DEFAULT_CREDIT_PRICING.find(item => item.action === action)?.defaultCost ?? 0
-  return Math.max(0, unit * Math.max(1, quantity))
+  const total = Math.max(0, unit * Math.max(1, quantity))
+  return applyMinUserVideoCreditCost(total, action)
 }
 
 export function getUserBalance(userId: number): number {
@@ -200,7 +217,7 @@ export function listCreditPricing() {
 }
 
 export function updateCreditPricing(action: string, cost: number, label?: string, description?: string) {
-  const normalized = Math.max(0, Math.floor(cost))
+  const normalized = applyMinUserVideoCreditCost(Math.max(0, Math.floor(cost)), action)
   const ts = now()
   const [existing] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
   const fallback = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
@@ -224,9 +241,10 @@ export function updateCreditPricing(action: string, cost: number, label?: string
 
 export function chargeCredits(userId: number, action: string, context: ChargeContext = {}): ChargeResult {
   const quantity = Math.max(1, context.quantity ?? 1)
-  const cost = context.flatCost != null && Number.isFinite(context.flatCost)
+  let cost = context.flatCost != null && Number.isFinite(context.flatCost)
     ? Math.max(0, Math.floor(context.flatCost))
     : getActionCost(action, quantity)
+  cost = applyMinUserVideoCreditCost(cost, action)
   if (cost <= 0) {
     return { ok: true, cost: 0, balance: getUserBalance(userId) }
   }
@@ -397,6 +415,71 @@ export function grantCredits(
       action: 'admin.grant',
       summary: summary || `管理员充值 ${delta} 积分`,
       metadata: JSON.stringify({ operator_id: operatorId }),
+      createdAt: ts,
+    }).run()
+
+    return { ok: true, cost: -delta, balance, transactionId: Number(res.lastInsertRowid) }
+  })
+}
+
+export function grantCreditsFromPayment(
+  userId: number,
+  amount: number,
+  meta: {
+    orderNo: string
+    provider: string
+    amountYuan: number
+    transactionId?: string | null
+    source?: string
+  },
+): ChargeResult {
+  const delta = Math.floor(amount)
+  if (delta <= 0) return { ok: false, cost: 0, balance: getUserBalance(userId), message: '充值积分必须大于 0' }
+
+  const existing = db.select().from(schema.creditTransactions)
+    .where(eq(schema.creditTransactions.type, 'recharge'))
+    .all()
+    .find(row => {
+      try {
+        const parsed = row.metadata ? JSON.parse(row.metadata) : null
+        return parsed?.order_no === meta.orderNo
+      } catch {
+        return false
+      }
+    })
+  if (existing) {
+    return { ok: true, cost: -delta, balance: existing.balanceAfter, transactionId: existing.id }
+  }
+
+  return db.transaction(() => {
+    const [user] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
+    if (!user) return { ok: false, cost: 0, balance: 0, message: '用户不存在' }
+
+    const balance = (user.creditsBalance ?? 0) + delta
+    const ts = now()
+    db.update(schema.users)
+      .set({ creditsBalance: balance, updatedAt: ts })
+      .where(eq(schema.users.id, userId))
+      .run()
+
+    const action = meta.provider === 'alipay' ? 'payment.alipay' : 'payment.wechat'
+    const providerLabel = meta.provider === 'alipay' ? '支付宝' : '微信'
+    const displayYuan = Number.isInteger(meta.amountYuan) ? String(meta.amountYuan) : meta.amountYuan.toFixed(2)
+
+    const res = db.insert(schema.creditTransactions).values({
+      userId,
+      amount: delta,
+      balanceAfter: balance,
+      type: 'recharge',
+      action,
+      summary: `${providerLabel}支付充值 ${displayYuan} 元（${delta} 积分）`,
+      metadata: JSON.stringify({
+        order_no: meta.orderNo,
+        provider: meta.provider,
+        amount_yuan: meta.amountYuan,
+        transaction_id: meta.transactionId || null,
+        source: meta.source || 'notify',
+      }),
       createdAt: ts,
     }).run()
 

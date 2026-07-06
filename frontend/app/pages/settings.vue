@@ -1304,8 +1304,8 @@ const providerPresets = {
     chengmeng: {
       label: '橙盟 Seedance 2.0 9图过人脸',
       baseUrl: 'https://api.chengmeng.site',
-      models: ['53', '15'],
-      hint: 'Base URL 填 https://api.chengmeng.site；默认 model_id=53（Fast）/ group_id=15；视频生成页可选 32（Seedance 2.0 标准版）',
+      models: ['70'],
+      hint: 'Base URL 填 https://api.chengmeng.site；模型从上游 /api/models 同步（当前默认 model_id=70 九图满血 / 49 十图线路1）；创建任务仅需 model_id，无需 group_id',
       defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
     },
     aistarslab: {

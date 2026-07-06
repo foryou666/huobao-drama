@@ -16,7 +16,7 @@ import {
   sanitizeAistarslabChannelTitle,
   sanitizeAistarslabUserFacingText,
 } from '../constants/aistarslab.js'
-import { CREDIT_ACTIONS } from '../constants/credit-actions.js'
+import { CREDIT_ACTIONS, applyMinUserVideoCreditCost } from '../constants/credit-actions.js'
 import { getActionCost, updateCreditPricing } from '../services/credits.js'
 import { eq } from 'drizzle-orm'
 
@@ -221,7 +221,10 @@ export function defaultAistarslabUserCreditCost(
     billedSeconds,
     false,
   )
-  return Math.max(1, Math.round(upstream * AISTARSLAB_USER_PRICE_MULTIPLIER))
+  return applyMinUserVideoCreditCost(
+    Math.max(1, Math.round(upstream * AISTARSLAB_USER_PRICE_MULTIPLIER)),
+    aistarslabModelCreditAction(channelId, modelId),
+  )
 }
 
 function pricingDescriptionForAistarslabModel(
@@ -239,6 +242,41 @@ function pricingDescriptionForAistarslabModel(
 }
 
 /** 为每条上游线路×模型同步积分定价项（默认用户价 = 上游 ×1.5） */
+export function syncAistarslabModelCreditPricing(config: AistarslabVideoConfig) {
+  for (const channel of config.channels) {
+    for (const model of channel.models) {
+      const action = aistarslabModelCreditAction(channel.channel, model.model)
+      const upstreamCost = computeAistarslabUpstreamCreditCost(
+        config,
+        channel.channel,
+        model.model,
+        channel.secondsMax,
+        false,
+      )
+      let userCost = defaultAistarslabUserCreditCost(
+        config,
+        channel.channel,
+        model.model,
+        channel.secondsMax,
+      )
+      if (
+        channel.channel === AISTARSLAB_DEFAULT_CHANNEL
+        && model.model === AISTARSLAB_DEFAULT_MODEL
+      ) {
+        const legacy = getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, 1)
+        if (legacy > 0) userCost = legacy
+      }
+
+      updateCreditPricing(
+        action,
+        userCost,
+        `VIP ${channel.title} · ${model.label}`,
+        pricingDescriptionForAistarslabModel(channel, model, upstreamCost, userCost),
+      )
+    }
+  }
+}
+
 export function ensureAistarslabModelCreditPricing(config: AistarslabVideoConfig) {
   for (const channel of config.channels) {
     for (const model of channel.models) {

@@ -15,6 +15,9 @@ frontend/dist-backups/
 # Environment
 .env
 .env.local
+backend/certs/*.pem
+backend/certs/*.key
+tmp/alipay-certs/
 
 # Logs
 *.log

@@ -10,8 +10,8 @@ export const GROK_VIDEO_MODEL_IDS = Object.values(GROK_VIDEO_MODELS)
 
 export const GROK_VIDEO_DOC_URL = 'https://docs.geeknow.top/api-reference/videos/grok/overview'
 
-/** 平台按次参考价 0.200 → 20 积分/次（1 元 = 100 积分） */
-export const GROK_VIDEO_CREDIT_COST = 20
+/** 用户按次扣费（最低 750 积分，见 MIN_USER_VIDEO_CREDIT_COST） */
+export const GROK_VIDEO_CREDIT_COST = 750
 
 /** Grok 视频最短秒数（文档示例为 6，Pro/Max 允许在此范围内选择） */
 export const GROK_VIDEO_SECONDS_MIN = 4

@@ -2660,7 +2660,7 @@ import { parseVoiceRefs, formatVoiceDuration, MAX_VOICE_REFS } from '~/utils/voi
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
 import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
 import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceAudios, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
-import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, normalizeMediaPath } from '~/utils/media-url.js'
+import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, prefetchMediaUrlsInBackground, normalizeMediaPath } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import {
@@ -4748,10 +4748,6 @@ async function refresh(options = {}) {
       selectedPlan.value = null
     }
     pendingVideoIds.value = pendingVideoIds.value.filter(id => sbs.value.some(s => s.id === id))
-    await prefetchMediaUrls(collectDisplayMediaPaths(), { force: true })
-    await loadVideoGenCounts()
-    await loadVoiceAssets()
-    if (restoreVideoPending) await restorePendingVideoGenerations()
     if (sbs.value.length) {
       if (selectedSb.value?.id) {
         selectedSb.value = sbs.value.find(sb => sb.id === selectedSb.value.id) || sbs.value[0]
@@ -4781,14 +4777,22 @@ async function refresh(options = {}) {
       else if (epHasScript || epHasContent) scriptStep.value = 1
       else scriptStep.value = 0
     }
-    await loadLatestGridImage()
   } catch (e) {
     pageError.value = e.message || '加载失败'
     if (!drama.value) drama.value = null
   } finally {
     pageLoading.value = false
   }
+  void loadPageSecondaryData({ restoreVideoPending })
   try { mergeData.value = await mergeAPI.status(epId.value) } catch {}
+}
+
+function loadPageSecondaryData({ restoreVideoPending = false } = {}) {
+  prefetchMediaUrlsInBackground(collectDisplayMediaPaths(), { force: true })
+  void loadVideoGenCounts().catch(() => {})
+  void loadVoiceAssets().catch(() => {})
+  void loadLatestGridImage().catch(() => {})
+  if (restoreVideoPending) void restorePendingVideoGenerations().catch(() => {})
 }
 
 function saveRaw() { episodeAPI.update(epId.value, { content: localRaw.value }); episode.value.content = localRaw.value }

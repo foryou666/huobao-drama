@@ -77,8 +77,8 @@ export function formatJimengRefLimitsHint(): string {
   return `${images}图 ${audios}音 ${videos}视频`
 }
 
-export const JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST = 0
-export const JIMENG_SEEDANCE_2_0_CREDIT_COST = 0
+export const JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST = 750
+export const JIMENG_SEEDANCE_2_0_CREDIT_COST = 750
 /** @deprecated 兼容旧定价项 */
 export const JIMENG_VIDEO_CREDIT_COST = JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST
 

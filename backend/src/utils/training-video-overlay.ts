@@ -2,9 +2,8 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { spawn } from 'child_process'
-import ffmpegStatic from 'ffmpeg-static'
 import { DOUBAO_TRAINING_OVERLAY_TEXT } from '../constants/doubao-training.js'
-import { ensureFfmpegConfigured } from './ffmpeg-path.js'
+import { ensureFfmpegConfigured, resolveFfmpegExecutable } from './ffmpeg-path.js'
 import { getAppMeta } from '../db/index.js'
 
 const OVERLAY_META_KEY = 'doubao_training_overlay_text'
@@ -16,8 +15,7 @@ export function getTrainingOverlayText(): string {
 
 function resolveFfmpegBin(): string {
   ensureFfmpegConfigured()
-  if (ffmpegStatic) return ffmpegStatic
-  return 'ffmpeg'
+  return resolveFfmpegExecutable()
 }
 
 function escapeDrawtext(text: string): string {

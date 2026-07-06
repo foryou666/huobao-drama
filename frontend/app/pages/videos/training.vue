@@ -209,7 +209,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchMediaUrls, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
+import { mediaDisplayUrl, prefetchMediaUrlsInBackground, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
@@ -496,7 +496,7 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
       ...(item.reference_images || []).map(ref => ref.path),
     ]),
   )
-  if (mediaPaths.length) await prefetchMediaUrls(mediaPaths)
+  if (mediaPaths.length) prefetchMediaUrlsInBackground(mediaPaths)
 }
 
 async function refreshLedger() {

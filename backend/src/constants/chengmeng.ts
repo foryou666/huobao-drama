@@ -5,11 +5,13 @@ export const CHENGMENT_DISPLAY_NAME = '橙盟 Seedance 2.0 9图过人脸'
 /** 橙盟官方 API 网关（稳定）；勿使用已下线的 cpolar 临时隧道 */
 export const CHENGMENT_DEFAULT_BASE_URL = 'https://api.chengmeng.site'
 
-export const CHENGMENT_DEFAULT_MODEL_ID = '53'
-export const CHENGMENT_DEFAULT_GROUP_ID = '15'
+/** 上游默认 9 图满血线路（2026-07 起 model_id=70，旧 53 已下线） */
+export const CHENGMENT_DEFAULT_MODEL_ID = '70'
+/** 旧版 group_id，新 API 创建任务已不再需要 */
+export const CHENGMENT_DEFAULT_GROUP_ID = '18'
 
-/** 橙盟 Seedance 2.0 标准版（视频生成页可选） */
-export const CHENGMENG_SEEDANCE_2_0_MODEL_ID = '32'
+/** 通道1 第二线路（10 图，旧 32 已下线） */
+export const CHENGMENG_SEEDANCE_2_0_MODEL_ID = '49'
 
 /** 视频生成页模型选项 ID（写入 video_generations.model） */
 export const CHENGMENG_VIDEO_MODELS = {
@@ -23,17 +25,25 @@ export const CHENGMENG_CHANNEL1_UI_MODEL_COUNT = 2
 /** 通道1 前台隐藏：上游折算 15 秒成本超过此值（元）的模型 */
 export const CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S = 5
 
-/** 通道1 本站用户价：最低档积分/条，其余线路按上游 15 秒成本同比缩放 */
+/** 通道1 模型 70（9图满血）：固定用户价（积分/条） */
+export const CHENGMENG_MODEL_70_CREDIT_COST = 800
+
+/** 通道1 其他线路比例价基准（模型 49 等） */
 export const CHENGMENG_CHANNEL1_BASE_USER_CREDITS = 750
 
 /** 通道1 比例价超过此值时，统一按 HIGH_TIER_CAP 计费 */
 export const CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD = 1000
 export const CHENGMENG_CHANNEL1_HIGH_TIER_CAP = 950
 
+const LEGACY_CHENGMENG_MODEL_IDS = new Set(['53', '32', '31'])
+
 export function isChengmengVideoModelId(model?: string | null): boolean {
   const normalized = String(model || '').trim()
-  return normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST
-    || normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0
+  if (!normalized) return false
+  if (normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST
+    || normalized === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0) return true
+  if (LEGACY_CHENGMENG_MODEL_IDS.has(normalized)) return true
+  return /^\d+$/.test(normalized)
 }
 
 export function isChengmengSeedance2StandardModel(model?: string | null): boolean {
@@ -65,8 +75,12 @@ export function isChengmengProvider(provider?: string | null): boolean {
 /** 每个橙盟 model_id 对应一条积分定价项（53/32 沿用历史 action 键） */
 export function chengmengModelCreditAction(modelId?: string | null): string {
   const id = String(modelId || CHENGMENT_DEFAULT_MODEL_ID).trim()
-  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0) return 'video.generate.chengmeng_seedance2'
-  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) return 'video.generate.chengmeng'
+  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0 || id === '32') {
+    return 'video.generate.chengmeng_seedance2'
+  }
+  if (id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST || id === '53' || id === '31') {
+    return 'video.generate.chengmeng'
+  }
   return `video.generate.chengmeng.${id}`
 }
 

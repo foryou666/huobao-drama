@@ -38,9 +38,11 @@ import credits from './routes/credits.js'
 import assets from './routes/assets.js'
 import media from './routes/media.js'
 import teams from './routes/teams.js'
-import { applyCreditPricingDefaultsIfNeeded } from './services/credits.js'
+import payments from './routes/payments.js'
+import repaint from './routes/repaint.js'
+import { applyCreditPricingDefaultsIfNeeded, clampVideoCreditPricingToMinimum } from './services/credits.js'
 import { migrateDefaultTeamIfNeeded } from './services/teams.js'
-import { migrateChengmengBaseUrlIfNeeded, migrateChengmengApiKeyIfNeeded } from './services/chengmeng-migrate.js'
+import { migrateChengmengBaseUrlIfNeeded, migrateChengmengApiKeyIfNeeded, migrateChengmengModelIdsIfNeeded } from './services/chengmeng-migrate.js'
 import { resumeProcessingVideoTasks } from './services/video-generation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -53,6 +55,7 @@ function isAllowedOrigin(origin: string) {
   try {
     const url = new URL(origin)
     if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') return true
+    if (url.hostname === 'ai.weikuaiche.cn' || url.hostname.endsWith('.weikuaiche.cn')) return true
     // 私有网段：10.x / 172.16-31.x / 192.168.x
     if (/^10\./.test(url.hostname)) return true
     if (/^192\.168\./.test(url.hostname)) return true
@@ -79,6 +82,7 @@ const api = new Hono<{ Variables: AuthVariables }>()
 
 // Public
 api.route('/auth', auth)
+api.route('/payments', payments)
 
 // Protected
 api.use('/*', requireAuth)
@@ -98,6 +102,7 @@ api.route('/images', images)
 api.route('/jimeng', jimeng)
 api.route('/doubao-training', doubaoTraining)
 api.route('/videos', videos)
+api.route('/repaint', repaint)
 api.route('/upload', upload)
 api.route('/ai-configs', aiConfigs)
 api.route('/ai-providers', aiProviders)
@@ -127,8 +132,10 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 const port = Number(process.env.PORT || 5679)
 const host = process.env.HOST || '0.0.0.0'
 applyCreditPricingDefaultsIfNeeded()
+clampVideoCreditPricingToMinimum()
 migrateDefaultTeamIfNeeded()
 migrateChengmengBaseUrlIfNeeded()
+migrateChengmengModelIdsIfNeeded()
 migrateChengmengApiKeyIfNeeded()
 resumeProcessingVideoTasks()
 

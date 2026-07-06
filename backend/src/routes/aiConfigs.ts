@@ -15,6 +15,7 @@ import {
   listAistarslabModelOptionsForApi,
   loadAistarslabVideoConfigFromProvider,
   normalizeAistarslabVideoConfig,
+  syncAistarslabModelCreditPricing,
 } from '../utils/aistarslab-video-options.js'
 import {
   getChengmengVideoModelOptions,
@@ -210,6 +211,7 @@ app.get('/aistarslab-config', async (c) => {
   try {
     const raw = await loadAistarslabVideoConfigFromProvider({ baseUrl, apiKey })
     const config = normalizeAistarslabVideoConfig(raw)
+    syncAistarslabModelCreditPricing(config)
     const models = listAistarslabModelOptionsForApi(config, null)
     const channels = config.channels.map(channel => ({
       channel: channel.channel,

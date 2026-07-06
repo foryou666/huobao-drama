@@ -108,7 +108,7 @@ function isOssOrCachedUrl(path, url) {
   return !!(path && urlCache.value[path])
 }
 
-/** 列表/网格缩略图：优先 thumbs（仅当 OSS 已解析）；否则原图 */
+/** 列表/网格缩略图：优先 thumbs（仅当 OSS 已解析）；否则原图；均未就绪则留空 */
 export function mediaGridUrl(raw, explicitThumb) {
   void cacheVersion.value
   const full = normalizeMediaPath(raw)
@@ -117,10 +117,12 @@ export function mediaGridUrl(raw, explicitThumb) {
     const thumbUrl = mediaDisplayUrl(thumb)
     if (isOssOrCachedUrl(thumb, thumbUrl)) return thumbUrl
   }
-  return mediaDisplayUrl(full)
+  const fullUrl = mediaDisplayUrl(full)
+  if (isOssOrCachedUrl(full, fullUrl)) return fullUrl
+  return ''
 }
 
-/** 页面展示 URL：默认 OSS；static/ 未解析前暂用 /static/ 路径 */
+/** 页面展示 URL：优先 OSS；解析完成前不回落到 /static/，避免阻塞页面且减轻应用服务器流量 */
 export function mediaDisplayUrl(raw) {
   void cacheVersion.value
   const path = normalizeMediaPath(raw)
@@ -129,7 +131,7 @@ export function mediaDisplayUrl(raw) {
   if (urlCache.value[path]) return urlCache.value[path]
   if (path.startsWith('static/')) {
     scheduleResolve(path)
-    return `/${path}`
+    return ''
   }
   return path.startsWith('/') ? path : `/${path}`
 }
@@ -141,20 +143,29 @@ export async function prefetchMediaUrls(paths, { force = false } = {}) {
   )]
   const toFetch = force ? normalized : normalized.filter(p => !urlCache.value[p])
   if (!toFetch.length) return
+  const chunkSize = 48
   try {
-    const data = await api.post('/media/resolve-urls', { paths: toFetch })
-    const urls = data?.urls || {}
-    let changed = false
-    for (const [path, url] of Object.entries(urls)) {
-      if (url && urlCache.value[path] !== url) {
-        urlCache.value[path] = url
-        changed = true
+    for (let i = 0; i < toFetch.length; i += chunkSize) {
+      const batch = toFetch.slice(i, i + chunkSize)
+      const data = await api.post('/media/resolve-urls', { paths: batch })
+      const urls = data?.urls || {}
+      let changed = false
+      for (const [path, url] of Object.entries(urls)) {
+        if (url && urlCache.value[path] !== url) {
+          urlCache.value[path] = url
+          changed = true
+        }
       }
+      if (changed) bumpCache()
     }
-    if (changed) bumpCache()
   } catch (err) {
     console.warn('[media-url] prefetch failed', err?.message || err)
   }
+}
+
+/** 后台预取，不阻塞页面数据展示 */
+export function prefetchMediaUrlsInBackground(paths, options = {}) {
+  void prefetchMediaUrls(paths, options).catch(() => {})
 }
 
 /** 写入 ledger 接口已返回的 OSS 展示地址，减少重复 resolve */

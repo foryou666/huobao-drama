@@ -1,11 +1,14 @@
 import { eq, and, isNull } from 'drizzle-orm'
 import { db, schema, getAppMeta, setAppMeta } from '../db/index.js'
 import { now } from '../utils/response.js'
-import { CHENGMENT_DEFAULT_BASE_URL } from '../constants/chengmeng.js'
+import { CHENGMENT_DEFAULT_BASE_URL, CHENGMENT_DEFAULT_MODEL_ID } from '../constants/chengmeng.js'
 import { logTaskProgress } from '../utils/task-logger.js'
 
 const BASE_URL_MIGRATION_KEY = 'chengmeng_base_url_v2'
 const KEY_ROTATION_META = 'chengmeng_api_key_rotation_v1'
+const MODEL_IDS_MIGRATION_KEY = 'chengmeng_model_ids_v3'
+
+const LEGACY_MODEL_IDS = new Set(['53', '32', '31', '15'])
 
 /** 将已保存的 cpolar 临时地址迁移到官方 API 网关 */
 export function migrateChengmengBaseUrlIfNeeded() {
@@ -25,6 +28,37 @@ export function migrateChengmengBaseUrlIfNeeded() {
     updated++
   }
   setAppMeta(BASE_URL_MIGRATION_KEY, `${ts}:${updated}`)
+}
+
+/** 将 AI 配置中已下线的 model_id（53/32 等）迁移到新线路（70/49） */
+export function migrateChengmengModelIdsIfNeeded() {
+  if (getAppMeta(MODEL_IDS_MIGRATION_KEY)) return
+
+  const rows = db.select().from(schema.aiServiceConfigs).all()
+  const ts = now()
+  let updated = 0
+  for (const row of rows) {
+    if (row.provider !== 'chengmeng') continue
+    let models: string[] = []
+    try {
+      models = row.model ? JSON.parse(row.model) : []
+    } catch {
+      models = row.model ? [String(row.model)] : []
+    }
+    if (!models.length) {
+      models = [CHENGMENT_DEFAULT_MODEL_ID]
+    } else if (LEGACY_MODEL_IDS.has(String(models[0]))) {
+      models = [models[0] === '32' ? '49' : CHENGMENT_DEFAULT_MODEL_ID]
+    }
+    const next = JSON.stringify(models)
+    if (next === row.model) continue
+    db.update(schema.aiServiceConfigs)
+      .set({ model: next, updatedAt: ts })
+      .where(eq(schema.aiServiceConfigs.id, row.id))
+      .run()
+    updated++
+  }
+  setAppMeta(MODEL_IDS_MIGRATION_KEY, `${ts}:${updated}`)
 }
 
 /**

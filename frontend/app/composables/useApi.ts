@@ -532,6 +532,7 @@ export const videoAPI = {
     limit?: number
     offset?: number
     mine_only?: boolean
+    user_id?: number
     provider?: string
     models?: string
   }) => {
@@ -544,11 +545,35 @@ export const videoAPI = {
     if (params?.offset) query.set('offset', String(params.offset))
     if (params?.provider) query.set('provider', params.provider)
     if (params?.models) query.set('models', params.models)
+    if (params?.user_id) query.set('user_id', String(params.user_id))
     if (params?.mine_only === false) query.set('mine_only', '0')
     else if (params?.mine_only !== undefined) query.set('mine_only', '1')
     return api.get(`/videos/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
 }
+
+export const repaintAPI = {
+  list: () => api.get('/repaint'),
+  get: (id: number) => api.get(`/repaint/${id}`),
+  create: (file: File, title?: string) => {
+    const form = new FormData()
+    form.append('file', file)
+    if (title?.trim()) form.append('title', title.trim())
+    return uploadForm('/repaint', form)
+  },
+  patch: (id: number, data: { title?: string }) => api.patch(`/repaint/${id}`, data),
+  patchAnalysis: (id: number, data: Record<string, unknown>) => api.patch(`/repaint/${id}/analysis`, data),
+  analyze: (id: number, opts?: { skip_asr?: boolean }) => api.post(`/repaint/${id}/analyze`, opts || {}),
+  confirm: (id: number, stage: string) => api.post(`/repaint/${id}/confirm`, { stage }),
+  assetReadiness: (id: number) => api.get(`/repaint/${id}/asset-readiness`),
+  listSegments: (id: number) => api.get(`/repaint/${id}/segments`),
+  buildSegments: (id: number) => api.post(`/repaint/${id}/segments/build`),
+  patchSegment: (id: number, segmentId: number, data: { video_prompt?: string }) =>
+    api.patch(`/repaint/${id}/segments/${segmentId}`, data),
+  generateSegment: (id: number, segmentId: number) =>
+    api.post(`/repaint/${id}/segments/${segmentId}/generate`),
+}
+
 export const jimengSessionAPI = {
   list: () => api.get('/jimeng/sessions'),
   get: () => api.get('/jimeng/session'),
@@ -645,6 +670,21 @@ export const teamsAPI = {
   },
 }
 
+export const paymentsAPI = {
+  config: () => api.get<{
+    wechat_enabled: boolean
+    alipay_enabled?: boolean
+    recharge_enabled?: boolean
+    mch_id?: string
+    notify_url?: string
+    missing?: string[]
+  }>('/payments/config'),
+  packages: () => api.get<{ credits_per_yuan: number; items: any[] }>('/payments/packages'),
+  createWechatOrder: (data: { package_id: string }) => api.post<any>('/payments/wechat/orders', data),
+  createAlipayOrder: (data: { package_id: string }) => api.post<any>('/payments/alipay/orders', data),
+  getOrder: (id: number) => api.get<any>(`/payments/orders/${id}`),
+}
+
 export const creditsAPI = {
   balance: () => api.get<{ balance: number }>('/credits/balance'),
   transactions: (params?: { all?: boolean; team?: boolean; team_id?: number; user_id?: number; limit?: number; offset?: number }) => {
@@ -719,6 +759,8 @@ export const ACTION_LABELS: Record<string, string> = {
   'assistant.chat': '制作助手',
   'portrait.sync': 'Seedance 资产同步',
   'credits.grant': '积分充值',
+  'payment.wechat': '微信充值',
+  'payment.alipay': '支付宝充值',
   'credits.pricing.update': '更新积分定价',
   'settings.ai_config.create': '新增 AI 配置',
   'settings.ai_config.update': '更新 AI 配置',

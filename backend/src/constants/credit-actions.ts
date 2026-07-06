@@ -1,4 +1,4 @@
-import { isChengmengProvider, CHENGMENG_VIDEO_MODELS, chengmengModelCreditAction } from './chengmeng.js'
+import { isChengmengProvider, CHENGMENG_VIDEO_MODELS, CHENGMENG_MODEL_70_CREDIT_COST, chengmengModelCreditAction } from './chengmeng.js'
 import { SEEDANCE_MODELS, seedanceDurationBounds } from './seedance.js'
 import { isGrokVideoModel, GROK_VIDEO_MODELS, GROK_VIDEO_CREDIT_COST, resolveGrokBillingSeconds } from './geeknow-grok.js'
 import { isJimengVideoModel, JIMENG_SEEDANCE_2_0_CREDIT_COST, JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST, JIMENG_VIDEO_MODELS, resolveJimengBillingSeconds, resolveJimengVideoCreditAction } from './jimeng-web.js'
@@ -48,6 +48,22 @@ export interface CreditActionDef {
 /** 充值换算：1 元 = 100 积分 */
 export const CREDITS_PER_YUAN = 100
 
+/** 用户视频类消耗最低积分（每次生成；培训通道除外） */
+export const MIN_USER_VIDEO_CREDIT_COST = 750
+
+export function isVideoCreditAction(action?: string | null): boolean {
+  const key = String(action || '').trim()
+  if (!key) return false
+  if (key === CREDIT_ACTIONS.VIDEO_GENERATE_DOUBAO_TRAINING) return false
+  return key === CREDIT_ACTIONS.VIDEO_GENERATE || key.startsWith('video.generate.')
+}
+
+export function applyMinUserVideoCreditCost(cost: number, action?: string | null): number {
+  if (!isVideoCreditAction(action)) return cost
+  if (cost <= 0) return cost
+  return Math.max(MIN_USER_VIDEO_CREDIT_COST, Math.floor(cost))
+}
+
 /** 图片平台单价（模型成本约 4 分/张） */
 export const IMAGE_CREDIT_COST = 6
 
@@ -55,9 +71,9 @@ export const IMAGE_CREDIT_COST = 6
 export const VIDEO_CREDITS_PER_SECOND = CREDITS_PER_YUAN
 export const VIDEO_BILLING_SECONDS = 15
 
-/** 橙盟 Seedance 2.0 Fast（9图过人脸）：15 秒/条，8 元/条 */
+/** 橙盟 Seedance 2.0 Fast（9图满血 model_id=70）：15 秒/条，8 元/条 = 800 积分/条 */
 export const CHENGMENT_VIDEO_YUAN_PER_CLIP = 8
-export const CHENGMENT_VIDEO_CREDIT_COST = CHENGMENT_VIDEO_YUAN_PER_CLIP * CREDITS_PER_YUAN
+export const CHENGMENT_VIDEO_CREDIT_COST = CHENGMENG_MODEL_70_CREDIT_COST
 
 /** 橙盟 Seedance 2.0 标准版：固定 900 积分/条（9 元/条） */
 export const CHENGMENG_SEEDANCE_2_0_YUAN_PER_CLIP = 9

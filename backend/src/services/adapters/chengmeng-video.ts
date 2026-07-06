@@ -19,9 +19,8 @@ import {
   collectChengmengVideos,
   normalizeChengmengAspectRatio,
   normalizeChengmengDuration,
-  normalizeChengmengResolution,
+  resolveChengmengApiResolution,
   resolveChengmengModelIds,
-  type ChengmengVideoMode,
 } from '../../utils/chengmeng-content.js'
 import { parseVideoContentRefs } from '../../utils/seedance-content.js'
 
@@ -29,32 +28,21 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
   provider = 'chengmeng'
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
-    const { modelId, groupId } = resolveChengmengModelIds(config, record.model)
+    const { modelId } = resolveChengmengModelIds(config, record.model)
     const refs = parseVideoContentRefs(record.referencePayload)
     const settings = config.settings || {}
     const aspectRatio = normalizeChengmengAspectRatio(record.aspectRatio)
     const duration = normalizeChengmengDuration(record.duration)
-    const resolution = normalizeChengmengResolution(settings.resolution as string | undefined)
+    const resolution = resolveChengmengApiResolution(modelId, settings.resolution as string | undefined)
 
     const videos = collectChengmengVideos(refs)
     const audios = collectChengmengAudios(refs)
     const useFramesMode = record.referenceMode === 'first_last'
       && !!(record.firstFrameUrl || record.lastFrameUrl)
 
-    let mode: ChengmengVideoMode = useFramesMode ? 'frames' : 'references'
     let images: string[] = []
-    const values: Record<string, unknown> = {
-      mode,
-      aspect_ratio: aspectRatio,
-      duration,
-      resolution,
-    }
-
-    if (mode === 'frames') {
-      if (record.firstFrameUrl) values.first_frame = record.firstFrameUrl
-      if (record.lastFrameUrl) values.last_frame = record.lastFrameUrl
-    } else {
-      const extraImages: string[] = []
+    const extraImages: string[] = []
+    if (!useFramesMode) {
       if (!refs.length) {
         if (record.referenceMode === 'single' && record.imageUrl) {
           extraImages.push(record.imageUrl)
@@ -65,25 +53,41 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
         }
       }
       images = collectChengmengImages(refs, extraImages)
-      if (videos.length) values.videos = videos
-      if (audios.length) values.audioUrls = audios
     }
+
+    const prompt = buildChengmengPrompt(
+      record.prompt || '',
+      useFramesMode ? 0 : images.length,
+      videos.length,
+      audios.length,
+      refs,
+    )
 
     const body: Record<string, unknown> = {
       model_id: modelId,
-      group_id: groupId,
-      prompt: buildChengmengPrompt(
-        record.prompt || '',
-        mode === 'references' ? images.length : 0,
-        videos.length,
-        audios.length,
-        refs,
-      ),
-      values,
+      prompt,
+      aspect_ratio: aspectRatio,
+      duration,
+      resolution,
     }
 
-    if (mode === 'references' && images.length) body.images = images
-    if (mode === 'references' && !images.length && !videos.length && !audios.length) {
+    const values: Record<string, unknown> = {}
+
+    if (useFramesMode) {
+      if (record.firstFrameUrl) values.first_frame = record.firstFrameUrl
+      if (record.lastFrameUrl) values.last_frame = record.lastFrameUrl
+    } else if (images.length) {
+      body.images = images
+    }
+
+    if (videos.length) values.videos = videos
+    if (audios.length) values.audioUrls = audios
+    if (Object.keys(values).length) body.values = values
+
+    const hasRefs = useFramesMode
+      ? !!(values.first_frame || values.last_frame)
+      : images.length > 0
+    if (!hasRefs && !videos.length && !audios.length) {
       throw new Error('参考素材无法转为公网 URL，请检查 OSS 配置（backend/.env 中的 OSS_ACCESS_KEY_ID/SECRET）')
     }
 
@@ -132,8 +136,8 @@ export class ChengmengVideoAdapter implements VideoProviderAdapter {
     if (status === 'failed' || status === 'error') {
       return { status: 'failed', error: data.error_message || data.message || 'Video generation failed' }
     }
-    if (status === 'cancelled') {
-      return { status: 'failed', error: '任务已取消' }
+    if (status === 'cancelled' || status === 'expired') {
+      return { status: 'failed', error: status === 'expired' ? '任务已超时' : '任务已取消' }
     }
     if (status === 'running') return { status: 'processing' }
     return { status: 'pending' }

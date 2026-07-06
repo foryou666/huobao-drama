@@ -4,6 +4,9 @@
       <div class="studio-header-copy">
         <h1 class="studio-title">视频生成</h1>
         <p class="studio-desc">关联项目后选择角色/场景并用 @ 写入提示词；支持参考图/视频/音频（@图片N @素材N @音频N），素材需公网 URL</p>
+        <p class="studio-route-hint">
+          9图线路支持：9图3音频3视频。10图版本：支持10图，不支持音频视频。
+        </p>
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -190,7 +193,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchMediaUrls, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
+import { mediaDisplayUrl, prefetchMediaUrlsInBackground, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
@@ -213,13 +216,14 @@ const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
 const chengmengModels = ref([])
-const selectedChengmengModel = ref('53')
+const selectedChengmengModel = ref('')
 let pollTimer = null
 
 const CHENGMENG_MODEL_LABELS = {
-  53: 'Seedance 2.0 Fast',
-  32: 'Seedance 2.0',
-  31: 'Seedance 2.0 Fast',
+  70: 'sd2-9图-满血',
+  49: 'sd2-10图-线路1',
+  53: 'Seedance 2.0 Fast（旧）',
+  32: 'Seedance 2.0（旧）',
 }
 
 const chengmengConfigId = computed(() => {
@@ -433,7 +437,7 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
       ...(item.reference_images || []).map(ref => ref.path),
     ]),
   )
-  if (mediaPaths.length) await prefetchMediaUrls(mediaPaths)
+  if (mediaPaths.length) prefetchMediaUrlsInBackground(mediaPaths)
 }
 
 async function refreshLedger() {
@@ -617,6 +621,14 @@ onUnmounted(() => {
   margin: 0;
   font-size: 13px;
   color: var(--text-3);
+}
+
+.studio-route-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e53935;
+  line-height: 1.5;
 }
 
 .studio-header-actions {

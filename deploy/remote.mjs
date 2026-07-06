@@ -4,6 +4,8 @@
  *   DEPLOY_SSH_HOST=8.160.163.57 DEPLOY_SSH_USER=root DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs exec "uname -a"
  *   DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs upload backend/.env /opt/hongguoduanju/backend/.env
  *   DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs publish
+ *   DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs pull
+ *   PULL_STATIC=1 DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs pull-static
  */
 import fs from 'fs'
 import path from 'path'
@@ -71,6 +73,32 @@ function uploadFile(conn, localPath, remotePath) {
       })
     })
   })
+}
+
+function downloadFile(conn, remotePath, localPath) {
+  return new Promise((resolve, reject) => {
+    conn.sftp((err, sftp) => {
+      if (err) return reject(err)
+      const abs = path.isAbsolute(localPath) ? localPath : path.join(root, localPath)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      sftp.fastGet(remotePath.replace(/\\/g, '/'), abs, (getErr) => {
+        sftp.end()
+        if (getErr) reject(getErr)
+        else resolve(abs)
+      })
+    })
+  })
+}
+
+function backupLocalIfExists(relPath) {
+  const abs = path.join(root, relPath)
+  if (!fs.existsSync(abs)) return
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupDir = path.join(root, 'data', 'backups', `pull-${stamp}`)
+  fs.mkdirSync(backupDir, { recursive: true })
+  const dest = path.join(backupDir, path.basename(relPath))
+  fs.copyFileSync(abs, dest)
+  console.log(`  本地备份: ${dest}`)
 }
 
 async function syncFrontendDist(conn) {
@@ -198,6 +226,76 @@ async function publish(conn) {
   }
 }
 
+async function prepareRemoteDbBackup(conn) {
+  const remoteTmp = '/tmp/huobao_pull.db'
+  await exec(conn, `
+    cd ${APP_DIR}/backend && node --input-type=module -e "
+      import Database from 'better-sqlite3';
+      const src = '${APP_DIR}/data/huobao_drama.db';
+      const dst = '${remoteTmp}';
+      const db = new Database(src, { readonly: true });
+      await db.backup(dst);
+      db.close();
+      console.log('backup ok');
+    "
+  `, { timeout: 300000 })
+  return remoteTmp
+}
+
+async function pullFromServer(conn, { withStatic = false } = {}) {
+  console.log('==> 从服务器拉取配置与数据库')
+  console.log(`    服务器: ${cfg.username}@${cfg.host}:${APP_DIR}`)
+
+  const items = [
+    { remote: `${APP_DIR}/backend/.env`, local: 'backend/.env' },
+    { remote: `${APP_DIR}/configs/config.yaml`, local: 'configs/config.yaml' },
+  ]
+
+  for (const item of items) {
+    backupLocalIfExists(item.local)
+    console.log(`\n下载 ${item.remote}`)
+    const saved = await downloadFile(conn, item.remote, item.local)
+    const kb = (fs.statSync(saved).size / 1024).toFixed(1)
+    console.log(`  -> ${saved} (${kb} KB)`)
+  }
+
+  console.log('\n==> 备份并下载数据库（在线 backup，不停服）')
+  backupLocalIfExists('data/huobao_drama.db')
+  const remoteDb = await prepareRemoteDbBackup(conn)
+  const dbLocal = await downloadFile(conn, remoteDb, 'data/huobao_drama.db')
+  const mb = (fs.statSync(dbLocal).size / 1024 / 1024).toFixed(1)
+  console.log(`  -> ${dbLocal} (${mb} MB)`)
+  await exec(conn, `rm -f ${remoteDb}`)
+
+  const seedDir = path.join(root, 'data', 'seed')
+  fs.mkdirSync(seedDir, { recursive: true })
+  backupLocalIfExists('data/seed/huobao_drama.db')
+  fs.copyFileSync(dbLocal, path.join(seedDir, 'huobao_drama.db'))
+  console.log('  -> 已同步到 data/seed/huobao_drama.db')
+
+  if (withStatic) {
+    console.log('\n==> 下载 data/static（可能很大，请耐心等待）')
+    const remoteTar = '/tmp/hongguoduanju-static.tgz'
+    await exec(conn, `tar -czf ${remoteTar} -C ${APP_DIR}/data static`, { timeout: 3600000 })
+    const localTar = path.join(root, 'data', 'backups', 'server-static.tgz')
+    fs.mkdirSync(path.dirname(localTar), { recursive: true })
+    await downloadFile(conn, remoteTar, localTar)
+    await exec(conn, `rm -f ${remoteTar}`)
+    const { spawnSync } = await import('child_process')
+    if (process.platform === 'win32') {
+      spawnSync('tar', ['-xzf', localTar, '-C', path.join(root, 'data')], { stdio: 'inherit' })
+    } else {
+      spawnSync('tar', ['-xzf', localTar, '-C', path.join(root, 'data')], { stdio: 'inherit' })
+    }
+    console.log('  -> 已解压到 data/static/')
+  } else {
+    console.log('\n跳过 data/static（默认）。媒体多在 OSS；若需本地文件可运行:')
+    console.log('  PULL_STATIC=1 DEPLOY_SSH_PASSWORD=*** node deploy/remote.mjs pull-static')
+  }
+
+  console.log('\n==> 拉取完成。请重启本地 backend 使配置生效。')
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2)
   const conn = await connect()
@@ -211,6 +309,8 @@ async function main() {
       await uploadDatabase(conn)
     } else if (cmd === 'publish') {
       await publish(conn)
+    } else if (cmd === 'pull' || cmd === 'pull-static') {
+      await pullFromServer(conn, { withStatic: cmd === 'pull-static' || process.env.PULL_STATIC === '1' })
     } else if (cmd === 'install') {
       const script = fs.readFileSync(path.join(root, 'deploy', 'install-server.sh'), 'utf8')
       const b64 = Buffer.from(script).toString('base64')
@@ -252,7 +352,7 @@ async function main() {
       await syncCode(conn)
       await exec(conn, `systemctl restart hongguoduanju`)
     } else {
-      console.log('commands: exec | upload | upload-db | publish | install | bootstrap | sync-code | sync-frontend | sync-backend-src | sync-video-posters')
+      console.log('commands: exec | upload | upload-db | publish | pull | pull-static | install | bootstrap | sync-code | sync-frontend | sync-backend-src | sync-video-posters')
       process.exit(1)
     }
   } finally {

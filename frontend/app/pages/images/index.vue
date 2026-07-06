@@ -222,7 +222,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { dramaAPI, imageAPI } from '~/composables/useApi'
-import { mediaDisplayUrl, prefetchMediaUrls } from '~/utils/media-url.js'
+import { mediaDisplayUrl, prefetchMediaUrlsInBackground } from '~/utils/media-url.js'
 import { downloadMediaFile } from '~/utils/download-media.js'
 import ImageStudioComposer from '~/components/ImageStudioComposer.vue'
 import AddGeneratedImageToEntityModal from '~/components/AddGeneratedImageToEntityModal.vue'
@@ -443,7 +443,7 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
     item.local_path,
     ...(item.reference_images || []).map(ref => ref.path),
   ]).filter(Boolean)
-  await prefetchMediaUrls(mediaPaths)
+  prefetchMediaUrlsInBackground(mediaPaths)
 }
 
 async function refreshLedger() {

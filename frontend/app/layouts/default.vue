@@ -66,6 +66,13 @@
             </NuxtLink>
           </div>
         </div>
+        <NuxtLink to="/videos/repaint" class="nav-link" :class="{ active: route.path.startsWith('/videos/repaint') }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+            <path d="M12 11v6"/><path d="M9 14h6"/>
+          </svg>
+          <span>视频转绘</span>
+        </NuxtLink>
         <NuxtLink to="/images" class="nav-link" :class="{ active: route.path.startsWith('/images') }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
@@ -108,10 +115,58 @@
           </div>
         </div>
         <div v-if="user" class="user-menu">
-          <NuxtLink to="/activity" class="credits-badge" title="查看积分明细">
+          <NuxtLink
+            v-if="!rechargeEnabled"
+            to="/activity?tab=credits"
+            class="credits-badge"
+            title="积分明细"
+          >
             <span class="credits-label">积分</span>
             <span class="credits-value">{{ creditsBalance }}</span>
           </NuxtLink>
+          <div
+            v-else
+            ref="creditsMenuRef"
+            class="credits-dropdown"
+            :class="{ open: creditsMenuOpen, active: isCreditsRoute }"
+          >
+            <button
+              type="button"
+              class="credits-badge credits-dropdown-trigger"
+              aria-haspopup="menu"
+              :aria-expanded="creditsMenuOpen"
+              title="积分菜单"
+              @click="toggleCreditsMenu"
+            >
+              <span class="credits-label">积分</span>
+              <span class="credits-value">{{ creditsBalance }}</span>
+              <svg class="credits-dropdown-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div v-if="creditsMenuOpen" class="credits-dropdown-menu" role="menu">
+              <NuxtLink
+                to="/activity?tab=credits"
+                class="credits-dropdown-item"
+                :class="{ active: route.path === '/activity' && route.query.tab === 'credits' }"
+                role="menuitem"
+                @click="closeCreditsMenu"
+              >
+                <span class="credits-dropdown-item-label">积分明细</span>
+                <span class="credits-dropdown-item-ref">查看充值与消耗记录</span>
+              </NuxtLink>
+              <NuxtLink
+                to="/recharge"
+                class="credits-dropdown-item"
+                :class="{ active: route.path === '/recharge' }"
+                role="menuitem"
+                @click="closeCreditsMenu"
+              >
+                <span class="credits-dropdown-item-label">充值积分</span>
+                <span class="credits-dropdown-item-ref">微信扫码支付</span>
+              </NuxtLink>
+            </div>
+          </div>
           <span class="user-name">{{ user.display_name || user.username }}</span>
           <span v-if="isAdmin" class="tag tag-accent">管理员</span>
           <button type="button" class="btn btn-ghost btn-sm" @click="logout">退出</button>
@@ -138,33 +193,63 @@ const route = useRoute()
 const showBrandImage = ref(true)
 const { user, isAdmin, init, logout } = useAuth()
 const { teams, activeTeamId, activeTeamMemberNames, selectTeam, canManageTeam, loadActiveTeamMembers } = useTeam()
+const { rechargeEnabled } = useRechargeAccess()
 
 const videoMenuOpen = ref(false)
 const videoNavRef = ref(null)
+const creditsMenuOpen = ref(false)
+const creditsMenuRef = ref(null)
 
 const isVideoRoute = computed(() => route.path === '/videos' || route.path.startsWith('/videos/'))
+const isCreditsRoute = computed(() => {
+  if (route.path === '/activity' && route.query.tab === 'credits') return true
+  return rechargeEnabled.value && route.path === '/recharge'
+})
 
 const videoNavItems = computed(() => buildVideoNavItems(true))
 
 function toggleVideoMenu() {
   videoMenuOpen.value = !videoMenuOpen.value
+  if (videoMenuOpen.value) creditsMenuOpen.value = false
 }
 
 function closeVideoMenu() {
   videoMenuOpen.value = false
 }
 
+function toggleCreditsMenu() {
+  creditsMenuOpen.value = !creditsMenuOpen.value
+  if (creditsMenuOpen.value) videoMenuOpen.value = false
+}
+
+function closeCreditsMenu() {
+  creditsMenuOpen.value = false
+}
+
 function onDocumentClick(event) {
-  if (!videoMenuOpen.value) return
-  const el = videoNavRef.value
-  if (el && !el.contains(event.target)) closeVideoMenu()
+  const target = event.target
+  if (videoMenuOpen.value) {
+    const el = videoNavRef.value
+    if (el && !el.contains(target)) closeVideoMenu()
+  }
+  if (creditsMenuOpen.value) {
+    const el = creditsMenuRef.value
+    if (el && !el.contains(target)) closeCreditsMenu()
+  }
 }
 
 function onDocumentKeydown(event) {
-  if (event.key === 'Escape') closeVideoMenu()
+  if (event.key === 'Escape') {
+    closeVideoMenu()
+    closeCreditsMenu()
+  }
 }
 
-watch(() => route.path, () => closeVideoMenu())
+watch(() => route.path, () => {
+  closeVideoMenu()
+  closeCreditsMenu()
+})
+watch(() => route.query.tab, () => closeCreditsMenu())
 
 function onTeamChange(e) {
   const id = Number(e.target.value)
@@ -390,7 +475,65 @@ onUnmounted(() => {
   text-decoration: none;
   color: inherit;
 }
+.credits-dropdown { position: relative; }
+.credits-dropdown-trigger {
+  cursor: pointer;
+  font: inherit;
+}
+.credits-dropdown.open .credits-badge,
 .credits-badge:hover { border-color: var(--accent); }
+.credits-dropdown.active .credits-badge {
+  border-color: rgba(76,125,255,0.35);
+  background: var(--accent-bg);
+}
+.credits-dropdown-chevron {
+  opacity: 0.55;
+  transition: transform 0.18s var(--ease-out);
+}
+.credits-dropdown.open .credits-dropdown-chevron {
+  transform: rotate(180deg);
+}
+.credits-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: calc(var(--radius) + 2px);
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  box-shadow: var(--shadow-card, 0 8px 24px rgba(0, 0, 0, 0.12));
+}
+.credits-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--text-0);
+  transition: background 0.15s;
+}
+.credits-dropdown-item:hover { background: var(--bg-hover); }
+.credits-dropdown-item.active {
+  background: var(--accent-bg);
+  color: var(--accent-text);
+}
+.credits-dropdown-item-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.credits-dropdown-item-ref {
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.35;
+}
+.credits-dropdown-item.active .credits-dropdown-item-ref {
+  color: var(--accent-text);
+  opacity: 0.8;
+}
 .credits-label { font-size: 11px; color: var(--text-1); font-weight: 600; }
 .credits-value { font-size: 12px; font-weight: 700; color: var(--accent-text); }
 .user-name {

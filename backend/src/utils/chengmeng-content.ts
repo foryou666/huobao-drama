@@ -7,6 +7,7 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_PROMPT_MAX_LENGTH,
+  CHENGMENG_VIDEO_MODELS,
   isChengmengVideoModelId,
 } from '../constants/chengmeng.js'
 import { ensureApiTrimmedAudioPath } from './audio-trim.js'
@@ -316,6 +317,17 @@ export function normalizeChengmengResolution(value?: string | null): string {
   return '720p'
 }
 
+/** 发给橙盟 API 的分辨率（模型 70 固定 480p，不在前台展示） */
+export function resolveChengmengApiResolution(
+  modelId: string,
+  settingsResolution?: string | null,
+): string {
+  if (String(modelId).trim() === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
+    return '480p'
+  }
+  return normalizeChengmengResolution(settingsResolution)
+}
+
 export type ChengmengVideoMode = 'references' | 'frames'
 
 export function parseChengmengModelIds(config: { model?: string; models?: string[] }) {
@@ -330,7 +342,7 @@ export function parseChengmengModelIds(config: { model?: string; models?: string
   }
 }
 
-/** 任务级 model 覆盖（视频生成页可选 53 Fast / 32 标准版） */
+/** 任务级 model 覆盖（视频生成页从 /api/models 同步的 model_id） */
 export function resolveChengmengModelIds(
   config: { model?: string; models?: string[] },
   modelOverride?: string | null,
@@ -342,5 +354,12 @@ export function resolveChengmengModelIds(
       groupId: CHENGMENT_DEFAULT_GROUP_ID,
     }
   }
-  return parseChengmengModelIds(config)
+  const parsed = parseChengmengModelIds(config)
+  if (['53', '32', '31'].includes(parsed.modelId)) {
+    return {
+      modelId: parsed.modelId === '32' ? '49' : '70',
+      groupId: CHENGMENT_DEFAULT_GROUP_ID,
+    }
+  }
+  return parsed
 }

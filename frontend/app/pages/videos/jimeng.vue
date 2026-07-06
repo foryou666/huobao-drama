@@ -26,6 +26,23 @@
             查看全部
           </button>
         </div>
+        <select
+          v-if="selectableTeamMembers.length"
+          v-model.number="filterMemberUserId"
+          class="studio-filter-select studio-member-select"
+          :class="{ active: viewScope === 'member' }"
+          title="查看团队成员"
+          @change="onMemberFilterChange"
+        >
+          <option :value="null">指定成员</option>
+          <option
+            v-for="m in selectableTeamMembers"
+            :key="m.user_id"
+            :value="m.user_id"
+          >
+            {{ m.display_name || m.username }}
+          </option>
+        </select>
         <select v-if="isAdmin && jimengSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="即梦 Session">
           <option v-for="s in jimengSessions" :key="s.id" :value="s.id">
             {{ sessionOptionLabel(s) }}
@@ -227,7 +244,8 @@ const DEFAULT_JIMENG_MODELS = [
 ]
 
 const route = useRoute()
-const { isAdmin } = useAuth()
+const { isAdmin, user } = useAuth()
+const { activeTeamMembers, loadActiveTeamMembers } = useTeam()
 
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -245,6 +263,7 @@ const pagination = ref({ limit: 30, offset: 0, total: 0, has_more: false })
 const filterDramaId = ref(String(route.query.drama_id || ''))
 const filterStatus = ref('all')
 const viewScope = ref('mine')
+const filterMemberUserId = ref(null)
 const detailItem = ref(null)
 const detailDownloading = ref(false)
 const composerRef = ref(null)
@@ -267,6 +286,11 @@ const displayModels = computed(() =>
 )
 
 const serviceAvailable = computed(() => sessionConfigured.value && sessionValid.value)
+
+const selectableTeamMembers = computed(() => {
+  const selfId = user.value?.id
+  return activeTeamMembers.value.filter(m => m.user_id !== selfId)
+})
 
 function sessionOptionLabel(session) {
   const label = session?.label || '未命名'
@@ -466,6 +490,9 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
+    user_id: viewScope.value === 'member' && filterMemberUserId.value
+      ? filterMemberUserId.value
+      : undefined,
     provider: 'jimeng_web',
     models: JIMENG_MODEL_IDS.join(','),
   }
@@ -474,7 +501,21 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
 function setViewScope(scope) {
   if (viewScope.value === scope) return
   viewScope.value = scope
+  if (scope !== 'member') {
+    filterMemberUserId.value = null
+  }
   reload()
+}
+
+function onMemberFilterChange() {
+  if (filterMemberUserId.value) {
+    viewScope.value = 'member'
+    reload()
+    return
+  }
+  if (viewScope.value === 'member') {
+    setViewScope('mine')
+  }
 }
 
 async function loadLedger({ append = false, offset = 0, refreshVisible = false } = {}) {
@@ -645,6 +686,7 @@ onMounted(async () => {
     const [, dramaRes] = await Promise.all([
       loadJimengOptions(),
       dramaAPI.list(),
+      loadActiveTeamMembers(),
     ])
     dramas.value = dramaRes?.items || dramaRes || []
     await loadLedger({ offset: 0 })
@@ -728,6 +770,11 @@ onUnmounted(() => {
 
 .studio-scope-btn.active {
   background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.studio-member-select.active {
+  border-color: var(--accent);
   color: var(--accent-text);
 }
 

@@ -55,7 +55,7 @@ export const VIDEO_CHANNEL_ADMIN_GUIDE = [
     internalName: '视频生成（原 · 橙盟 Seedance）',
     upstream: 'api.chengmeng.site',
     features: '9图 3音频 3视频参考、多模型',
-    pricingLabels: '「橙盟 Seedance 2.0 Fast」「橙盟 Seedance 2.0」及 API 同步的其他模型定价项',
+    pricingLabels: '「橙盟 Seedance 2.0 Fast」「橙盟 Seedance 2.0」及 API 同步的 model_id 定价项（如 70、49）',
     billing: '积分/条',
   },
   {

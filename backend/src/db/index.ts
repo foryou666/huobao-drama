@@ -433,6 +433,45 @@ sqlite.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_shot_plan_characters_plan_id ON shot_plan_characters (shot_plan_id);
 
+  CREATE TABLE IF NOT EXISTS video_repaint_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    drama_id INTEGER,
+    episode_id INTEGER,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'uploaded',
+    stage TEXT NOT NULL DEFAULT 'upload',
+    source_video_path TEXT,
+    source_duration REAL,
+    merged_video_path TEXT,
+    analysis_json TEXT,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_repaint_jobs_user_id ON video_repaint_jobs (user_id);
+  CREATE INDEX IF NOT EXISTS idx_video_repaint_jobs_team_id ON video_repaint_jobs (team_id);
+
+  CREATE TABLE IF NOT EXISTS video_repaint_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_index INTEGER NOT NULL,
+    start_sec REAL NOT NULL,
+    end_sec REAL NOT NULL,
+    duration_sec REAL NOT NULL,
+    shot_ids TEXT,
+    video_prompt TEXT,
+    content_refs TEXT,
+    video_generation_id INTEGER,
+    status TEXT DEFAULT 'draft',
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_repaint_segments_job_id ON video_repaint_segments (job_id);
+
   CREATE TABLE IF NOT EXISTS shot_clip_plans (
     storyboard_id INTEGER NOT NULL,
     shot_plan_id INTEGER NOT NULL,
@@ -587,6 +626,29 @@ sqlite.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_drama_team_shares_team_id ON drama_team_shares(team_id);
+
+  CREATE TABLE IF NOT EXISTS payment_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_no TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'wechat',
+    package_id TEXT,
+    amount_yuan INTEGER NOT NULL,
+    amount_fen INTEGER NOT NULL,
+    credits INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    code_url TEXT,
+    wx_prepay_id TEXT,
+    wx_transaction_id TEXT,
+    credit_transaction_id INTEGER,
+    error_msg TEXT,
+    paid_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON payment_orders(user_id);
+  CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON payment_orders(status);
 `)
 
 ensureColumn('users', 'credits_balance', 'INTEGER DEFAULT 10000')

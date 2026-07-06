@@ -10,6 +10,7 @@ import {
   CHENGMENG_CHANNEL1_BASE_USER_CREDITS,
   CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD,
   CHENGMENG_CHANNEL1_HIGH_TIER_CAP,
+  CHENGMENG_MODEL_70_CREDIT_COST,
   chengmengModelCreditAction,
   isChengmengDynamicCreditAction,
   isChengmengProvider,
@@ -110,7 +111,7 @@ export function isChengmengModelWithinChannel1UpstreamBudget(
   maxYuan = CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S,
 ): boolean {
   const cost = resolveChengmengUpstreamYuanPer15Seconds(model)
-  if (cost == null) return true
+  if (cost == null || cost <= 0) return false
   return cost <= maxYuan
 }
 
@@ -130,18 +131,18 @@ function fallbackChengmengModelOptions(): ChengmengModelOption[] {
   return normalizeChengmengRemoteModels([
     {
       id: CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST,
-      name: 'Seedance 2.0 Fast',
-      description: '快速版',
-      base_price: 8,
-      unit_label: '元/次',
+      name: 'sd2-9图-满血',
+      description: '9 图全能参考满血线路',
+      base_price: 0.32,
+      unit_label: '元/秒',
       groups: [{ group_id: CHENGMENT_DEFAULT_GROUP_ID, is_default: true }],
     },
     {
       id: CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0,
-      name: 'Seedance 2.0',
-      description: '标准版',
-      base_price: 9,
-      unit_label: '元/次',
+      name: 'sd2-10图-线路1',
+      description: '10 图参考线路',
+      base_price: 0.26,
+      unit_label: '元/秒',
       groups: [{ group_id: CHENGMENT_DEFAULT_GROUP_ID, is_default: true }],
     },
   ])
@@ -196,12 +197,15 @@ export function isChengmengVideoModelAllowed(
   const allowed = allowedModels?.length
     ? allowedModels
     : cachedRemoteModels?.length
-      ? cachedRemoteModels
-      : fallbackChengmengModelOptions()
+      ? pickChengmengChannel1UiModels(cachedRemoteModels)
+      : pickChengmengChannel1UiModels(fallbackChengmengModelOptions())
   return allowed.some(item => item.id === normalized)
 }
 
 function defaultCreditCostForModel(model: ChengmengModelOption, minUpstreamYuan: number | null): number {
+  if (model.id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
+    return CHENGMENG_MODEL_70_CREDIT_COST
+  }
   return computeChengmengUserCreditCost(model, minUpstreamYuan)
 }
 
@@ -237,6 +241,9 @@ function pricingDescriptionForModel(
   cost: number,
   minUpstreamYuan: number | null,
 ): string {
+  if (model.id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
+    return `seedance通道1 · 橙盟 model_id=${model.id}（${VIDEO_BILLING_SECONDS} 秒/条，固定 ${CHENGMENG_MODEL_70_CREDIT_COST} 积分/条；上游 API 使用 480p）`
+  }
   const upstream = resolveChengmengUpstreamYuanPer15Seconds(model)
   const upstreamText = upstream != null && upstream > 0
     ? `${upstream} 元/15秒`
@@ -244,7 +251,7 @@ function pricingDescriptionForModel(
   const ratioText = upstream != null && minUpstreamYuan != null && minUpstreamYuan > 0
     ? `，比例 ${(upstream / minUpstreamYuan).toFixed(2)}×`
     : ''
-  return `seedance通道1 · 橙盟 model_id=${model.id} / group_id=${model.groupId}（${VIDEO_BILLING_SECONDS} 秒/条，上游 ${upstreamText}${ratioText}；本站 ${CHENGMENG_CHANNEL1_BASE_USER_CREDITS} 积分起步，超 ${CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD} 按 ${CHENGMENG_CHANNEL1_HIGH_TIER_CAP}，当前 ${cost} 积分/条）`
+  return `seedance通道1 · 橙盟 model_id=${model.id}（${VIDEO_BILLING_SECONDS} 秒/条，上游 ${upstreamText}${ratioText}；本站 ${CHENGMENG_CHANNEL1_BASE_USER_CREDITS} 积分起步，超 ${CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD} 按 ${CHENGMENG_CHANNEL1_HIGH_TIER_CAP}，当前 ${cost} 积分/条）`
 }
 
 /** 同步每个上游模型的积分定价（750 起步，按上游 15 秒成本比例） */
