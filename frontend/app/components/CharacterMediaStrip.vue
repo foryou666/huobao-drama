@@ -1,6 +1,6 @@
 <template>
 
-  <div v-if="hasContent" class="char-media-strip-root" :class="{ compact, readonly, 'is-outfits': useOutfitLayout }">
+  <div v-if="hasContent" class="char-media-strip-root" :class="{ compact, readonly, 'is-outfits': useOutfitLayout, landscape }">
 
     <div v-if="showSummary && summaryTags.length" class="char-media-summary">
 
@@ -277,6 +277,9 @@ const props = defineProps({
   layout: { type: String, default: 'auto' }, // auto | flat | outfits
 
   compact: { type: Boolean, default: false },
+
+  /** 资产库等横屏场景：缩略图 16:9 且标签更宽 */
+  landscape: { type: Boolean, default: false },
 
   readonly: { type: Boolean, default: true },
 
@@ -951,6 +954,30 @@ function onOutfitClick(outfit) {
 
   padding: 0 4px;
 
+}
+
+.char-media-strip-root.landscape .char-outfit-grid,
+.char-media-strip-root.landscape.compact .char-outfit-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.char-media-strip-root.landscape .char-outfit-card-cover {
+  aspect-ratio: 16 / 9;
+}
+
+.char-media-strip-root.landscape .char-media-chip,
+.char-media-strip-root.landscape .char-media-chip img {
+  width: 76px;
+}
+
+.char-media-strip-root.landscape.compact .char-media-chip,
+.char-media-strip-root.landscape.compact .char-media-chip img {
+  width: 68px;
+}
+
+.char-media-strip-root.landscape .char-media-chip img {
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 
 </style>

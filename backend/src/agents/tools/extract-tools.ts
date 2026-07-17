@@ -4,8 +4,8 @@
  *
  * 单 Agent 一步流程：
  * 1. 读取剧本内容
- * 2. 读取项目中已存在的角色/场景（用于去重）
- * 3. 提取角色/场景并智能去重后直接保存
+ * 2. 读取项目中已存在的角色/场景/道具（用于去重）
+ * 3. 提取角色/场景/道具并智能去重后直接保存
  */
 import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
@@ -13,7 +13,7 @@ import { db, schema } from '../../db/index.js'
 import { eq, and } from 'drizzle-orm'
 import { now } from '../../utils/response.js'
 import { logTaskProgress, logTaskSuccess } from '../../utils/task-logger.js'
-import { syncCharacterAsset, syncSceneAsset } from '../../services/asset-library.js'
+import { syncCharacterAsset, syncSceneAsset, syncPropAsset } from '../../services/asset-library.js'
 import { repairEpisodeSceneLinks } from '../../utils/scene-redirect.js'
 import {
   buildDefaultCharacterImagePrompt,
@@ -48,7 +48,7 @@ export function createExtractTools(episodeId: number, dramaId: number) {
   // 1. 读取剧本内容
   const readScriptForExtraction = createTool({
     id: 'read_script_for_extraction',
-    description: 'Read the formatted screenplay for character/scene extraction.',
+    description: 'Read the screenplay/content for character, scene and prop extraction.',
     inputSchema: z.object({}),
     execute: async () => {
       const [ep] = db.select().from(schema.episodes)
@@ -280,11 +280,94 @@ export function createExtractTools(episodeId: number, dramaId: number) {
     },
   })
 
+  // 6. 读取项目中已存在的道具（用于去重判断）
+  const readExistingProps = createTool({
+    id: 'read_existing_props',
+    description: 'Read all props already existing in this drama project (for deduplication).',
+    inputSchema: z.object({}),
+    execute: async () => {
+      const props = db.select().from(schema.props)
+        .where(eq(schema.props.dramaId, dramaId)).all()
+        .filter(p => !p.deletedAt)
+      const payload = { count: props.length, props }
+      logTaskSuccess('ExtractTool', 'read-props', { episodeId, dramaId, projectProps: payload.count })
+      return payload
+    },
+  })
+
+  // 7. 智能保存道具（按名字去重）
+  const saveDedupProps = createTool({
+    id: 'save_dedup_props',
+    description: 'Save extracted props with deduplication. Existing props (same name) are merged/updated; new ones are created.',
+    inputSchema: z.object({
+      props: z.array(z.object({
+        name: z.string(),
+        type: z.string().optional(),
+        description: z.string().optional(),
+        prompt: z.string().optional(),
+      })),
+    }),
+    execute: async ({ props }) => {
+      const ts = now()
+      const results = { created: 0, merged: 0 }
+      logTaskProgress('ExtractTool', 'save-props-begin', {
+        episodeId,
+        dramaId,
+        names: props.map(p => p.name).join(','),
+      })
+
+      for (const prop of props) {
+        const name = String(prop.name || '').trim()
+        if (!name) continue
+        const existing = db.select().from(schema.props)
+          .where(eq(schema.props.dramaId, dramaId)).all()
+          .filter(p => !p.deletedAt)
+          .find(p => p.name === name)
+
+        const description = String(prop.description || '').trim()
+        const prompt = String(prop.prompt || description || '').trim()
+        const type = String(prop.type || '').trim() || '日常'
+
+        if (existing) {
+          db.update(schema.props).set({
+            type: type || existing.type,
+            description: description || existing.description,
+            prompt: prompt || existing.prompt,
+            updatedAt: ts,
+          }).where(eq(schema.props.id, existing.id)).run()
+          syncPropAsset(existing.id)
+          results.merged++
+        } else {
+          const res = db.insert(schema.props).values({
+            dramaId,
+            name,
+            type,
+            description,
+            prompt,
+            createdAt: ts,
+            updatedAt: ts,
+          }).run()
+          syncPropAsset(Number(res.lastInsertRowid))
+          results.created++
+        }
+      }
+
+      const payload = {
+        message: `道具保存完成：新增 ${results.created}，合并更新 ${results.merged}`,
+        ...results,
+      }
+      logTaskSuccess('ExtractTool', 'save-props-complete', { episodeId, ...results })
+      return payload
+    },
+  })
+
   return {
     readScriptForExtraction,
     readExistingCharacters,
     readExistingScenes,
+    readExistingProps,
     saveDedupCharacters,
     saveDedupScenes,
+    saveDedupProps,
   }
 }

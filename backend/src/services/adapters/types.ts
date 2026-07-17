@@ -83,6 +83,8 @@ export interface ImageGenerationRecord {
   model?: string | null
   prompt?: string | null
   size?: string | null
+  /** 单次请求分辨率（APIMart：1k / 2k / 4k） */
+  quality?: string | null
   frameType?: string | null
   referenceImages?: string | null
   // ... 其他字段

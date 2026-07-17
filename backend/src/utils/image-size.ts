@@ -3,17 +3,28 @@ import { db, schema } from '../db/index.js'
 import { readLocalImageDimensions } from './storage.js'
 
 export type ImageAspectRatio = '9:16' | '16:9'
+/** 项目/画布封面可用比例 */
+export type CoverAspectRatio = '3:4' | '4:3'
 
 export const DEFAULT_IMAGE_ASPECT_RATIO: ImageAspectRatio = '9:16'
 export const DEFAULT_IMAGE_SIZE = '1080x1920'
+export const COVER_ASPECT_RATIOS: CoverAspectRatio[] = ['3:4', '4:3']
 
 const ASPECT_TO_PIXELS: Record<ImageAspectRatio, string> = {
   '9:16': '1080x1920',
   '16:9': '1920x1080',
 }
 
+const COVER_ASPECT_TO_PIXELS: Record<CoverAspectRatio, string> = {
+  '3:4': '1080x1440',
+  '4:3': '1440x1080',
+}
+
 /** 剧集标准比例尺寸：按设计分辨率原样发送，不做 16 对齐取整 */
-const PRESET_IMAGE_SIZES = new Set(Object.values(ASPECT_TO_PIXELS))
+const PRESET_IMAGE_SIZES = new Set([
+  ...Object.values(ASPECT_TO_PIXELS),
+  ...Object.values(COVER_ASPECT_TO_PIXELS),
+])
 
 const GRID_CELL_BY_ASPECT: Record<ImageAspectRatio, { cellW: number; cellH: number }> = {
   '9:16': { cellW: 540, cellH: 960 },
@@ -25,8 +36,19 @@ export function resolveImageAspectRatio(raw?: string | null): ImageAspectRatio {
   return DEFAULT_IMAGE_ASPECT_RATIO
 }
 
+export function resolveCoverAspectRatio(raw?: string | null): CoverAspectRatio | null {
+  if (raw === '3:4' || raw === '4:3') return raw
+  return null
+}
+
 export function getImageSizeForAspectRatio(ratio?: string | null): string {
+  const cover = resolveCoverAspectRatio(ratio)
+  if (cover) return COVER_ASPECT_TO_PIXELS[cover]
   return ASPECT_TO_PIXELS[resolveImageAspectRatio(ratio)]
+}
+
+export function getCoverImageSize(ratio: CoverAspectRatio): string {
+  return COVER_ASPECT_TO_PIXELS[ratio]
 }
 
 export function getGridCellSizeForAspectRatio(ratio?: string | null) {
@@ -89,6 +111,9 @@ export interface ResolveGenerationImageSizeParams {
  */
 export async function resolveGenerationImageSize(params: ResolveGenerationImageSizeParams): Promise<string> {
   if (params.explicitSize) return normalizeImageSize(params.explicitSize)
+
+  // 旧版封面默认竖屏；新版 candidate 必须带 explicitSize（3:4 / 4:3）
+  if (params.imageType === 'drama_cover') return getImageSizeForAspectRatio('3:4')
 
   const shouldMatchReference = params.imageType === 'character_variant'
     || params.imageType === 'character_outfit'

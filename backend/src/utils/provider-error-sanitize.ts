@@ -40,10 +40,12 @@ export function isUpstreamBalanceOrPriceLeak(message?: string | null): boolean {
   return false
 }
 
-/** 面向用户的错误文案：屏蔽上游余额与真实金额 */
+/** 面向用户的错误文案：屏蔽上游余额与真实金额，并隐藏上游品牌名 */
 export function sanitizeUserFacingProviderError(message?: string | null): string {
-  const text = String(message || '').trim()
+  let text = String(message || '').trim()
   if (!text) return text
   if (isUpstreamBalanceOrPriceLeak(text)) return UPSTREAM_BALANCE_SHORTAGE_USER_MESSAGE
+  // 对外统一用导航名，不暴露上游品牌
+  text = text.replace(/小云雀/g, 'S通道5')
   return text
 }

@@ -1,5 +1,5 @@
 <template>
-  <div v-if="hasContent" class="entity-view-strip-root" :class="[theme, { compact }]">
+  <div v-if="hasContent" class="entity-view-strip-root" :class="[theme, { compact, landscape }]">
     <div v-if="showSummary && summaryTags.length" class="entity-view-summary">
       <span v-for="tag in summaryTags" :key="tag" class="entity-view-summary-tag">{{ tag }}</span>
     </div>
@@ -49,6 +49,8 @@ const props = defineProps({
   media: { type: Object, default: null },
   theme: { type: String, default: 'scene' }, // scene | prop
   compact: { type: Boolean, default: false },
+  /** 资产库等横屏场景：缩略图 16:9 且标签更宽 */
+  landscape: { type: Boolean, default: false },
   clickable: { type: Boolean, default: true },
   showSummary: { type: Boolean, default: true },
   maxVisible: { type: Number, default: 12 },
@@ -212,5 +214,14 @@ function viewPreview(view) {
   font-size: 10px;
   color: var(--text-dim);
   padding: 0 4px;
+}
+
+.entity-view-strip-root.landscape .entity-view-grid,
+.entity-view-strip-root.landscape.compact .entity-view-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.entity-view-strip-root.landscape .entity-view-card-cover {
+  aspect-ratio: 16 / 9;
 }
 </style>

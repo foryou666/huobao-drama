@@ -12,9 +12,10 @@ import {
 } from '../utils/doubao-training-video-options.js'
 import { incrementDoubaoSessionDailyUsage } from '../utils/doubao-training-quota.js'
 import {
-  DOUBAO_TRAINING_VIDEO_MODEL,
+  DOUBAO_TRAINING_DEFAULT_MODEL,
   normalizeDoubaoTrainingAspectRatio,
   normalizeDoubaoTrainingDuration,
+  normalizeDoubaoTrainingModel,
 } from '../constants/doubao-training.js'
 
 export function buildDoubaoTrainingVirtualConfig(model?: string | null) {
@@ -23,7 +24,7 @@ export function buildDoubaoTrainingVirtualConfig(model?: string | null) {
     provider: 'doubao_training',
     baseUrl: 'https://www.doubao.com',
     apiKey: '',
-    model: model || DOUBAO_TRAINING_VIDEO_MODEL,
+    model: normalizeDoubaoTrainingModel(model || DOUBAO_TRAINING_DEFAULT_MODEL),
     settings: {},
   }
 }
@@ -46,11 +47,13 @@ export async function processDoubaoTrainingVideoGeneration(id: number) {
       model: record.model,
     })
 
+    const model = normalizeDoubaoTrainingModel(record.model)
     const videoUrl = await generateDoubaoTrainingVideo({
       session,
       prompt: String(record.prompt || ''),
       ratio: normalizeDoubaoTrainingAspectRatio(record.aspectRatio),
       duration: normalizeDoubaoTrainingDuration(record.duration),
+      model,
     })
 
     incrementDoubaoSessionDailyUsage(session.id)

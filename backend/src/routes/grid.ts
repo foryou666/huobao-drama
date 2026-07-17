@@ -9,7 +9,8 @@ import { createAgent } from '../agents/index.js'
 import { logTaskError, logTaskPayload, logTaskProgress } from '../utils/task-logger.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
-import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { tryChargeUser, tryChargeImageUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { resolveBillingImageModel, resolveBillingImageProvider } from '../utils/image-billing.js'
 
 const app = new Hono()
 
@@ -528,10 +529,12 @@ app.post('/generate', async (c) => {
   const { cellW, cellH } = drama_id ? getDramaGridCellSize(Number(drama_id)) : { cellW: 960, cellH: 540 }
   const size = `${cellW * actualCols}x${cellH * actualRows}`
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.GRID_GENERATE, {
+  const billingModel = resolveBillingImageModel({ imageConfigId: undefined })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: undefined })
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.GRID_GENERATE, billingModel, {
     summary: `生成宫格图 ${actualRows}x${actualCols}`,
     dramaId: drama_id ? Number(drama_id) : undefined,
-  })
+  }, billingProvider)
   if (billed.error) return billed.error
 
   try {

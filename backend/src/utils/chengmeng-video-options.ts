@@ -6,10 +6,13 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_DOC_URL,
+  CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS,
   CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S,
   CHENGMENG_CHANNEL1_BASE_USER_CREDITS,
   CHENGMENG_CHANNEL1_HIGH_TIER_THRESHOLD,
   CHENGMENG_CHANNEL1_HIGH_TIER_CAP,
+  CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND,
+  CHENGMENG_CHANNEL1_RESOLUTION,
   CHENGMENG_MODEL_70_CREDIT_COST,
   chengmengModelCreditAction,
   isChengmengDynamicCreditAction,
@@ -95,8 +98,11 @@ export function normalizeChengmengRemoteModels(raw: ChengmengRemoteModel[]): Che
   return models
 }
 
-/** 将上游单价折算为 15 秒成本（元）：元/次按次计，元/秒 × 15 */
-export function resolveChengmengUpstreamYuanPer15Seconds(model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>): number | null {
+/** 将上游单价折算为 15 秒成本（元）：元/次按次计，元/秒 × 15。通道1 catalog 价常为 720p，按 480p 实价覆盖。 */
+export function resolveChengmengUpstreamYuanPer15Seconds(model: Pick<ChengmengModelOption, 'id' | 'basePriceYuan' | 'unitLabel'>): number | null {
+  if (String(model.id || '').trim() === CHENGMENT_DEFAULT_MODEL_ID) {
+    return CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND * VIDEO_BILLING_SECONDS
+  }
   const price = model.basePriceYuan
   if (price == null || !Number.isFinite(price) || price <= 0) return null
   const unit = String(model.unitLabel || '').trim()
@@ -107,7 +113,7 @@ export function resolveChengmengUpstreamYuanPer15Seconds(model: Pick<ChengmengMo
 }
 
 export function isChengmengModelWithinChannel1UpstreamBudget(
-  model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>,
+  model: Pick<ChengmengModelOption, 'id' | 'basePriceYuan' | 'unitLabel'>,
   maxYuan = CHENGMENG_CHANNEL1_MAX_UPSTREAM_YUAN_PER_15S,
 ): boolean {
   const cost = resolveChengmengUpstreamYuanPer15Seconds(model)
@@ -115,33 +121,52 @@ export function isChengmengModelWithinChannel1UpstreamBudget(
   return cost <= maxYuan
 }
 
-/** 通道1 页面：仅展示管理员启用且上游 15 秒成本 ≤ 5 元的模型 */
+function markChannel1DefaultOption(models: ChengmengModelOption[]): ChengmengModelOption[] {
+  const next = models.map(item => ({
+    ...item,
+    defaultOption: item.id === CHENGMENT_DEFAULT_MODEL_ID,
+  }))
+  if (next.length && !next.some(item => item.defaultOption)) {
+    next[0]!.defaultOption = true
+  }
+  return next
+}
+
+/** 通道1 页面：只对接 70（480p）；找不到时再按预算回退 */
 export function pickChengmengChannel1UiModels(models: ChengmengModelOption[]): ChengmengModelOption[] {
   const enabled = filterEnabledChengmengModels(models)
+  const byId = new Map(enabled.map(item => [item.id, item]))
+  const preferred = CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS
+    .map(id => byId.get(id))
+    .filter((item): item is ChengmengModelOption => !!item)
+    .map(item => ({
+      ...item,
+      label: item.id === CHENGMENT_DEFAULT_MODEL_ID ? '9图-满血' : item.label,
+      description: item.id === CHENGMENT_DEFAULT_MODEL_ID
+        ? '9 图全能参考 · 满血线路'
+        : item.description,
+      basePriceYuan: item.id === CHENGMENT_DEFAULT_MODEL_ID
+        ? CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND
+        : item.basePriceYuan,
+      unitLabel: item.id === CHENGMENT_DEFAULT_MODEL_ID ? '元/秒' : item.unitLabel,
+    }))
+  if (preferred.length) {
+    return markChannel1DefaultOption(preferred)
+  }
+  const budgeted = enabled
     .filter(item => isChengmengModelWithinChannel1UpstreamBudget(item))
     .map(item => ({ ...item }))
-  if (!enabled.length) return []
-  if (!enabled.some(item => item.defaultOption)) {
-    enabled[0]!.defaultOption = true
-  }
-  return enabled
+  if (!budgeted.length) return []
+  return markChannel1DefaultOption(budgeted)
 }
 
 function fallbackChengmengModelOptions(): ChengmengModelOption[] {
   return normalizeChengmengRemoteModels([
     {
       id: CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST,
-      name: 'sd2-9图-满血',
-      description: '9 图全能参考满血线路',
-      base_price: 0.32,
-      unit_label: '元/秒',
-      groups: [{ group_id: CHENGMENT_DEFAULT_GROUP_ID, is_default: true }],
-    },
-    {
-      id: CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0,
-      name: 'sd2-10图-线路1',
-      description: '10 图参考线路',
-      base_price: 0.26,
+      name: '9图-满血',
+      description: '9 图全能参考 · 满血线路',
+      base_price: CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND,
       unit_label: '元/秒',
       groups: [{ group_id: CHENGMENT_DEFAULT_GROUP_ID, is_default: true }],
     },
@@ -220,7 +245,7 @@ function resolveMinUpstreamYuanForChannel1(models: ChengmengModelOption[]): numb
 
 /** 本站用户积分：750 起步，按上游 15 秒成本比例缩放；超过 1000 则按 950 */
 export function computeChengmengUserCreditCost(
-  model: Pick<ChengmengModelOption, 'basePriceYuan' | 'unitLabel'>,
+  model: Pick<ChengmengModelOption, 'id' | 'basePriceYuan' | 'unitLabel'>,
   minUpstreamYuan: number | null,
   baseCredits = CHENGMENG_CHANNEL1_BASE_USER_CREDITS,
 ): number {
@@ -242,7 +267,7 @@ function pricingDescriptionForModel(
   minUpstreamYuan: number | null,
 ): string {
   if (model.id === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
-    return `seedance通道1 · 橙盟 model_id=${model.id}（${VIDEO_BILLING_SECONDS} 秒/条，固定 ${CHENGMENG_MODEL_70_CREDIT_COST} 积分/条；上游 API 使用 480p）`
+    return `seedance通道1 · 橙盟 model_id=${model.id}（${VIDEO_BILLING_SECONDS} 秒/条，上游 ${CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND} 元/秒 ≈ ${CHENGMENG_CHANNEL1_480P_YUAN_PER_SECOND * VIDEO_BILLING_SECONDS} 元/条；本站固定 ${CHENGMENG_MODEL_70_CREDIT_COST} 积分/条）`
   }
   const upstream = resolveChengmengUpstreamYuanPer15Seconds(model)
   const upstreamText = upstream != null && upstream > 0

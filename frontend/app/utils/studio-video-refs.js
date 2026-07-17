@@ -137,15 +137,29 @@ export function insertPromptImageLabel(prompt, cursorStart, cursorEnd, index, la
   return { text: next, cursor: before.length + snippet.length }
 }
 
-export function replaceMentionWithImageLabel(prompt, mentionStart, cursorEnd, index, label) {
-  return insertPromptImageLabel(prompt, mentionStart, cursorEnd, index, label)
+export function replaceMentionWithImageLabel(prompt, mentionStart, cursorEnd, index, _label) {
+  const before = String(prompt || '').slice(0, mentionStart)
+  const after = String(prompt || '').slice(cursorEnd)
+  const snippet = `@图片${index}`
+  const needsSep = before.trim() && !/[，,。\n\s@]$/.test(before.slice(-1))
+  const text = `${before}${needsSep ? ' ' : ''}${snippet}${after}`
+  return { text, cursor: before.length + (needsSep ? 1 : 0) + snippet.length }
 }
 
 export function replaceMentionWithVideoRef(prompt, mentionStart, cursorEnd, index) {
   const before = String(prompt || '').slice(0, mentionStart)
   const after = String(prompt || '').slice(cursorEnd)
   const snippet = `@视频${index}`
-  const needsSep = before.trim() && !/[，,。\n\s]$/.test(before.slice(-1))
+  const needsSep = before.trim() && !/[，,。\n\s@]$/.test(before.slice(-1))
+  const text = `${before}${needsSep ? ' ' : ''}${snippet}${after}`
+  return { text, cursor: before.length + (needsSep ? 1 : 0) + snippet.length }
+}
+
+export function replaceMentionWithAudioRef(prompt, mentionStart, cursorEnd, index) {
+  const before = String(prompt || '').slice(0, mentionStart)
+  const after = String(prompt || '').slice(cursorEnd)
+  const snippet = `@音频${index}`
+  const needsSep = before.trim() && !/[，,。\n\s@]$/.test(before.slice(-1))
   const text = `${before}${needsSep ? ' ' : ''}${snippet}${after}`
   return { text, cursor: before.length + (needsSep ? 1 : 0) + snippet.length }
 }
@@ -167,6 +181,26 @@ export function buildVideoMentionItems(uploadedVideoRefs, options = {}) {
         sub: useMaterial ? '参考素材' : '参考视频',
         thumb: null,
         videoIndex,
+      }
+    })
+}
+
+/** @ 菜单：已选音色/参考音频（按绑定顺序，插入 @音频N） */
+export function buildAudioMentionItems(voiceRefs = []) {
+  return (voiceRefs || [])
+    .filter(item => item?.path)
+    .map((item, index) => {
+      const audioIndex = index + 1
+      const label = String(item.name || item.label || `参考音频${audioIndex}`).trim() || `参考音频${audioIndex}`
+      return {
+        type: 'audio',
+        key: `audio:${normalizeStripPath(item.path)}`,
+        path: normalizeStripPath(item.path),
+        label,
+        promptLabel: label,
+        sub: '参考音频',
+        thumb: null,
+        audioIndex,
       }
     })
 }
@@ -290,7 +324,9 @@ export function collectPreservedMediaLabels(prompt) {
   }
 }
 
-/** 根据当前绑定参考图、参考视频与音色，重写提示词开头的说明前缀 */
+/** 根据当前绑定参考图、参考视频与音色，重写提示词开头的说明前缀
+ * @deprecated 视频通道已改为用户手写 @图片N；保留函数供旧调用/历史兼容，勿再用于自动改写输入框
+ */
 export function applyStudioPromptMediaHeader(prompt, binding, chars, scenes, props, uploadedRefs, options) {
   const preservedFromPrompt = options?.preservedLabels
     ? null
@@ -518,27 +554,16 @@ export function buildStudioRefStripItems(binding, chars, scenes, props, uploaded
 }
 
 export function buildStudioContentRefs(binding, prompt, chars, scenes, props, uploadedRefs = [], uploadedVideoRefs = [], options = {}) {
-  const preserved = collectPreservedMediaLabels(prompt)
-  const finalPrompt = applyStudioPromptMediaHeader(prompt, binding, chars, scenes, props, uploadedRefs, {
-    uploadedVideoRefs,
-    videoRefLabel: options?.videoRefLabel,
-    ...preserved,
-  })
+  // 用户提示词原样提交；不再自动改写「图片1是…」前缀。上游适配在后端按通道规则处理。
+  const finalPrompt = String(prompt || '')
   const stripItems = buildStudioRefStripItems(binding, chars, scenes, props, uploadedRefs, () => '')
     .filter(item => item.path && !item.missing)
-
-  const labelByIndex = new Map(parsePromptImageLabels(finalPrompt).map(entry => [entry.index, entry.label]))
-  const videoLabelByIndex = new Map([
-    ...parsePromptVideoLabels(finalPrompt),
-    ...parsePromptMaterialLabels(finalPrompt),
-  ].map(entry => [entry.index, entry.label]))
 
   const imageRefs = stripItems.map((item, index) => ({
     type: 'image',
     url: normalizeStripPath(item.path),
     role: 'reference_image',
-    label: labelByIndex.get(index + 1)
-      || item.ref?.label
+    label: item.ref?.label
       || item.tagLabel
       || item.label
       || `参考图${index + 1}`,
@@ -552,7 +577,7 @@ export function buildStudioContentRefs(binding, prompt, chars, scenes, props, up
         type: 'video',
         url: path,
         role: 'reference_video',
-        label: videoLabelByIndex.get(index + 1) || item.label || `参考视频${index + 1}`,
+        label: item.label || `参考视频${index + 1}`,
       }
     })
     .filter(Boolean)
@@ -624,21 +649,29 @@ function stripItemToMention(item) {
   return null
 }
 
-/** @ 菜单：参考图栏图片 + 可选参考视频 */
+/** @ 菜单：参考图栏图片 + 可选参考视频/音频（序号与条上顺序一致，插入 @图片N / @视频N / @音频N） */
 export function buildMentionOptions(stripItems, query, extraItems = []) {
   const q = String(query || '').trim().toLowerCase()
   const items = []
+  let imageIndex = 0
 
   for (const item of stripItems || []) {
     const mention = stripItemToMention(item)
     if (!mention) continue
-    if (!matchesMentionQuery(q, mention.label, mention.sub)) continue
+    imageIndex += 1
+    mention.imageIndex = imageIndex
+    if (!matchesMentionQuery(q, mention.label, mention.sub, `@图片${imageIndex}`)) continue
     items.push(mention)
   }
 
   for (const item of extraItems || []) {
     if (!item?.path) continue
-    if (!matchesMentionQuery(q, item.label, item.sub)) continue
+    const tag = item.audioIndex
+      ? `@音频${item.audioIndex}`
+      : item.videoIndex
+        ? `@视频${item.videoIndex}`
+        : ''
+    if (!matchesMentionQuery(q, item.label, item.sub, tag, '音频', '音色')) continue
     items.push(item)
   }
 

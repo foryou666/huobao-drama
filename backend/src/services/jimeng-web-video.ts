@@ -16,7 +16,7 @@ import {
   resolveJimengBillingSeconds,
   resolveJimengInternalModel,
 } from '../constants/jimeng-web.js'
-import { resolveJimengSessionForStyle } from '../utils/jimeng-web-video-options.js'
+import { resolveJimengSessionForStyle, formatJimengSessionStyle } from '../utils/jimeng-web-video-options.js'
 import {
   jimengBrowserGenerateRequest,
   jimengRequest,
@@ -24,6 +24,10 @@ import {
   uploadJimengImage,
   uploadJimengMedia,
 } from './jimeng-web-client.js'
+import {
+  isJimengUpstreamCreditError,
+  resolveJimengSessionForUserDrama,
+} from './jimeng-session-binding.js'
 import { getAbsolutePath, parseDataUrl } from '../utils/storage.js'
 import { openMediaReadStream } from '../utils/media-download.js'
 import { parseVideoContentRefs, type VideoContentRef } from '../utils/seedance-content.js'
@@ -301,6 +305,26 @@ function resolveMaterialIndex(
 }
 
 /** 解析 prompt 中的 @图片N / @视频N / @音频N 为 meta_list */
+function ensureJimengOmniMentions(prompt: string, materials: UploadedJimengMaterial[]) {
+  const text = String(prompt || '')
+  if (!materials.length) return text
+  if (/@(?:图片|图|视频|音频|image|video|audio)\s*\d/i.test(text)) return text
+  if (/(?:图片|图|视频|音频)\s*\d/i.test(text)) return text
+
+  let imageIdx = 0
+  let videoIdx = 0
+  let audioIdx = 0
+  const tags: string[] = []
+  for (const material of materials) {
+    if (material.type === 'image') tags.push(`@图片${++imageIdx}`)
+    else if (material.type === 'video') tags.push(`@视频${++videoIdx}`)
+    else if (material.type === 'audio') tags.push(`@音频${++audioIdx}`)
+  }
+  if (!tags.length) return text
+  const body = text.trim()
+  return body ? `${tags.join(' ')} ${body}` : tags.join(' ')
+}
+
 function buildOmniMetaList(prompt: string, materials: UploadedJimengMaterial[]) {
   const metaList: Array<{ meta_type: string; text?: string; material_ref?: { material_idx: number } }> = []
   const text = String(prompt || '')
@@ -366,7 +390,7 @@ function buildGeneratePayload(record: VideoGenerationRecord, materials: Uploaded
   const benefitType = getJimengOmniBenefitType(internalModel)
 
   const material_list = buildMaterialList(materials)
-  const meta_list = buildOmniMetaList(record.prompt || '', materials)
+  const meta_list = buildOmniMetaList(ensureJimengOmniMentions(record.prompt || '', materials), materials)
 
   const sceneOption = {
     type: 'video',
@@ -567,12 +591,47 @@ export async function processJimengWebVideoGeneration(id: number) {
 
   try {
     logTaskProgress('VideoTask', 'jimeng-submit', { id, model: record.model })
-    const historyId = await submitJimengVideo(record as VideoGenerationRecord)
+    let style = record.style
+    let historyId: string
+    try {
+      historyId = await submitJimengVideo(record as VideoGenerationRecord)
+    } catch (err: any) {
+      const depletedId = resolveJimengSessionForStyle(style)?.id
+      if (
+        !isJimengUpstreamCreditError(err.message)
+        || !record.userId
+        || !depletedId
+      ) {
+        throw err
+      }
+
+      logTaskWarn('VideoTask', 'jimeng-rebind-on-credit', {
+        id,
+        depletedSessionId: depletedId,
+        userId: record.userId,
+        dramaId: record.dramaId,
+        error: err.message,
+      })
+      const rebound = await resolveJimengSessionForUserDrama({
+        userId: Number(record.userId),
+        dramaId: record.dramaId,
+        excludeSessionIds: [depletedId],
+      })
+      if (rebound.session.id === depletedId) throw err
+
+      style = formatJimengSessionStyle(rebound.session.id)
+      db.update(schema.videoGenerations)
+        .set({ style, updatedAt: now() })
+        .where(eq(schema.videoGenerations.id, id))
+        .run()
+      historyId = await submitJimengVideo({ ...record, style } as VideoGenerationRecord)
+    }
+
     db.update(schema.videoGenerations)
       .set({ taskId: historyId, status: 'processing', updatedAt: now() })
       .where(eq(schema.videoGenerations.id, id))
       .run()
-    pollJimengVideoTask(id, historyId, record.storyboardId, record.duration, record.style).catch(err => {
+    pollJimengVideoTask(id, historyId, record.storyboardId, record.duration, style).catch(err => {
       logTaskError('VideoTask', 'jimeng-poll', { id, error: err.message })
     })
   } catch (err: any) {

@@ -6,7 +6,7 @@ import { success, badRequest, notFound, created, now } from '../utils/response.j
 import { saveUploadedFile } from '../utils/storage.js'
 import { ensureFfmpegConfigured } from '../utils/ffmpeg-path.js'
 import { resolveMediaFilePath } from '../utils/media-path.js'
-import { getAuthUser } from '../middleware/auth.js'
+import { getAuthUser, requireAdmin } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import { resolveActiveTeamId } from '../services/team-access.js'
 import { ensureUserInDefaultTeam } from '../services/teams.js'
@@ -21,6 +21,7 @@ import {
   rebuildRepaintSegments,
   getRepaintDefaultVideoModel,
 } from '../services/repaint-segments.js'
+import { mergeRepaintJobSegments } from '../services/repaint-merge.js'
 import { generateVideo } from '../services/video-generation.js'
 import { tryChargeUser, tryRefundCharge } from '../utils/credit-charge.js'
 import { getDramaImageAspectRatio } from '../utils/image-size.js'
@@ -28,6 +29,8 @@ import { chengmengModelCreditAction } from '../constants/chengmeng.js'
 import type { VideoContentRef } from '../utils/seedance-content.js'
 
 const app = new Hono()
+
+app.use('/*', requireAdmin)
 
 const MAX_SOURCE_DURATION_SEC = 300
 
@@ -255,6 +258,7 @@ app.patch('/:id/analysis', async (c) => {
       ? body.shot_assignments
       : current.shot_assignments,
     shot_visuals: Array.isArray(body.shot_visuals) ? body.shot_visuals : current.shot_visuals,
+    video_summary: body.video_summary != null ? String(body.video_summary) : current.video_summary,
   }
 
   db.update(schema.videoRepaintJobs).set({
@@ -356,7 +360,7 @@ app.post('/:id/confirm', async (c) => {
   if (stage === 'assets' && row.dramaId && analysisJson) {
     const parsed = parseRepaintAnalysis(analysisJson)
     if (parsed?.shots?.length) {
-      await rebuildRepaintSegments(id, parsed, row.dramaId)
+      await rebuildRepaintSegments(id, parsed, row.dramaId, row.sourceVideoPath)
     }
   }
 
@@ -504,7 +508,7 @@ app.post('/:id/segments/build', async (c) => {
   const analysis = parseRepaintAnalysis(row.analysisJson)
   if (!analysis?.shots?.length) return badRequest(c, '请先完成分析')
 
-  const items = await rebuildRepaintSegments(id, analysis, row.dramaId)
+  const items = await rebuildRepaintSegments(id, analysis, row.dramaId, row.sourceVideoPath)
   return success(c, { items: items.map(formatSegment) })
 })
 
@@ -551,7 +555,7 @@ app.post('/:id/segments/:segmentId/generate', async (c) => {
   try {
     contentRefs = seg.contentRefs ? JSON.parse(seg.contentRefs) : []
   } catch { /* ignore */ }
-  if (!contentRefs.length) return badRequest(c, '分段缺少参考图，请确认角色/场景/道具已生成图片后重新打包分段')
+  if (!contentRefs.length) return badRequest(c, '分段缺少参考图（需原片关键帧或角色/场景/道具图），请重新打包分段')
 
   const model = getRepaintDefaultVideoModel()
   const creditAction = chengmengModelCreditAction(model)
@@ -611,6 +615,28 @@ app.post('/:id/segments/:segmentId/generate', async (c) => {
       updatedAt: now(),
     }).where(eq(schema.videoRepaintSegments.id, segmentId)).run()
     return badRequest(c, err.message)
+  }
+})
+
+// POST /repaint/:id/merge — ffmpeg 按镜头顺序拼接成片
+app.post('/:id/merge', async (c) => {
+  const jobId = Number(c.req.param('id'))
+  const row = getJobOr404(jobId)
+  if (!row) return notFound(c, '转绘任务不存在')
+  if (!assertJobAccess(c, row)) return notFound(c, '转绘任务不存在')
+
+  try {
+    const result = await mergeRepaintJobSegments(jobId)
+    const [next] = db.select().from(schema.videoRepaintJobs)
+      .where(eq(schema.videoRepaintJobs.id, jobId)).all()
+    return success(c, {
+      job: formatJob(next!),
+      merged_video_path: result.mergedVideoPath,
+      duration: result.duration,
+      clip_count: result.clipCount,
+    })
+  } catch (err: any) {
+    return badRequest(c, err.message || '拼接失败')
   }
 })
 

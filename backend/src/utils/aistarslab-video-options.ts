@@ -6,6 +6,7 @@ import {
   AISTARSLAB_DEFAULT_CHANNEL,
   AISTARSLAB_DEFAULT_CREDIT_COST,
   AISTARSLAB_DEFAULT_MODEL,
+  AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
   AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER,
   AISTARSLAB_USER_PRICE_MULTIPLIER,
   aistarslabModelCreditAction,
@@ -45,6 +46,9 @@ export interface AistarslabVideoConfig {
   channels: AistarslabChannelOption[]
   referenceVideoCreditsMultiplier: number
 }
+
+const AISTARSLAB_CONFIG_CACHE_MS = 5 * 60 * 1000
+let aistarslabConfigCache: { at: number; key: string; config: AistarslabVideoConfig } | null = null
 
 function isAistarslabConfigRow(row: { provider?: string | null }) {
   return isAistarslabProvider(row.provider)
@@ -163,6 +167,46 @@ export function resolveDefaultAistarslabSelection(config: AistarslabVideoConfig)
   return { channel: channel.channel, model: model || AISTARSLAB_DEFAULT_MODEL }
 }
 
+/** 过滤上游参考价（按线路最长时长、不含参考视频倍率）超过上限的模型/线路 */
+export function filterAistarslabConfigByUpstreamCost(
+  config: AistarslabVideoConfig,
+  maxUpstreamCredits = AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
+): AistarslabVideoConfig {
+  const channels = config.channels
+    .map((channel) => {
+      const models = channel.models.filter((model) => {
+        const upstream = computeAistarslabUpstreamCreditCost(
+          config,
+          channel.channel,
+          model.model,
+          channel.secondsMax,
+          false,
+        )
+        return upstream <= maxUpstreamCredits
+      })
+      return models.length ? { ...channel, models } : null
+    })
+    .filter(Boolean) as AistarslabChannelOption[]
+  return { ...config, channels }
+}
+
+/** 通道3 前台展示：仅 Seedance 模型，且上游参考价不超过上限 */
+export function filterAistarslabConfigForDisplay(
+  config: AistarslabVideoConfig,
+  maxUpstreamCredits = AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
+): AistarslabVideoConfig {
+  const seedanceOnly: AistarslabVideoConfig = {
+    ...config,
+    channels: config.channels
+      .map((channel) => {
+        const models = channel.models.filter(model => isAistarslabVideoModel(model.model))
+        return models.length ? { ...channel, models } : null
+      })
+      .filter(Boolean) as AistarslabChannelOption[],
+  }
+  return filterAistarslabConfigByUpstreamCost(seedanceOnly, maxUpstreamCredits)
+}
+
 export function computeAistarslabCreditCost(
   config: AistarslabVideoConfig,
   channelId: string,
@@ -241,11 +285,14 @@ function pricingDescriptionForAistarslabModel(
   return `seedance通道3 · 线路 ${channel.channel} ${channel.title} · ${model.model}（${billingHint}，${channel.secondsMin}-${channel.secondsMax} 秒；默认用户价 ${userCost} 积分/次 = 上游约 ${upstreamCost} × ${AISTARSLAB_USER_PRICE_MULTIPLIER}）`
 }
 
-/** 为每条上游线路×模型同步积分定价项（默认用户价 = 上游 ×1.5） */
+/** 为每条上游线路×模型同步积分定价项（默认用户价 = 上游 ×1.5；已有项保留管理员手调单价） */
 export function syncAistarslabModelCreditPricing(config: AistarslabVideoConfig) {
   for (const channel of config.channels) {
     for (const model of channel.models) {
       const action = aistarslabModelCreditAction(channel.channel, model.model)
+      const [existing] = db.select().from(schema.creditPricing)
+        .where(eq(schema.creditPricing.action, action))
+        .all()
       const upstreamCost = computeAistarslabUpstreamCreditCost(
         config,
         channel.channel,
@@ -265,6 +312,10 @@ export function syncAistarslabModelCreditPricing(config: AistarslabVideoConfig) 
       ) {
         const legacy = getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, 1)
         if (legacy > 0) userCost = legacy
+      }
+      // 管理员已手调过的单价不再被上游同步覆盖
+      if (existing && Number(existing.cost) > 0) {
+        userCost = Number(existing.cost)
       }
 
       updateCreditPricing(
@@ -332,9 +383,20 @@ export function isAistarslabSelectionAllowed(
   )
 }
 
-export async function loadAistarslabVideoConfigFromProvider(config: { baseUrl?: string | null; apiKey?: string | null }) {
+export async function loadAistarslabVideoConfigFromProvider(
+  config: { baseUrl?: string | null; apiKey?: string | null },
+  options?: { refresh?: boolean },
+) {
+  const cacheKey = `${String(config.baseUrl || '').trim()}|${String(config.apiKey || '').trim()}`
+  const now = Date.now()
+  if (!options?.refresh && aistarslabConfigCache && aistarslabConfigCache.key === cacheKey
+    && now - aistarslabConfigCache.at < AISTARSLAB_CONFIG_CACHE_MS) {
+    return aistarslabConfigCache.config
+  }
   const raw = await fetchAistarslabVideoConfig(config)
-  return normalizeAistarslabVideoConfig(raw)
+  const normalized = normalizeAistarslabVideoConfig(raw)
+  aistarslabConfigCache = { at: now, key: cacheKey, config: normalized }
+  return normalized
 }
 
 export function listAistarslabModelOptionsForApi(

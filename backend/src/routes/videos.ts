@@ -56,10 +56,23 @@ import {
 } from '../utils/jimeng-web-video-options.js'
 import { isJimengVideoModel, isJimengEnabledVideoModel, JIMENG_REF_LIMITS, JIMENG_ASPECT_RATIOS, JIMENG_DEFAULT_ASPECT_RATIO } from '../constants/jimeng-web.js'
 import { buildJimengVirtualConfig } from '../services/jimeng-web-video.js'
+import { buildXyqVirtualConfig } from '../services/xyq-web-video.js'
 import { buildDoubaoTrainingVirtualConfig } from '../services/doubao-training-video.js'
 import { getActiveJimengSessionId, getJimengWebSession } from '../services/jimeng-web-session.js'
+import { resolveJimengSessionForUserDrama } from '../services/jimeng-session-binding.js'
+import { getActiveXyqSessionId, getXyqWebSession } from '../services/xyq-web-session.js'
+import { resolveXyqSessionForGeneration } from '../services/xyq-session-picker.js'
+import {
+  assertXyqSessionConfigured,
+  assertXyqReferencesAllowed,
+  isXyqVideoRequest,
+  listXyqSessionSummaries,
+  listXyqVideoModelOptions,
+  normalizeXyqSubmitModel,
+} from '../utils/xyq-web-video-options.js'
+import { isXyqVideoModel, isXyqEnabledVideoModel, XYQ_REF_LIMITS, XYQ_ASPECT_RATIOS, XYQ_DEFAULT_ASPECT_RATIO } from '../constants/xyq-web.js'
 import { getActiveDoubaoTrainingSessionId, getDoubaoTrainingSession } from '../services/doubao-training-session.js'
-import { isDoubaoTrainingVideoModel } from '../constants/doubao-training.js'
+import { isDoubaoTrainingVideoModel, normalizeDoubaoTrainingModel } from '../constants/doubao-training.js'
 import {
   assertDoubaoTrainingSessionConfigured,
   getDoubaoTrainingOptionsPayload,
@@ -95,6 +108,9 @@ const app = new Hono()
 function resolveVideoConfig(body: Record<string, unknown>) {
   if (isJimengVideoRequest(body)) {
     return buildJimengVirtualConfig(body.model ? String(body.model) : undefined)
+  }
+  if (isXyqVideoRequest(body)) {
+    return buildXyqVirtualConfig(body.model ? String(body.model) : undefined)
   }
   if (isDoubaoTrainingVideoRequest(body)) {
     return buildDoubaoTrainingVirtualConfig(body.model ? String(body.model) : undefined)
@@ -211,17 +227,55 @@ app.post('/', async (c) => {
       return badRequest(c, err.message)
     }
     const jimengSessionId = String(body.jimeng_session_id || body.jimengSessionId || '').trim()
-    if (jimengSessionId && !getJimengWebSession(jimengSessionId)) {
-      return badRequest(c, '所选即梦 Session 不存在')
+    if (jimengSessionId) {
+      const user = getAuthUser(c)
+      if (user.role !== 'admin') {
+        delete body.jimeng_session_id
+        delete body.jimengSessionId
+      } else if (!getJimengWebSession(jimengSessionId)) {
+        return badRequest(c, '所选即梦 Session 不存在')
+      }
     }
     body.provider = 'jimeng_web'
     normalizeJimengSubmitModel(body)
   }
 
+  if (isXyqVideoRequest(body)) {
+    if (!body.model || !isXyqVideoModel(String(body.model))) {
+      return badRequest(c, 'S通道5视频生成需选择对应模型')
+    }
+    if (!isXyqEnabledVideoModel(String(body.model))) {
+      return badRequest(c, '所选S通道5模型不可用，请刷新页面后重选')
+    }
+    try {
+      assertXyqReferencesAllowed(body)
+    } catch (err: any) {
+      return badRequest(c, err.message)
+    }
+    try {
+      assertXyqSessionConfigured()
+    } catch (err: any) {
+      return badRequest(c, err.message)
+    }
+    const xyqSessionId = String(body.xyq_session_id || body.xyqSessionId || '').trim()
+    if (xyqSessionId) {
+      const user = getAuthUser(c)
+      if (user.role !== 'admin') {
+        delete body.xyq_session_id
+        delete body.xyqSessionId
+      } else if (!getXyqWebSession(xyqSessionId)) {
+        return badRequest(c, '所选S通道5 Access Key 不存在')
+      }
+    }
+    body.provider = 'xyq_web'
+    normalizeXyqSubmitModel(body)
+  }
+
   if (isDoubaoTrainingVideoRequest(body)) {
     if (!body.model || !isDoubaoTrainingVideoModel(String(body.model))) {
-      return badRequest(c, '豆包培训视频需选择培训模型')
+      return badRequest(c, '豆包培训视频需选择培训模型（Seedance 2.0 Fast / Mini）')
     }
+    body.model = normalizeDoubaoTrainingModel(String(body.model))
     try {
       assertDoubaoTrainingSessionConfigured()
     } catch (err: any) {
@@ -261,6 +315,9 @@ app.post('/', async (c) => {
   }
   if (isJimengVideoRequest(body) && videoConfig?.provider !== 'jimeng_web') {
     return badRequest(c, '即梦视频通道不正确')
+  }
+  if (isXyqVideoRequest(body) && videoConfig?.provider !== 'xyq_web') {
+    return badRequest(c, 'S通道5视频通道不正确')
   }
   if (isDoubaoTrainingVideoRequest(body) && videoConfig?.provider !== 'doubao_training') {
     return badRequest(c, '豆包培训视频通道不正确')
@@ -370,9 +427,51 @@ app.post('/', async (c) => {
       duration: body.duration,
     })
     logTaskPayload('VideoAPI', 'request body', body)
-    const jimengSessionId = isJimengVideoRequest(body)
-      ? String(body.jimeng_session_id || body.jimengSessionId || '').trim() || undefined
-      : undefined
+    const authUser = getAuthUser(c)
+    let jimengSessionId: string | undefined
+    if (isJimengVideoRequest(body)) {
+      const preferred = authUser.role === 'admin'
+        ? String(body.jimeng_session_id || body.jimengSessionId || '').trim() || undefined
+        : undefined
+      const resolved = await resolveJimengSessionForUserDrama({
+        userId: authUser.id,
+        dramaId: body.drama_id != null ? Number(body.drama_id) : null,
+        preferredSessionId: preferred,
+      })
+      jimengSessionId = resolved.session.id
+      logTaskPayload('VideoAPI', 'jimeng session bind', {
+        userId: authUser.id,
+        dramaId: body.drama_id,
+        sessionId: resolved.session.id,
+        source: resolved.source,
+        bindingKey: resolved.bindingKey,
+        previousSessionId: resolved.previousSessionId || null,
+      })
+    }
+    let xyqSessionId: string | undefined
+    if (isXyqVideoRequest(body)) {
+      const preferred = authUser.role === 'admin'
+        ? String(body.xyq_session_id || body.xyqSessionId || '').trim() || undefined
+        : undefined
+      const resolved = await resolveXyqSessionForGeneration({
+        model: body.model != null ? String(body.model) : null,
+        duration: body.duration != null ? Number(body.duration) : null,
+        preferredSessionId: preferred,
+      })
+      xyqSessionId = resolved.session.id
+      logTaskPayload('VideoAPI', 'xyq session pick', {
+        userId: authUser.id,
+        sessionId: resolved.session.id,
+        label: resolved.session.label,
+        source: resolved.source,
+        estimatedNeed: resolved.estimatedNeed,
+        balance: resolved.balance,
+        giftCredit: resolved.giftCredit,
+        freeCredit: resolved.freeCredit,
+        model: body.model,
+        duration: body.duration,
+      })
+    }
     const doubaoTrainingSessionId = isDoubaoTrainingVideoRequest(body)
       ? String(body.doubao_training_session_id || body.doubaoTrainingSessionId || '').trim() || undefined
       : undefined
@@ -392,13 +491,16 @@ app.post('/', async (c) => {
       configId,
       provider: isJimengVideoRequest(body)
         ? 'jimeng_web'
-        : isDoubaoTrainingVideoRequest(body)
-          ? 'doubao_training'
-          : undefined,
+        : isXyqVideoRequest(body)
+          ? 'xyq_web'
+          : isDoubaoTrainingVideoRequest(body)
+            ? 'doubao_training'
+            : undefined,
       aistarslabChannel: isAistarslabVideoRequest(body)
         ? String(body.aistarslab_channel || body.channel || '').trim() || undefined
         : undefined,
       jimengSessionId,
+      xyqSessionId,
       doubaoTrainingSessionId,
       creditTransactionId: billed.charge.transactionId,
       userId: getAuthUser(c).id,
@@ -442,11 +544,13 @@ app.get('/chengmeng-options', async (c) => {
   const row = findChengmengVideoConfigRow()
   const configId = row?.id ?? null
   let configError: string | null = null
-  let remoteModels = await getChengmengVideoModelOptions(row, { refresh: true })
+  let remoteModels = await getChengmengVideoModelOptions(row, { refresh: false })
 
   if (row && row.apiKey && !isPlaceholderApiKey(row.apiKey)) {
     try {
-      remoteModels = await getChengmengVideoModelOptions(row, { refresh: true })
+      if (!remoteModels.length) {
+        remoteModels = await getChengmengVideoModelOptions(row, { refresh: true })
+      }
     } catch (err: any) {
       configError = err.message
       remoteModels = await getChengmengVideoModelOptions(null)
@@ -528,6 +632,35 @@ app.get('/jimeng-options', async (c) => {
   })
 })
 
+// GET /videos/xyq-options — 小云雀视频页：模型与 Access Key 可用性
+app.get('/xyq-options', async (c) => {
+  const sessions = await listXyqSessionSummaries()
+  const activeId = getActiveXyqSessionId()
+  const hasValidSession = sessions.some(item => item.valid)
+  const models = listXyqVideoModelOptions().map(item => ({
+    ...item,
+    billing_unit: 'flat',
+    credit_cost: getActionCost(item.credit_action, 1),
+    credit_cost_flat: getActionCost(item.credit_action, 1),
+  }))
+
+  return success(c, {
+    available: sessions.length > 0 && hasValidSession,
+    session_configured: sessions.length > 0,
+    session_valid: hasValidSession,
+    active_id: activeId,
+    sessions,
+    doc_url: 'https://xyq.jianying.com',
+    site_url: 'https://xyq.jianying.com',
+    models,
+    credit_cost_default: getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_MINI_TRIAL, 1),
+    ref_limits: XYQ_REF_LIMITS,
+    ref_limits_hint: `${XYQ_REF_LIMITS.images}图 ${XYQ_REF_LIMITS.audios}音 ${XYQ_REF_LIMITS.videos}视频`,
+    aspect_ratios: [...XYQ_ASPECT_RATIOS],
+    default_aspect_ratio: XYQ_DEFAULT_ASPECT_RATIO,
+  })
+})
+
 // GET /videos/aistarslab-options — AIStartLab 视频页：线路与模型
 app.get('/aistarslab-options', async (c) => {
   const row = findAistarslabVideoConfigRow()
@@ -537,8 +670,7 @@ app.get('/aistarslab-options', async (c) => {
 
   if (row && !isPlaceholderApiKey(row.apiKey)) {
     try {
-      const loaded = await loadAistarslabVideoConfigFromProvider(row)
-      syncAistarslabModelCreditPricing(loaded)
+      const loaded = await loadAistarslabVideoConfigFromProvider(row, { refresh: false })
       remoteConfig = applyAistarslabChannelVisibility(loaded)
     } catch (err: any) {
       configError = err.message

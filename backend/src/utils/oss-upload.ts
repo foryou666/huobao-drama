@@ -17,7 +17,13 @@ import { isImageStaticPath } from './thumbnail.js'
 import { logTaskProgress, logTaskWarn } from './task-logger.js'
 import { now } from './response.js'
 import { db, schema } from '../db/index.js'
-import { ossKeyPrefix, projectAssetObjectKey, referenceUploadObjectKey, resolveProjectObjectKeyForStaticPath } from './oss-path.js'
+import {
+  ossKeyPrefix,
+  projectAssetObjectKey,
+  referenceUploadObjectKey,
+  resolveProjectObjectKeyForStaticPath,
+  subtitleRemovedObjectKey,
+} from './oss-path.js'
 
 let client: OSS | null = null
 
@@ -157,6 +163,10 @@ export function resolveOssObjectKeyCandidates(localPath: string): string[] {
 
   if (normalized.startsWith('static/uploads/')) {
     push(referenceUploadObjectKey(normalized))
+  }
+
+  if (normalized.startsWith('static/videos/subtitle-removed/')) {
+    push(subtitleRemovedObjectKey(normalized))
   }
 
   push(buildFallbackObjectKey(normalized))

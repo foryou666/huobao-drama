@@ -109,6 +109,52 @@ export function listMissingSceneAngleIds(scene: {
   return angleIds.filter(id => !existing.has(id))
 }
 
+export function clearScenePrimaryImage(sceneId: number) {
+  db.update(schema.scenes)
+    .set({ imageUrl: null, localPath: null, updatedAt: now() })
+    .where(eq(schema.scenes.id, sceneId))
+    .run()
+}
+
+export function removeSceneAngleImage(sceneId: number, angleId: string): boolean {
+  const normalizedAngle = String(angleId || '').trim()
+  if (!normalizedAngle) return false
+  const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
+  if (!scene) return false
+
+  if (normalizedAngle === 'hero') {
+    clearScenePrimaryImage(sceneId)
+    return true
+  }
+
+  const existing = parseSceneAngleImages(scene.referenceImages)
+  const next = existing.filter(item => item.angle_id !== normalizedAngle)
+  if (next.length === existing.length) return false
+
+  db.update(schema.scenes)
+    .set({ referenceImages: serializeSceneAngleImages(next), updatedAt: now() })
+    .where(eq(schema.scenes.id, sceneId))
+    .run()
+  return true
+}
+
+export function removeSceneImageByUrl(sceneId: number, rawUrl: string): boolean {
+  const url = normalizePath(rawUrl)
+  if (!url) return false
+  const [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, sceneId)).all()
+  if (!scene) return false
+
+  const heroUrl = normalizePath(scene.imageUrl || scene.localPath || '')
+  if (heroUrl && heroUrl === url) {
+    clearScenePrimaryImage(sceneId)
+    return true
+  }
+
+  const match = parseSceneAngleImages(scene.referenceImages).find(item => normalizePath(item.url) === url)
+  if (!match) return false
+  return removeSceneAngleImage(sceneId, match.angle_id)
+}
+
 export interface EntityViewPreview {
   view_id: string
   label: string

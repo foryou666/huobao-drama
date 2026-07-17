@@ -28,43 +28,65 @@
         :key="d.id"
         class="card project-card"
         :style="{ animationDelay: `${i * 0.06}s` }"
-        @click="navigateTo(`/drama/${d.id}`)"
+        @click="openDrama(d)"
       >
-        <!-- Card film strip decoration -->
-        <div class="card-film-strip">
-          <span v-for="j in 5" :key="j" class="film-hole"></span>
-        </div>
+        <div class="project-cover">
+          <img
+            v-if="coverSrc(d)"
+            :src="coverSrc(d)"
+            :alt="d.title"
+            class="project-cover-img"
+            loading="lazy"
+          />
+          <div v-else class="project-cover-placeholder" aria-hidden="true" />
 
-        <div class="card-body">
-          <div class="card-header">
+          <div class="cover-top">
             <div class="episode-badge">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
               {{ d.episodes?.length || 0 }} 集
             </div>
             <span v-if="d.is_shared_project" class="tag tag-accent share-badge">共享</span>
-            <div v-if="d.can_manage_drama" class="card-actions" @click.stop>
-              <button
-                class="btn btn-ghost btn-icon card-action"
-                @click="archiveDrama(d)"
-                title="归档"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
-                </svg>
-              </button>
-              <button
-                v-if="d.can_delete"
-                class="btn btn-ghost btn-icon card-action card-delete"
-                @click="delDrama(d)"
-                title="删除空项目"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
-                </svg>
-              </button>
-            </div>
+            <span
+              v-else-if="d.shared_teams?.length"
+              class="tag share-badge share-owned-badge"
+              :title="d.shared_teams.map(t => t.team_name).join('、')"
+            >已共享 {{ d.shared_teams.length }}</span>
           </div>
 
+          <div v-if="d.can_manage_drama" class="card-actions" @click.stop>
+            <button
+              class="btn btn-ghost btn-icon card-action"
+              @click="openShareModal(d)"
+              title="共享给其他团队"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+            </button>
+            <button
+              class="btn btn-ghost btn-icon card-action"
+              @click="archiveDrama(d)"
+              title="归档"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/>
+              </svg>
+            </button>
+            <button
+              v-if="d.can_delete"
+              class="btn btn-ghost btn-icon card-action card-delete"
+              @click="delDrama(d)"
+              title="删除空项目"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="card-body">
           <h3 class="project-title">{{ d.title }}</h3>
           <p v-if="d.is_shared_project && d.owner_team_name" class="project-owner dim">来自 {{ d.owner_team_name }}</p>
 
@@ -72,11 +94,11 @@
             <span v-if="d.style" class="style-tag">{{ d.style }}</span>
             <span class="meta-item">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              {{ d.characters?.length || 0 }}
+              {{ d.character_count ?? d.characters?.length ?? 0 }}
             </span>
             <span class="meta-item">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
-              {{ d.scenes?.length || 0 }}
+              {{ d.scene_count ?? d.scenes?.length ?? 0 }}
             </span>
           </div>
         </div>
@@ -88,6 +110,7 @@
             </div>
           </div>
           <div class="card-footer-actions">
+            <button type="button" class="card-link-btn" @click.stop="openDramaCanvas(d)">画布</button>
             <button type="button" class="card-link-btn" @click.stop="navigateTo(`/assets?drama_id=${d.id}&type=voice`)">音色库</button>
             <span class="card-date">{{ fmtDate(d.updated_at || d.updatedAt) }}</span>
           </div>
@@ -157,16 +180,89 @@
         </form>
       </div>
     </div>
+
+    <!-- Share Dialog -->
+    <div v-if="shareTarget" class="overlay" @click.self="closeShareModal">
+      <div class="modal card share-modal">
+        <div class="modal-header">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </div>
+          <h2 class="modal-title">共享项目</h2>
+          <p class="modal-desc">
+            将「{{ shareTarget.title }}」共享给其他团队后，对方可在项目列表中打开协作。
+            <template v-if="shareOwnerTeamName">归属团队：{{ shareOwnerTeamName }}</template>
+          </p>
+        </div>
+
+        <div class="share-body">
+          <div v-if="shareLoading" class="share-empty dim">加载中…</div>
+          <template v-else>
+            <div class="share-section">
+              <div class="field-label">已共享给</div>
+              <div v-if="!shareTeams.length" class="share-empty dim">尚未共享给任何团队</div>
+              <ul v-else class="share-list">
+                <li v-for="t in shareTeams" :key="t.team_id" class="share-row">
+                  <div class="share-row-main">
+                    <span class="share-team-name">{{ t.team_name }}</span>
+                    <span v-if="t.shared_at" class="share-meta dim">{{ fmtDate(t.shared_at) }}</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-sm share-remove"
+                    :disabled="shareBusy"
+                    @click="removeShare(t)"
+                  >取消共享</button>
+                </li>
+              </ul>
+            </div>
+
+            <div class="share-section">
+              <label class="field">
+                <span class="field-label">添加团队</span>
+                <div class="share-add-row">
+                  <BaseSelect
+                    v-model="shareSelectedTeamId"
+                    class="share-select"
+                    :options="shareTeamSelectOptions"
+                    placeholder="选择要共享的团队"
+                    searchable
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-primary"
+                    :disabled="shareBusy || !shareSelectedTeamId || !shareTeamSelectOptions.length"
+                    @click="addShare"
+                  >共享</button>
+                </div>
+                <span v-if="!shareTeamSelectOptions.length" class="field-hint">没有可添加的团队（可能已全部共享，或目录为空）</span>
+              </label>
+            </div>
+          </template>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn" @click="closeShareModal">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { dramaAPI, promptsAPI } from '~/composables/useApi'
+import { canvasAPI, dramaAPI, promptsAPI, teamsAPI } from '~/composables/useApi'
 import BaseSelect from '~/components/BaseSelect.vue'
+import { dramaWorkbenchPath } from '~/utils/drama-entry.js'
+import { mediaDisplayUrl } from '~/utils/media-url.js'
 
 const dramas = ref([])
 const loading = ref(false)
+const dramasLoaded = ref(false)
+const DRAMA_LIST_CACHE_KEY = 'project-list-dramas-v2'
 const showCreate = ref(false)
 const form = ref({ title: '', total_episodes: 1, style: '', director_style: 'hongguo_director' })
 const styles = ['realistic', 'anime', 'ghibli', 'cinematic', 'comic', 'watercolor']
@@ -179,15 +275,109 @@ const selectedDirectorDesc = computed(() =>
   directorStyles.value.find(s => s.id === form.value.director_style)?.description || '',
 )
 
+const shareTarget = ref(null)
+const shareTeams = ref([])
+const shareOwnerTeamId = ref(null)
+const shareOwnerTeamName = ref('')
+const shareDirectory = ref([])
+const shareSelectedTeamId = ref(null)
+const shareLoading = ref(false)
+const shareBusy = ref(false)
+
+const shareTeamSelectOptions = computed(() => {
+  const sharedIds = new Set(shareTeams.value.map(t => Number(t.team_id)))
+  const ownerId = Number(shareOwnerTeamId.value || 0)
+  return shareDirectory.value
+    .filter(t => {
+      const id = Number(t.id)
+      if (!id || id === ownerId) return false
+      return !sharedIds.has(id)
+    })
+    .map(t => ({ label: t.name, value: t.id }))
+})
+
+function restoreDramasCache() {
+  try {
+    const raw = sessionStorage.getItem(DRAMA_LIST_CACHE_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.items) || !parsed.items.length) return false
+    dramas.value = parsed.items
+    dramasLoaded.value = true
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistDramasCache() {
+  try {
+    sessionStorage.setItem(DRAMA_LIST_CACHE_KEY, JSON.stringify({
+      items: dramas.value,
+      savedAt: Date.now(),
+    }))
+  } catch {
+    // ignore
+  }
+}
+
+async function refreshDramasInBackground() {
+  try {
+    const res = await dramaAPI.list({ pageSize: 200 })
+    dramas.value = res.items || []
+    dramasLoaded.value = true
+    persistDramasCache()
+  } catch {
+    // keep cached list
+  }
+}
+
 async function load() {
+  if (dramasLoaded.value) {
+    void refreshDramasInBackground()
+    return
+  }
+  const fromCache = restoreDramasCache()
+  if (fromCache) loading.value = false
+  else loading.value = true
+  try {
+    const res = await dramaAPI.list({ pageSize: 200 })
+    dramas.value = res.items || []
+    dramasLoaded.value = true
+    persistDramasCache()
+  } catch (e) {
+    if (!fromCache) toast.error(e.message)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function reloadList() {
   loading.value = true
   try {
-    const res = await dramaAPI.list()
+    const res = await dramaAPI.list({ pageSize: 200 })
     dramas.value = res.items || []
+    dramasLoaded.value = true
+    persistDramasCache()
   } catch (e) {
     toast.error(e.message)
   } finally {
     loading.value = false
+  }
+}
+
+function openDrama(d) {
+  if (!d?.id) return
+  navigateTo(dramaWorkbenchPath(d.id, d.episodes))
+}
+
+async function openDramaCanvas(d) {
+  if (!d?.id) return
+  try {
+    const board = await canvasAPI.byDrama(d.id)
+    navigateTo(`/canvas/${board.id}`)
+  } catch (e) {
+    toast.error(e.message || '打开画布失败')
   }
 }
 
@@ -196,7 +386,7 @@ async function create() {
   try {
     const d = await dramaAPI.create(form.value)
     showCreate.value = false
-    navigateTo(`/drama/${d.id}`)
+    navigateTo(dramaWorkbenchPath(d.id, d.episodes))
   } catch (e) {
     toast.error(e.message)
   }
@@ -208,7 +398,7 @@ async function delDrama(d) {
   try {
     await dramaAPI.del(d.id)
     toast.success('已删除')
-    load()
+    reloadList()
   } catch (e) {
     toast.error(e.message)
   }
@@ -223,10 +413,103 @@ async function archiveDrama(d) {
   try {
     await dramaAPI.archive(d.id)
     toast.success('已归档')
-    load()
+    reloadList()
   } catch (e) {
     toast.error(e.message)
   }
+}
+
+function syncShareTeamsToList(dramaId, teams) {
+  const idx = dramas.value.findIndex(item => item.id === dramaId)
+  if (idx < 0) return
+  dramas.value[idx] = {
+    ...dramas.value[idx],
+    shared_teams: teams,
+  }
+  persistDramasCache()
+}
+
+async function openShareModal(d) {
+  shareTarget.value = d
+  shareTeams.value = Array.isArray(d.shared_teams) ? [...d.shared_teams] : []
+  shareOwnerTeamId.value = d.team_id ?? d.teamId ?? null
+  shareOwnerTeamName.value = d.owner_team_name || ''
+  shareSelectedTeamId.value = null
+  shareLoading.value = true
+  try {
+    const [shareRes, dirRes] = await Promise.all([
+      dramaAPI.shares(d.id),
+      teamsAPI.directory().catch((err) => {
+        throw new Error(err?.message || '无权查看团队目录（需归属团队管理员）')
+      }),
+    ])
+    if (!shareRes?.can_manage) {
+      toast.error('仅归属团队管理员可管理共享')
+      closeShareModal()
+      return
+    }
+    shareTeams.value = shareRes.shared_teams || []
+    shareOwnerTeamId.value = shareRes.owner_team_id ?? shareOwnerTeamId.value
+    shareOwnerTeamName.value = shareRes.owner_team_name || shareOwnerTeamName.value
+    shareDirectory.value = dirRes?.items || []
+    syncShareTeamsToList(d.id, shareTeams.value)
+  } catch (e) {
+    toast.error(e?.message || '加载共享信息失败')
+    closeShareModal()
+  } finally {
+    shareLoading.value = false
+  }
+}
+
+function closeShareModal() {
+  shareTarget.value = null
+  shareTeams.value = []
+  shareOwnerTeamId.value = null
+  shareOwnerTeamName.value = ''
+  shareSelectedTeamId.value = null
+  shareBusy.value = false
+}
+
+async function addShare() {
+  const drama = shareTarget.value
+  const teamId = Number(shareSelectedTeamId.value)
+  if (!drama?.id || !teamId) return
+  shareBusy.value = true
+  try {
+    const res = await dramaAPI.addShare(drama.id, teamId)
+    shareTeams.value = res?.shared_teams || shareTeams.value
+    shareSelectedTeamId.value = null
+    syncShareTeamsToList(drama.id, shareTeams.value)
+    toast.success('已共享')
+  } catch (e) {
+    toast.error(e?.message || '共享失败')
+  } finally {
+    shareBusy.value = false
+  }
+}
+
+async function removeShare(t) {
+  const drama = shareTarget.value
+  const teamId = Number(t?.team_id)
+  if (!drama?.id || !teamId) return
+  if (!confirm(`取消对「${t.team_name || `#${teamId}`}」的共享？`)) return
+  shareBusy.value = true
+  try {
+    const res = await dramaAPI.removeShare(drama.id, teamId)
+    shareTeams.value = res?.shared_teams || shareTeams.value.filter(item => Number(item.team_id) !== teamId)
+    syncShareTeamsToList(drama.id, shareTeams.value)
+    toast.success('已取消共享')
+  } catch (e) {
+    toast.error(e?.message || '取消共享失败')
+  } finally {
+    shareBusy.value = false
+  }
+}
+
+function coverSrc(d) {
+  const covers = d?.covers || {}
+  const raw = covers['3:4'] || d?.cover_3_4 || d?.cover_url || d?.thumbnail || ''
+  return mediaDisplayUrl(raw) || ''
 }
 
 function fmtDate(s) {
@@ -242,9 +525,8 @@ function fmtDate(s) {
 }
 
 function getProgress(d) {
-  // Rough progress based on episodes with scripts
   if (!d.episodes?.length) return 0
-  const scripted = d.episodes.filter(e => e.script_content || e.scriptContent).length
+  const scripted = d.episodes.filter(e => e.script_content || e.scriptContent || e.has_script).length
   return Math.round((scripted / d.episodes.length) * 100)
 }
 
@@ -293,11 +575,11 @@ onMounted(() => {
 }
 .page-desc { font-size: 13px; color: var(--text-3); font-weight: 400; }
 
-/* Grid */
+/* Grid：与画布一致，竖版 3:4 封面卡片 */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 22px 16px;
 }
 
 /* Project Card */
@@ -309,53 +591,80 @@ onMounted(() => {
   overflow: hidden;
   animation: fadeUp 0.4s var(--ease-out) both;
   transition: transform 0.22s var(--ease-out), box-shadow 0.22s var(--ease-out), border-color 0.2s;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 .project-card:hover {
-  border-color: var(--accent);
-  box-shadow: var(--shadow-lg);
+  border-color: transparent;
+  box-shadow: none;
   transform: translateY(-3px);
 }
 
-/* Film strip decoration */
-.card-film-strip {
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  padding: 6px 16px;
+.project-cover {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 12px;
+  overflow: hidden;
   background: var(--bg-2);
-  border-bottom: 1px solid var(--border);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(15, 23, 42, 0.08));
 }
-.film-hole {
-  width: 10px; height: 8px;
-  background: var(--bg-3);
-  border-radius: 2px;
-  transition: background 0.2s;
+.project-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  display: block;
 }
-.project-card:hover .film-hole:nth-child(2) { background: var(--accent); }
-.project-card:hover .film-hole:nth-child(4) { background: var(--accent); opacity: 0.5; }
+.project-cover-placeholder {
+  width: 100%;
+  height: 100%;
+  background:
+    linear-gradient(165deg, var(--bg-2) 0%, var(--bg-3) 48%, var(--bg-2) 100%);
+}
+.cover-top {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 84px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
 
-.card-body { padding: 18px 18px 14px; flex: 1; display: flex; flex-direction: column; gap: 10px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
+.card-body { padding: 10px 2px 0; flex: 1; display: flex; flex-direction: column; gap: 8px; }
 .episode-badge {
   display: flex; align-items: center; gap: 5px;
-  font-size: 11px; font-weight: 600;
-  color: var(--text-3);
+  font-size: 11px; font-weight: 700;
+  color: #fff;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
 }
-.episode-badge svg { color: var(--accent); }
+.episode-badge svg { color: #fff; }
 
 .card-delete { opacity: 0; transition: opacity 0.15s; }
 .card-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 2px;
-  margin-left: auto;
+  padding: 2px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
   opacity: 0;
   transition: opacity 0.15s;
 }
-.card-action { color: var(--text-3); }
-.card-action:hover { color: var(--text-1); }
+.card-action { color: var(--text-2); }
+.card-action:hover { color: var(--text-0); }
 .card-delete:hover { color: var(--error); }
 .project-card:hover .card-actions { opacity: 1; }
 .project-card:hover .card-delete { opacity: 1; }
@@ -373,7 +682,15 @@ onMounted(() => {
 }
 .share-badge {
   font-size: 10px;
-  padding: 2px 7px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(64, 120, 255, 0.85);
+  border: none;
+}
+.share-owned-badge {
+  color: #fff;
+  background: rgba(14, 165, 233, 0.85);
 }
 
 .project-meta {
@@ -397,8 +714,8 @@ onMounted(() => {
 }
 
 .card-footer {
-  padding: 10px 18px 14px;
-  border-top: 1px solid var(--border);
+  padding: 8px 2px 0;
+  border-top: none;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -434,11 +751,12 @@ onMounted(() => {
 /* Loading Skeleton */
 .loading-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 22px 16px;
 }
 .skeleton-card {
-  height: 180px;
+  aspect-ratio: 3 / 4;
+  border-radius: 12px;
   background: linear-gradient(90deg, var(--bg-2) 25%, var(--bg-hover) 50%, var(--bg-2) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -448,12 +766,14 @@ onMounted(() => {
 
 /* Empty Card */
 .empty-card {
+  grid-column: 1 / -1;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 10px; padding: 56px 32px;
   cursor: pointer;
   border-style: dashed; border-width: 1.5px;
   text-align: center;
   transition: all 0.2s var(--ease-out);
+  background: var(--bg-1);
 }
 .empty-card:hover {
   border-color: var(--accent);
@@ -490,4 +810,51 @@ onMounted(() => {
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field-hint { font-size: 11px; color: var(--text-3); line-height: 1.5; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 6px; }
+
+.share-modal { width: min(520px, calc(100vw - 32px)); }
+.share-body { display: flex; flex-direction: column; gap: 18px; margin-bottom: 8px; }
+.share-section { display: flex; flex-direction: column; gap: 8px; }
+.share-empty { font-size: 13px; padding: 10px 0; }
+.share-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.share-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+.share-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.share-team-name { font-size: 13px; font-weight: 600; color: var(--text-0); }
+.share-meta { font-size: 11px; }
+.share-remove { color: var(--text-3); flex-shrink: 0; }
+.share-remove:hover { color: var(--error); }
+.share-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.share-select { flex: 1; min-width: 0; }
+
+@media (max-width: 720px) {
+  .grid, .loading-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 10px; }
+}
+@media (min-width: 900px) {
+  .grid, .loading-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+}
+@media (min-width: 1280px) {
+  .grid, .loading-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+}
+@media (min-width: 1600px) {
+  .grid, .loading-grid { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+}
 </style>

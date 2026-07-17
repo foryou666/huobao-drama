@@ -34,6 +34,14 @@ export function referenceUploadObjectKey(localPath: string): string {
   return globalPrefix ? `${globalPrefix}/${joined}` : joined
 }
 
+/** 去字幕成品：tool/subtitle-removed/{文件名} */
+export function subtitleRemovedObjectKey(localPath: string): string {
+  const basename = path.basename(normalizeStaticPath(localPath))
+  const globalPrefix = ossKeyPrefix()
+  const joined = `tool/subtitle-removed/${basename}`
+  return globalPrefix ? `${globalPrefix}/${joined}` : joined
+}
+
 function getStoryboardDramaId(storyboardId: number): number | null {
   const [sb] = db.select({ episodeId: schema.storyboards.episodeId })
     .from(schema.storyboards)

@@ -3,10 +3,10 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">视频转绘</h1>
-        <p class="studio-desc">
-          上传原片（≤5 分钟）→ 分析切镜与台词 → 单独生成角色三视图 / 场景 / 道具 → 分段 Prompt → 通道1 重画 → 拼接成片。
-          中间每一步可暂停修改。
-        </p>
+        <StudioGuideButton
+          title="视频转绘说明"
+          text="上传原片（≤5 分钟）→ 分析切镜与台词 → 单独生成角色三视图 / 场景 / 道具 → 分段 Prompt → 通道1 重画 → 拼接成片。中间每一步可暂停修改。"
+        />
       </div>
       <div class="studio-header-actions">
         <button type="button" class="btn btn-sm" :disabled="loading" @click="reload">
@@ -174,31 +174,34 @@ onMounted(reload)
 
 .studio-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px 12px;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.studio-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
 .studio-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
-}
-
-.studio-desc {
-  margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--text-1);
-  max-width: 720px;
-  line-height: 1.55;
+  white-space: nowrap;
 }
 
 .studio-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  align-items: center;
   flex-shrink: 0;
 }
 

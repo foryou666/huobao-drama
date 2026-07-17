@@ -1,7 +1,8 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction, isVideoCreditAction, applyMinUserVideoCreditCost } from '../constants/credit-actions.js'
-import { AISTARSLAB_DEFAULT_CREDIT_COST } from '../constants/aistarslab.js'
+import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction, isVideoCreditAction, applyMinUserVideoCreditCost, CHENGMENG_SEEDANCE_2_0_CREDIT_COST } from '../constants/credit-actions.js'
+import { AISTARSLAB_DEFAULT_CREDIT_COST, isAistarslabPerModelCreditAction } from '../constants/aistarslab.js'
+import { CHENGMENG_MODEL_70_CREDIT_COST, isChengmengDynamicCreditAction } from '../constants/chengmeng.js'
 import { now } from '../utils/response.js'
 import { getAppMeta, setAppMeta } from '../db/index.js'
 
@@ -12,6 +13,114 @@ const JIMENG_PER_MODEL_PRICING_KEY = 'credit_pricing_jimeng_per_model_v1'
 const AISTARSLAB_PRICING_FLAT_FIX_KEY = 'credit_pricing_aistarslab_flat_fix_v1'
 const AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY = 'credit_pricing_aistarslab_ref_video_v1'
 const MIN_VIDEO_CREDIT_FLOOR_KEY = 'credit_pricing_min_video_750_v1'
+const XYQ_PRICING_KEY = 'credit_pricing_xyq_300_500_750_900_v1'
+
+const IMAGE_12_PRICING_KEY = 'credit_pricing_image_12_v1'
+const NANO_BANANA_2_PRICING_KEY = 'credit_pricing_nano_banana_19_v1'
+const APIMART_IMAGE_PRICING_KEY = 'credit_pricing_apimart_25_v1'
+const APIMART_IMAGE_LABEL_KEY = 'credit_pricing_apimart_label_v2'
+const APIMART_IMAGE_RESOLUTION_PRICING_KEY = 'credit_pricing_apimart_1k8_2k24_v2'
+const RESTORE_VIDEO_AFTER_FLAT12_KEY = 'credit_pricing_restore_video_after_flat12_v1'
+
+const IMAGE_CREDIT_ACTIONS: CreditAction[] = [
+  CREDIT_ACTIONS.IMAGE_GENERATE,
+  CREDIT_ACTIONS.CHARACTER_IMAGE,
+  CREDIT_ACTIONS.CHARACTER_TRANSFORM,
+  CREDIT_ACTIONS.CHARACTER_OUTFIT,
+  CREDIT_ACTIONS.SCENE_IMAGE,
+  CREDIT_ACTIONS.GRID_GENERATE,
+  CREDIT_ACTIONS.STORYBOARD_BLOCKING,
+]
+
+/** 图片类收费项统一为 12 积分/张（一次性） */
+export function applyImage12CreditPricingMigration() {
+  if (getAppMeta(IMAGE_12_PRICING_KEY)) return
+  for (const action of IMAGE_CREDIT_ACTIONS) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    updateCreditPricing(action, 12, def?.label, def?.description)
+  }
+  setAppMeta(IMAGE_12_PRICING_KEY, now())
+}
+
+/** nano-banana-2 图片定价 19 积分/张（一次性） */
+export function applyNanoBanana2CreditPricingMigration() {
+  if (getAppMeta(NANO_BANANA_2_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.IMAGE_GENERATE_NANO_BANANA_2)
+  if (def) {
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(NANO_BANANA_2_PRICING_KEY, now())
+}
+
+/** APIMart 图片通道定价 25 积分/张（一次性） */
+export function applyApimartImageCreditPricingMigration() {
+  if (getAppMeta(APIMART_IMAGE_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.IMAGE_GENERATE_APIMART)
+  if (def) {
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(APIMART_IMAGE_PRICING_KEY, now())
+}
+
+/** Image 2：1K=8 / 2K=24 积分（一次性写入分项定价） */
+export function applyApimartImageResolutionPricingMigration() {
+  if (getAppMeta(APIMART_IMAGE_RESOLUTION_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.IMAGE_GENERATE_APIMART,
+    CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_1K,
+    CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_2K,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(APIMART_IMAGE_RESOLUTION_PRICING_KEY, now())
+}
+
+/** 积分明细展示：隐藏上游名称，统一为「图片生成」 */
+export function migrateApimartPricingDisplayLabel() {
+  if (getAppMeta(APIMART_IMAGE_LABEL_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.IMAGE_GENERATE_APIMART)
+  if (!def) return
+  const [row] = db.select().from(schema.creditPricing)
+    .where(eq(schema.creditPricing.action, CREDIT_ACTIONS.IMAGE_GENERATE_APIMART))
+    .all()
+  if (row) {
+    updateCreditPricing(def.action, row.cost ?? def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(APIMART_IMAGE_LABEL_KEY, now())
+}
+
+/** 误将视频也改为 12 积分后，按默认值恢复视频定价（一次性） */
+export function restoreVideoCreditPricingAfterFlat12() {
+  if (getAppMeta(RESTORE_VIDEO_AFTER_FLAT12_KEY)) return
+  const defaultMap = new Map(DEFAULT_CREDIT_PRICING.map(item => [item.action, item]))
+  const rows = db.select().from(schema.creditPricing).all()
+  for (const row of rows) {
+    if (!isVideoCreditAction(row.action)) continue
+    const def = defaultMap.get(row.action as CreditAction)
+    if (def && def.defaultCost > 0) {
+      updateCreditPricing(row.action, def.defaultCost, def.label, def.description)
+      continue
+    }
+    if ((row.cost ?? 0) !== 12) continue
+    if (isAistarslabPerModelCreditAction(row.action)) {
+      updateCreditPricing(row.action, AISTARSLAB_DEFAULT_CREDIT_COST, row.label ?? undefined, row.description ?? undefined)
+      continue
+    }
+    if (isChengmengDynamicCreditAction(row.action)) {
+      const cost = row.action === CREDIT_ACTIONS.VIDEO_GENERATE_CHENGMENG_SEEDANCE_2_0
+        || row.action === 'video.generate.chengmeng.77'
+        || row.action === 'video.generate.chengmeng.49'
+        || row.action === 'video.generate.chengmeng.32'
+        ? CHENGMENG_SEEDANCE_2_0_CREDIT_COST
+        : CHENGMENG_MODEL_70_CREDIT_COST
+      updateCreditPricing(row.action, cost, row.label ?? undefined, row.description ?? undefined)
+    }
+  }
+  setAppMeta(RESTORE_VIDEO_AFTER_FLAT12_KEY, now())
+}
 
 /** 将库内已有视频定价项抬升到最低 750（一次性迁移 + 后续由 updateCreditPricing 保底） */
 export function clampVideoCreditPricingToMinimum() {
@@ -26,6 +135,23 @@ export function clampVideoCreditPricingToMinimum() {
     }
   }
   setAppMeta(MIN_VIDEO_CREDIT_FLOOR_KEY, now())
+}
+
+/** S通道5：四档本站按条定价 300 / 500 / 750 / 900（一次性写入） */
+export function applyXyqCreditPricingMigration() {
+  if (getAppMeta(XYQ_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_MINI_TRIAL,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_MINI,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(XYQ_PRICING_KEY, now())
 }
 
 /** 从旧即梦统一定价项复制单价到分项模型定价 */

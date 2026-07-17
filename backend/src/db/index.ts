@@ -472,6 +472,96 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_video_repaint_segments_job_id ON video_repaint_segments (job_id);
 
+  CREATE TABLE IF NOT EXISTS narration_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    novel_text TEXT,
+    drama_id INTEGER,
+    episode_id INTEGER,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'draft',
+    stage TEXT NOT NULL DEFAULT 'upload',
+    analysis_json TEXT,
+    narrator_voice TEXT,
+    tts_config_id INTEGER,
+    grok_model TEXT DEFAULT 'grok-video-3-pro',
+    aspect_ratio TEXT DEFAULT '9:16',
+    jianying_draft_path TEXT,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_narration_jobs_user_id ON narration_jobs (user_id);
+  CREATE INDEX IF NOT EXISTS idx_narration_jobs_team_id ON narration_jobs (team_id);
+
+  CREATE TABLE IF NOT EXISTS narration_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL,
+    segment_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    tts_audio_path TEXT,
+    tts_duration_sec REAL,
+    video_prompt TEXT,
+    content_refs TEXT,
+    scene_id TEXT,
+    character_ids TEXT,
+    prop_ids TEXT,
+    video_generation_id INTEGER,
+    video_path TEXT,
+    video_duration_sec REAL,
+    status TEXT DEFAULT 'draft',
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_narration_segments_job_id ON narration_segments (job_id);
+
+  CREATE TABLE IF NOT EXISTS tts_generations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    drama_id INTEGER,
+    text TEXT NOT NULL,
+    voice_asset_id INTEGER,
+    voice_path TEXT,
+    voice_preset_id TEXT,
+    voice_name TEXT,
+    emotion_mode TEXT DEFAULT 'same',
+    emotion_text TEXT,
+    emotion_vector TEXT,
+    emotion_weight REAL,
+    audio_path TEXT,
+    duration_sec REAL,
+    status TEXT DEFAULT 'completed',
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_tts_generations_user_id ON tts_generations (user_id);
+  CREATE INDEX IF NOT EXISTS idx_tts_generations_team_id ON tts_generations (team_id);
+
+  CREATE TABLE IF NOT EXISTS subtitle_removal_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'uploaded',
+    source_video_path TEXT,
+    output_video_path TEXT,
+    remote_job_id TEXT,
+    inpaint_mode TEXT DEFAULT 'sttn-auto',
+    subtitle_areas_json TEXT,
+    progress INTEGER DEFAULT 0,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_subtitle_removal_jobs_user_id ON subtitle_removal_jobs (user_id);
+  CREATE INDEX IF NOT EXISTS idx_subtitle_removal_jobs_team_id ON subtitle_removal_jobs (team_id);
+
   CREATE TABLE IF NOT EXISTS shot_clip_plans (
     storyboard_id INTEGER NOT NULL,
     shot_plan_id INTEGER NOT NULL,
@@ -483,9 +573,12 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_shot_clip_plans_shot_plan_id ON shot_clip_plans (shot_plan_id);
 `)
 ensureColumn('assets', 'source_type', 'TEXT')
+ensureColumn('narration_segments', 'tts_voice', 'TEXT')
 ensureColumn('assets', 'source_id', 'INTEGER')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')
 ensureColumn('image_generations', 'credit_transaction_id', 'INTEGER')
+ensureColumn('image_generations', 'is_pinned', 'INTEGER DEFAULT 0')
+ensureColumn('image_generations', 'pinned_at', 'TEXT')
 ensureColumn('video_generations', 'credit_transaction_id', 'INTEGER')
 ensureColumn('video_generations', 'user_id', 'INTEGER')
 ensureColumn('video_generations', 'config_id', 'INTEGER')
@@ -649,8 +742,64 @@ sqlite.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_payment_orders_user_id ON payment_orders(user_id);
   CREATE INDEX IF NOT EXISTS idx_payment_orders_status ON payment_orders(status);
+
+  CREATE TABLE IF NOT EXISTS canvas_boards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    drama_id INTEGER NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    team_id INTEGER,
+    created_by INTEGER NOT NULL,
+    focus_episode_id INTEGER,
+    viewport_json TEXT,
+    thumbnail TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_canvas_boards_team_id ON canvas_boards(team_id);
+  CREATE INDEX IF NOT EXISTS idx_canvas_boards_deleted_at ON canvas_boards(deleted_at);
+
+  CREATE TABLE IF NOT EXISTS canvas_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL,
+    node_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ref_type TEXT,
+    ref_id INTEGER,
+    x REAL NOT NULL DEFAULT 0,
+    y REAL NOT NULL DEFAULT 0,
+    w REAL NOT NULL DEFAULT 200,
+    h REAL NOT NULL DEFAULT 120,
+    z_index INTEGER NOT NULL DEFAULT 0,
+    layout_json TEXT,
+    content_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    UNIQUE(board_id, node_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_canvas_nodes_board_id ON canvas_nodes(board_id);
+  CREATE INDEX IF NOT EXISTS idx_canvas_nodes_ref ON canvas_nodes(ref_type, ref_id);
+
+  CREATE TABLE IF NOT EXISTS canvas_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    board_id INTEGER NOT NULL,
+    edge_key TEXT NOT NULL,
+    from_node_key TEXT NOT NULL,
+    to_node_key TEXT NOT NULL,
+    edge_type TEXT NOT NULL DEFAULT 'link',
+    layout_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(board_id, edge_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_canvas_edges_board_id ON canvas_edges(board_id);
 `)
 
+ensureColumn('canvas_boards', 'focus_episode_id', 'INTEGER')
 ensureColumn('users', 'credits_balance', 'INTEGER DEFAULT 10000')
 
 function seedDefaultAdmin() {

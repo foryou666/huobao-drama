@@ -15,6 +15,7 @@ import characters from './routes/characters.js'
 import images from './routes/images.js'
 import videos from './routes/videos.js'
 import jimeng from './routes/jimeng.js'
+import xyq from './routes/xyq.js'
 import doubaoTraining from './routes/doubao-training.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders } from './routes/aiConfigs.js'
@@ -40,10 +41,15 @@ import media from './routes/media.js'
 import teams from './routes/teams.js'
 import payments from './routes/payments.js'
 import repaint from './routes/repaint.js'
-import { applyCreditPricingDefaultsIfNeeded, clampVideoCreditPricingToMinimum } from './services/credits.js'
+import narration from './routes/narration.js'
+import tts from './routes/tts.js'
+import subtitleRemover from './routes/subtitle-remover.js'
+import canvas from './routes/canvas.js'
+import { applyCreditPricingDefaultsIfNeeded, clampVideoCreditPricingToMinimum, applyXyqCreditPricingMigration, applyImage12CreditPricingMigration, applyNanoBanana2CreditPricingMigration, applyApimartImageCreditPricingMigration, applyApimartImageResolutionPricingMigration, migrateApimartPricingDisplayLabel, restoreVideoCreditPricingAfterFlat12 } from './services/credits.js'
 import { migrateDefaultTeamIfNeeded } from './services/teams.js'
 import { migrateChengmengBaseUrlIfNeeded, migrateChengmengApiKeyIfNeeded, migrateChengmengModelIdsIfNeeded } from './services/chengmeng-migrate.js'
 import { resumeProcessingVideoTasks } from './services/video-generation.js'
+import { resumeProcessingImageTasks } from './services/image-generation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -100,9 +106,14 @@ api.route('/assets', assets)
 api.route('/media', media)
 api.route('/images', images)
 api.route('/jimeng', jimeng)
+api.route('/xyq', xyq)
 api.route('/doubao-training', doubaoTraining)
 api.route('/videos', videos)
 api.route('/repaint', repaint)
+api.route('/narration', narration)
+api.route('/tts', tts)
+api.route('/subtitle-remover', subtitleRemover)
+api.route('/canvas', canvas)
 api.route('/upload', upload)
 api.route('/ai-configs', aiConfigs)
 api.route('/ai-providers', aiProviders)
@@ -132,12 +143,20 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 const port = Number(process.env.PORT || 5679)
 const host = process.env.HOST || '0.0.0.0'
 applyCreditPricingDefaultsIfNeeded()
+applyImage12CreditPricingMigration()
+applyNanoBanana2CreditPricingMigration()
+applyApimartImageCreditPricingMigration()
+applyApimartImageResolutionPricingMigration()
+migrateApimartPricingDisplayLabel()
+restoreVideoCreditPricingAfterFlat12()
 clampVideoCreditPricingToMinimum()
+applyXyqCreditPricingMigration()
 migrateDefaultTeamIfNeeded()
 migrateChengmengBaseUrlIfNeeded()
 migrateChengmengModelIdsIfNeeded()
 migrateChengmengApiKeyIfNeeded()
 resumeProcessingVideoTasks()
+resumeProcessingImageTasks()
 
 function getLanAddresses() {
   const addrs: string[] = []

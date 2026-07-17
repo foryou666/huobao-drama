@@ -37,8 +37,10 @@ export function isUpstreamBalanceOrPriceLeak(message) {
 }
 
 export function sanitizeUserFacingProviderError(message) {
-  const text = String(message || '').trim()
+  let text = String(message || '').trim()
   if (!text) return text
   if (isUpstreamBalanceOrPriceLeak(text)) return UPSTREAM_BALANCE_SHORTAGE_USER_MESSAGE
+  // 对外统一用导航名，不暴露上游品牌
+  text = text.replace(/小云雀/g, 'S通道5')
   return text
 }

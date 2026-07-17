@@ -266,17 +266,35 @@ export function listCharacterOutfitPreviews(char) {
   }))
 }
 
+export function resolveCharacterCoverUrl(media) {
+  if (!media) return null
+  const explicit = normalizePath(media.cover_url || media.coverUrl || '')
+  if (explicit) return explicit
+  const primary = normalizePath(media.primary_url || media.primaryUrl || '')
+  if (primary) return primary
+  const previews = media.preview_images || media.previewImages || []
+  const previewUrl = normalizePath(previews[0]?.url || '')
+  if (previewUrl) return previewUrl
+  const outfits = media.outfit_previews || media.outfitPreviews || []
+  for (const outfit of outfits) {
+    const url = normalizePath(outfit?.url || '')
+    if (url) return url
+  }
+  return null
+}
+
 export function summarizeCharacterMedia(char) {
   const outfits = listCharacterOutfits(char)
   const images = listCharacterImages(char)
   const primaryUrl = normalizePath(char?.image_url || char?.imageUrl || char?.local_path || char?.localPath || '') || null
-  return {
+  const outfitPreviews = listCharacterOutfitPreviews(char)
+  const summary = {
     outfit_count: outfits.length,
     candidate_count: outfits.reduce((sum, outfit) => sum + (outfit.candidates?.length || 0), 0),
     transform_count: images.filter(item => item.variant && item.variant !== 'primary').length,
     image_count: images.length,
     primary_url: primaryUrl,
-    outfit_previews: listCharacterOutfitPreviews(char),
+    outfit_previews: outfitPreviews,
     // 与 listCharacterOutfitPreviews 相同；供资产库直接读取
     preview_images: images.map(item => ({
       url: item.url,
@@ -289,6 +307,8 @@ export function summarizeCharacterMedia(char) {
       variant: item.variant,
     })),
   }
+  summary.cover_url = resolveCharacterCoverUrl(summary)
+  return summary
 }
 
 export function characterCoverBadgeText(char) {

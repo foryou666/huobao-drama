@@ -1,8 +1,11 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
-import { getActiveConfig, getConfigById } from './ai.js'
+import { getActiveConfig, getConfigById, getGeeknowImageFallbackConfig, resolveImageTaskConfig } from './ai.js'
+import { resolveImageGenerationConfig } from '../utils/image-config-routing.js'
+import { resolveGeeknowImageModel } from '../constants/geeknow-image.js'
 import { now } from '../utils/response.js'
 import { downloadFile, readImageAsCompressedDataUrl, saveBase64Image } from '../utils/storage.js'
+import { ensureThumbnail } from '../utils/thumbnail.js'
 import { getImageAdapter } from './adapters/registry'
 import type { AIConfig } from './adapters/types'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess, logTaskWarn, redactUrl } from '../utils/task-logger.js'
@@ -12,6 +15,7 @@ import { syncCharacterAsset, syncSceneAsset } from './asset-library.js'
 import { upsertSceneAngleImage } from '../utils/scene-image-variants.js'
 import { formatProviderError } from '../utils/format-provider-error.js'
 import { failImageGeneration } from '../utils/generation-failure.js'
+import { fetchImageProviderRequest } from '../utils/image-provider-fetch.js'
 import { getMaxImageReferenceCount } from '../utils/image-reference-limits.js'
 import {
   trySyncCharacterImageAfterGeneration,
@@ -80,6 +84,8 @@ interface GenerateImageParams {
   prompt: string
   model?: string
   size?: string
+  /** APIMart 等：1k / 2k / 4k，写入 quality 字段 */
+  resolution?: string
   referenceImages?: string[]
   frameType?: string
   imageType?: string
@@ -90,9 +96,10 @@ interface GenerateImageParams {
 
 export async function generateImage(params: GenerateImageParams): Promise<number> {
   const ts = now()
-  const config = (params.configId ? getConfigById(params.configId) : null)
-    || getActiveConfig('image')
-  if (!config) throw new Error('No active image AI config')
+  const config = resolveImageGenerationConfig({
+    configId: params.configId,
+    model: params.model,
+  })
 
   const size = await resolveGenerationImageSize({
     explicitSize: params.size,
@@ -111,6 +118,7 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     model: params.model || config.model,
     provider: config.provider,
     size,
+    quality: params.resolution || null,
     frameType: params.frameType,
     imageType: params.imageType,
     style: params.variantId,
@@ -147,7 +155,72 @@ export async function generateImage(params: GenerateImageParams): Promise<number
   return lastId
 }
 
-async function processImageGeneration(id: number, config: AIConfig) {
+type ImageGenerationOptions = {
+  allowGeeknowFallback?: boolean
+}
+
+const activeImagePolls = new Set<number>()
+
+function startImagePoll(
+  id: number,
+  config: AIConfig,
+  taskId: string,
+  options?: ImageGenerationOptions,
+) {
+  if (activeImagePolls.has(id)) {
+    logTaskWarn('ImageTask', 'poll-skipped', { id, taskId, reason: 'poll already active' })
+    return
+  }
+  activeImagePolls.add(id)
+  pollImageTask(id, config, taskId, options)
+    .catch(err => logTaskError('ImageTask', 'poll', { id, taskId, error: err.message }))
+    .finally(() => activeImagePolls.delete(id))
+}
+
+async function tryGeeknowImageFallback(
+  id: number,
+  config: AIConfig,
+  error: string,
+  options?: ImageGenerationOptions,
+): Promise<boolean> {
+  if (options?.allowGeeknowFallback === false) return false
+  if (config.provider.toLowerCase() === 'geeknow') return false
+
+  const fallback = getGeeknowImageFallbackConfig(config.provider)
+  if (!fallback) return false
+
+  const [record] = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
+  if (!record || record.status === 'completed' || record.status === 'failed') return false
+
+  const fallbackModel = resolveGeeknowImageModel(fallback)
+  logTaskWarn('ImageTask', 'geeknow-fallback', {
+    id,
+    fromProvider: config.provider,
+    fromModel: record.model,
+    toProvider: fallback.provider,
+    toModel: fallbackModel,
+    error,
+  })
+
+  db.update(schema.imageGenerations)
+    .set({
+      provider: fallback.provider,
+      model: fallbackModel,
+      status: 'processing',
+      taskId: null,
+      errorMsg: '',
+      updatedAt: now(),
+    })
+    .where(eq(schema.imageGenerations.id, id))
+    .run()
+
+  processImageGeneration(id, fallback, { allowGeeknowFallback: false }).catch(err => {
+    logTaskError('ImageTask', 'geeknow-fallback-process', { id, error: err.message })
+  })
+  return true
+}
+
+async function processImageGeneration(id: number, config: AIConfig, options?: ImageGenerationOptions) {
   const adapter = getImageAdapter(config.provider)
 
   try {
@@ -166,14 +239,21 @@ async function processImageGeneration(id: number, config: AIConfig) {
     // 使用 Adapter 构建请求
     const maxRefs = getMaxImageReferenceCount(config)
     const resolvedReferenceImages = await normalizeReferenceImages(record.referenceImages, maxRefs)
-    const { url, method, headers, body } = adapter.buildGenerateRequest(config, {
+    const recordPayload = {
       id: record.id,
       model: record.model,
       prompt: record.prompt,
       size: record.size,
       frameType: record.frameType,
       referenceImages: resolvedReferenceImages ? JSON.stringify(resolvedReferenceImages) : null,
+    }
+    const { config: activeConfig, request, result } = await fetchImageProviderRequest({
+      config,
+      taskId: id,
+      logLabel: 'apimart-generate-retry',
+      buildRequest: (cfg) => adapter.buildGenerateRequest(cfg, recordPayload),
     })
+    const { url, method, headers, body } = request
     logTaskProgress('ImageTask', 'request', {
       id,
       provider: config.provider,
@@ -189,19 +269,6 @@ async function processImageGeneration(id: number, config: AIConfig) {
       headers,
       body: body instanceof FormData ? '[FormData]' : body,
     })
-
-    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData
-    const resp = await fetch(url, {
-      method,
-      headers: isFormData
-        ? { Authorization: headers.Authorization || headers.authorization || '' }
-        : headers,
-      body: isFormData ? body : JSON.stringify(body),
-      signal: AbortSignal.timeout(600_000),
-    })
-
-    if (!resp.ok) throw new Error(`API error ${resp.status}: ${await resp.text()}`)
-    const result = await resp.json() as any
     logTaskPayload('ImageTask', 'response payload', {
       id,
       provider: config.provider,
@@ -234,10 +301,12 @@ async function processImageGeneration(id: number, config: AIConfig) {
       .where(eq(schema.imageGenerations.id, id))
       .run()
     logTaskProgress('ImageTask', 'poll-start', { id, taskId, provider: config.provider })
-    pollImageTask(id, config, taskId!)
+    startImagePoll(id, activeConfig, taskId!, options)
   } catch (err: any) {
-    logTaskError('ImageTask', 'process', { id, provider: config.provider, error: err.message })
-    failImageGeneration(id, formatProviderError(err.message))
+    const message = formatProviderError(err.message)
+    if (await tryGeeknowImageFallback(id, config, message, options)) return
+    logTaskError('ImageTask', 'process', { id, provider: config.provider, error: message })
+    failImageGeneration(id, message)
   }
 }
 
@@ -279,21 +348,25 @@ async function normalizeReferenceImages(raw: string | null | undefined, maxCount
   return normalized.filter((item): item is string => !!item).slice(0, Math.max(0, maxCount))
 }
 
-async function pollImageTask(id: number, config: AIConfig, taskId: string) {
+async function pollImageTask(id: number, config: AIConfig, taskId: string, options?: ImageGenerationOptions) {
   const adapter = getImageAdapter(config.provider)
   const startedAt = Date.now()
   const maxDurationMs = 600_000
 
   for (let i = 0; i < 120; i++) {
     if (Date.now() - startedAt >= maxDurationMs) {
-      logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      failImageGeneration(id, 'Timeout: Polling exceeded 10 minutes')
+      const message = 'Timeout: Polling exceeded 10 minutes'
+      logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: message })
+      if (await tryGeeknowImageFallback(id, config, message, options)) return
+      failImageGeneration(id, message)
       return
     }
     await new Promise(r => setTimeout(r, 5000))
     if (Date.now() - startedAt >= maxDurationMs) {
-      logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: 'Polling exceeded 10 minutes' })
-      failImageGeneration(id, 'Timeout: Polling exceeded 10 minutes')
+      const message = 'Timeout: Polling exceeded 10 minutes'
+      logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: message })
+      if (await tryGeeknowImageFallback(id, config, message, options)) return
+      failImageGeneration(id, message)
       return
     }
     try {
@@ -310,9 +383,19 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
       const resp = await fetch(url, {
         method,
         headers,
-        signal: AbortSignal.timeout(remainingMs),
+        signal: AbortSignal.timeout(Math.min(remainingMs, 60_000)),
       })
-      if (!resp.ok) continue
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '')
+        logTaskWarn('ImageTask', 'poll-http-error', {
+          id,
+          taskId,
+          attempt: i + 1,
+          status: resp.status,
+          error: errText.slice(0, 200),
+        })
+        continue
+      }
       const result = await resp.json() as any
 
       const pollResp = adapter.parsePollResponse(result)
@@ -334,13 +417,16 @@ async function pollImageTask(id: number, config: AIConfig, taskId: string) {
       if (pollResp.status === 'failed') {
         const errMsg = pollResp.error || 'Generation failed'
         logTaskError('ImageTask', 'poll-failed', { id, taskId, error: errMsg })
+        if (await tryGeeknowImageFallback(id, config, errMsg, options)) return
         failImageGeneration(id, errMsg)
         return
       }
     } catch (err: any) {
       if (i === 119 || Date.now() - startedAt >= maxDurationMs) {
+        const message = `Timeout: ${err.message}`
         logTaskError('ImageTask', 'poll-timeout', { id, taskId, error: err.message })
-        failImageGeneration(id, `Timeout: ${err.message}`)
+        if (await tryGeeknowImageFallback(id, config, message, options)) return
+        failImageGeneration(id, message)
         return
       }
       logTaskWarn('ImageTask', 'poll-retry', { id, taskId, attempt: i + 1, error: err.message })
@@ -358,6 +444,7 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
     .where(eq(schema.imageGenerations.id, id))
     .run()
   logTaskSuccess('ImageTask', 'downloaded', { id, provider, localPath })
+  void ensureThumbnail(localPath).catch(() => {})
 
   // 更新关联表
   if (record?.storyboardId) {
@@ -370,10 +457,29 @@ async function handleImageComplete(id: number, provider: string, imageUrl: strin
   }
   if (record?.characterId) applyCharacterImageCompletion(record, localPath)
   applySceneImageCompletion(record, localPath)
+  applyDramaCoverCompletion(record, localPath)
   if (record) {
     await trySyncCharacterImageAfterGeneration(record, localPath)
     await trySyncSceneImageAfterGeneration(record, localPath)
     await trySyncStoryboardImageAfterGeneration(record, localPath)
+  }
+}
+
+function applyDramaCoverCompletion(record: typeof schema.imageGenerations.$inferSelect | undefined, localPath: string) {
+  if (!record?.dramaId) return
+  if (record.imageType !== 'drama_cover') return
+  db.update(schema.dramas)
+    .set({ thumbnail: localPath, updatedAt: now() })
+    .where(eq(schema.dramas.id, record.dramaId))
+    .run()
+  // 同步画布板缩略图（若有）
+  const boards = db.select().from(schema.canvasBoards)
+    .where(eq(schema.canvasBoards.dramaId, record.dramaId)).all()
+  for (const board of boards) {
+    db.update(schema.canvasBoards)
+      .set({ thumbnail: localPath, updatedAt: now() })
+      .where(eq(schema.canvasBoards.id, board.id))
+      .run()
   }
 }
 
@@ -387,6 +493,7 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
     .where(eq(schema.imageGenerations.id, id))
     .run()
   logTaskSuccess('ImageTask', 'saved-base64', { id, provider, mimeType, localPath })
+  void ensureThumbnail(localPath).catch(() => {})
 
   // 更新关联表
   if (record?.storyboardId) {
@@ -399,9 +506,49 @@ async function handleImageCompleteBase64(id: number, provider: string, base64Dat
   }
   if (record?.characterId) applyCharacterImageCompletion(record, localPath)
   applySceneImageCompletion(record, localPath)
+  applyDramaCoverCompletion(record, localPath)
   if (record) {
     await trySyncCharacterImageAfterGeneration(record, localPath)
     await trySyncSceneImageAfterGeneration(record, localPath)
     await trySyncStoryboardImageAfterGeneration(record, localPath)
+  }
+}
+
+/** 服务重启后恢复 processing 任务的轮询（绝不重新 POST 创建） */
+export function resumeProcessingImageTasks() {
+  const rows = db.select()
+    .from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.status, 'processing'))
+    .all()
+
+  for (const row of rows) {
+    if (!row.taskId) {
+      logTaskWarn('ImageTask', 'resume-skipped', {
+        id: row.id,
+        provider: row.provider,
+        reason: 'processing without task_id — mark failed to prevent duplicate upstream charge',
+      })
+      failImageGeneration(
+        row.id,
+        '任务未获得上游 ID（可能服务重启中断）。已停止以免重复扣费，请在前端手动重新提交。',
+      )
+      continue
+    }
+    if (!row.provider) {
+      logTaskWarn('ImageTask', 'resume-skipped', { id: row.id, reason: 'no provider' })
+      continue
+    }
+    const config = resolveImageTaskConfig(row)
+    if (!config) {
+      logTaskWarn('ImageTask', 'resume-skipped', { id: row.id, reason: 'no config' })
+      continue
+    }
+    logTaskProgress('ImageTask', 'resume-poll', {
+      id: row.id,
+      taskId: row.taskId,
+      provider: row.provider,
+      configId: config.id,
+    })
+    startImagePoll(row.id, config, row.taskId)
   }
 }

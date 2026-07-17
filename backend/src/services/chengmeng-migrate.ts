@@ -6,9 +6,9 @@ import { logTaskProgress } from '../utils/task-logger.js'
 
 const BASE_URL_MIGRATION_KEY = 'chengmeng_base_url_v2'
 const KEY_ROTATION_META = 'chengmeng_api_key_rotation_v1'
-const MODEL_IDS_MIGRATION_KEY = 'chengmeng_model_ids_v3'
+const MODEL_IDS_MIGRATION_KEY = 'chengmeng_model_ids_v4'
 
-const LEGACY_MODEL_IDS = new Set(['53', '32', '31', '15'])
+const LEGACY_MODEL_IDS = new Set(['53', '32', '31', '15', '49'])
 
 /** 将已保存的 cpolar 临时地址迁移到官方 API 网关 */
 export function migrateChengmengBaseUrlIfNeeded() {
@@ -30,7 +30,14 @@ export function migrateChengmengBaseUrlIfNeeded() {
   setAppMeta(BASE_URL_MIGRATION_KEY, `${ts}:${updated}`)
 }
 
-/** 将 AI 配置中已下线的 model_id（53/32 等）迁移到新线路（70/49） */
+function remapLegacyChengmengModelId(modelId: string): string {
+  const id = String(modelId || '').trim()
+  if (id === '32' || id === '49') return '77'
+  if (LEGACY_MODEL_IDS.has(id)) return CHENGMENT_DEFAULT_MODEL_ID
+  return id || CHENGMENT_DEFAULT_MODEL_ID
+}
+
+/** 将 AI 配置中已下线的 model_id（53/49/32 等）迁移到新线路（70/77） */
 export function migrateChengmengModelIdsIfNeeded() {
   if (getAppMeta(MODEL_IDS_MIGRATION_KEY)) return
 
@@ -47,8 +54,18 @@ export function migrateChengmengModelIdsIfNeeded() {
     }
     if (!models.length) {
       models = [CHENGMENT_DEFAULT_MODEL_ID]
-    } else if (LEGACY_MODEL_IDS.has(String(models[0]))) {
-      models = [models[0] === '32' ? '49' : CHENGMENT_DEFAULT_MODEL_ID]
+    } else {
+      models = models.map(remapLegacyChengmengModelId)
+      if (!models.includes(CHENGMENT_DEFAULT_MODEL_ID)) {
+        models = [CHENGMENT_DEFAULT_MODEL_ID, ...models]
+      }
+      // 去重并保留顺序
+      const seen = new Set<string>()
+      models = models.filter((id) => {
+        if (seen.has(id)) return false
+        seen.add(id)
+        return true
+      })
     }
     const next = JSON.stringify(models)
     if (next === row.model) continue

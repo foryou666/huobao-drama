@@ -33,8 +33,12 @@ app.post('/login', async (c) => {
   if (!username || !password) return badRequest(c, '请输入用户名和密码')
 
   const [row] = db.select().from(schema.users).where(eq(schema.users.username, username)).all()
-  if (!row || !row.isActive || !verifyPassword(password, row.passwordHash)) {
+  if (!row || !verifyPassword(password, row.passwordHash)) {
     return unauthorized(c, '用户名或密码错误')
+  }
+  if (!row.isActive) {
+    // 不暴露冻结状态，避免被探测账号是否存在/可用
+    return unauthorized(c, '密码错误')
   }
 
   const ts = now()

@@ -1,8 +1,23 @@
-# Dependencies
+# Local tool runtimes
+tools/vsr-api/.venv/
+tools/vsr-api/data/
+tools/vsr-api/downloads/
+tools/vsr-official/
+tools/video-subtitle-remover/
+
+# One-off diagnose / ops scripts (do not commit)
+deploy/tmp-*
+backend/scripts/tmp-*
+frontend/tmp-*
+
 node_modules/
+vendor/storyai-3d-director-desk/node_modules/
+vendor/storyai-3d-director-desk/dist/
+vendor/storyai-3d-director-desk.zip
 
 # Build output
 dist/
+frontend/public/director-3d/
 frontend/dist-backups/
 
 # IDE

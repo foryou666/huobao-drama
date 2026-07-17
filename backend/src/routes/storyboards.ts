@@ -7,7 +7,8 @@ import { generateTTS } from '../services/tts-generation.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
-import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { tryChargeUser, tryChargeImageUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { resolveBillingImageModel } from '../utils/image-billing.js'
 import { generateImage } from '../services/image-generation.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
@@ -347,13 +348,13 @@ app.post('/:id/generate-blocking', async (c) => {
     shotMode,
   })
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.STORYBOARD_BLOCKING, {
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.STORYBOARD_BLOCKING, config.model, {
     summary: `场景站位图 #${sb.storyboardNumber}`,
     episodeId: sb.episodeId,
     dramaId: ep.dramaId,
     resourceType: 'storyboard',
     resourceId: id,
-  })
+  }, config.provider)
   if (billed.error) return billed.error
 
   try {
@@ -480,14 +481,14 @@ app.post('/:id/generate-frame-from-blocking', async (c) => {
     customPrompt: body.prompt,
   })
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, {
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, config.model, {
     summary: `从站位图生成${frameLabel} #${sb.storyboardNumber}`,
     episodeId: sb.episodeId,
     dramaId: ep.dramaId,
     resourceType: 'storyboard',
     resourceId: id,
     metadata: { source: 'blocking', frame_type: frameType },
-  })
+  }, config.provider)
   if (billed.error) return billed.error
 
   try {

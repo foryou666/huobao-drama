@@ -22,7 +22,7 @@
 
         <label class="scene-angle-regen-prompt-field">
           <span class="scene-angle-regen-prompt-label">生成提示词</span>
-          <span class="dim scene-angle-regen-prompt-hint">可修改机位、构图、强调元素等；提交后将覆盖当前角度图（6 积分）</span>
+          <span class="dim scene-angle-regen-prompt-hint">可修改机位、构图、强调元素等；提交后将覆盖当前角度图（12 积分）</span>
           <textarea
             v-model="promptDraft"
             class="textarea scene-angle-regen-prompt"

@@ -12,18 +12,15 @@ import {
   ensurePropFromManualPropAsset,
   syncDramaAssets,
   syncEntityFromAsset,
-  resolveAssetDisplayMedia,
   upsertLibraryAsset,
-  formatSceneAssetName,
   hydratePropImagesFromLinkedAssets,
 } from '../services/asset-library.js'
-import { summarizeCharacterMedia } from '../utils/character-image-variants.js'
-import { summarizeSceneMedia } from '../utils/scene-image-variants.js'
-import { summarizePropMedia } from '../utils/prop-image-variants.js'
+import { deleteAssetLibraryImage } from '../services/asset-image-delete.js'
+import { listEnrichedAssets } from '../services/asset-list.js'
 import { saveUploadedFile } from '../utils/storage.js'
 import { syncCharacterPrimaryImage, syncProjectAsset, syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { isOssConfigured } from '../utils/oss-upload.js'
-import { getAuthUser } from '../middleware/auth.js'
+import { denyUnlessAdmin, getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
 import {
   getAudioDurationSeconds,
@@ -47,78 +44,21 @@ const app = new Hono()
 app.get('/categories', (c) => success(c, ASSET_CATEGORIES))
 
 app.get('/', async (c) => {
-  const dramaId = c.req.query('drama_id')
+  const dramaIdRaw = c.req.query('drama_id')
   const type = c.req.query('type')
   const q = String(c.req.query('q') || '').trim().toLowerCase()
+  const dramaId = dramaIdRaw ? Number(dramaIdRaw) : undefined
 
-  let rows = db.select().from(schema.assets).where(isNull(schema.assets.deletedAt)).all()
-  if (dramaId) {
-    const id = Number(dramaId)
-    if (Number.isFinite(id) && id > 0) {
-      rows = rows.filter(row => row.dramaId === id)
-    }
-  }
-  if (type && isAssetCategory(type)) rows = rows.filter(row => row.type === type)
-  if (q) {
-    rows = rows.filter(row =>
-      String(row.name || '').toLowerCase().includes(q)
-      || String(row.description || '').toLowerCase().includes(q),
-    )
-  }
-  rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-  const enriched = rows.map((row) => {
-    const media = resolveAssetDisplayMedia(row)
-    const payload: Record<string, unknown> = {
-      ...row,
-      url: media.url ?? row.url,
-      localPath: media.localPath ?? row.localPath,
-      thumbnailUrl: media.thumbnailUrl ?? row.thumbnailUrl,
-    }
-    if (row.type === 'character') {
-      let char = null as typeof schema.characters.$inferSelect | null
-      if (row.sourceType === 'character' && row.sourceId) {
-        [char] = db.select().from(schema.characters).where(eq(schema.characters.id, row.sourceId)).all()
-      } else if (row.dramaId && row.name) {
-        char = db.select().from(schema.characters)
-          .where(and(eq(schema.characters.dramaId, row.dramaId), isNull(schema.characters.deletedAt)))
-          .all()
-          .find(item => item.name === row.name) || null
-      }
-      if (char && !char.deletedAt) {
-        payload.characterMedia = summarizeCharacterMedia(char)
-        payload.linkedCharacterId = char.id
-      }
-    } else if (row.type === 'scene') {
-      let scene = null as typeof schema.scenes.$inferSelect | null
-      if (row.sourceType === 'scene' && row.sourceId) {
-        [scene] = db.select().from(schema.scenes).where(eq(schema.scenes.id, row.sourceId)).all()
-      } else if (row.dramaId && row.name) {
-        const location = String(row.name).replace(/（[^）]+）$/, '').trim()
-        scene = db.select().from(schema.scenes)
-          .where(and(eq(schema.scenes.dramaId, row.dramaId), isNull(schema.scenes.deletedAt)))
-          .all()
-          .find(item => item.location === location || formatSceneAssetName(item.location, item.time) === row.name) || null
-      }
-      if (scene && !scene.deletedAt) {
-        payload.sceneMedia = summarizeSceneMedia(scene)
-      }
-    } else if (row.type === 'prop') {
-      let prop = null as typeof schema.props.$inferSelect | null
-      if (row.sourceType === 'prop' && row.sourceId) {
-        [prop] = db.select().from(schema.props).where(eq(schema.props.id, row.sourceId)).all()
-      } else if (row.dramaId && row.name) {
-        prop = db.select().from(schema.props)
-          .where(and(eq(schema.props.dramaId, row.dramaId), isNull(schema.props.deletedAt)))
-          .all()
-          .find(item => item.name === row.name) || null
-      }
-      if (prop && !prop.deletedAt) {
-        payload.propMedia = summarizePropMedia(prop)
-      }
-    }
-    return toSnakeCase(payload)
+  const { items, counts } = listEnrichedAssets({
+    dramaId: Number.isFinite(dramaId) && dramaId! > 0 ? dramaId : undefined,
+    type: type && isAssetCategory(type) ? type : undefined,
+    q: q || undefined,
   })
-  return success(c, enriched)
+
+  return success(c, {
+    items: toSnakeCaseArray(items),
+    counts,
+  })
 })
 
 app.post('/', async (c) => {
@@ -460,6 +400,33 @@ app.delete('/:id', async (c) => {
     .where(eq(schema.assets.id, id))
     .run()
   return success(c)
+})
+
+/** 管理员：删除资产库中的单张图片（角色造型/场景视角/道具图等） */
+app.delete('/:id/images', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+
+  const id = Number(c.req.param('id'))
+  const body = await c.req.json().catch(() => ({}))
+  const url = String(body.url || body.image_url || body.imageUrl || '').trim()
+  if (!url) return badRequest(c, 'url is required')
+
+  try {
+    const result = deleteAssetLibraryImage(id, url)
+    const [asset] = db.select().from(schema.assets).where(eq(schema.assets.id, id)).all()
+    logActivity(getAuthUser(c), {
+      action: 'asset.image.delete',
+      summary: `删除资产图片：${asset?.name || id}`,
+      resourceType: 'asset',
+      resourceId: id,
+      dramaId: asset?.dramaId ?? undefined,
+      metadata: { url: result.url },
+    })
+    return success(c, result)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '删除失败')
+  }
 })
 
 app.post('/:id/apply-character', async (c) => {

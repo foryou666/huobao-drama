@@ -2,7 +2,7 @@
  * 页面展示用媒体 URL — 默认 OSS；LOCAL_MEDIA_PREFER_DAYS>0 时近 N 天本地优先
  */
 import fs from 'fs'
-import { isOssConfigured, lookupOssObjectKey, resolveOssObjectKeyCandidates, signOssObjectKey } from './oss-upload.js'
+import { isOssConfigured, lookupOssObjectKey, signOssObjectKey } from './oss-upload.js'
 import { getAbsolutePath } from './storage.js'
 
 /** 本地热数据保留天数（0 = 始终 OSS，适合线上部署） */
@@ -41,7 +41,9 @@ export function resolveDisplayMediaUrl(raw: string | null | undefined): string |
     }
     if (isOssConfigured()) {
       const mapped = lookupOssObjectKey(path)
-      if (mapped) return signOssObjectKey(mapped)
+      if (mapped && !mapped.includes('unknown/asset/')) {
+        return signOssObjectKey(mapped)
+      }
 
       let localExists = false
       try {
@@ -50,14 +52,9 @@ export function resolveDisplayMediaUrl(raw: string | null | undefined): string |
         localExists = false
       }
 
-      // 本地有文件（如视频封面缩略图）→ 同源 static，避免对未上传 OSS 的路径签发无效 URL
+      // 本地有文件 → 同源 static，避免对未上传 OSS 的路径签发无效 URL
       if (localExists) {
         return `/${path}`
-      }
-
-      const candidates = resolveOssObjectKeyCandidates(path)
-      for (const objectKey of candidates) {
-        if (objectKey) return signOssObjectKey(objectKey)
       }
     }
   }

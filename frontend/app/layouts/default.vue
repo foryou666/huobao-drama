@@ -23,6 +23,14 @@
           </svg>
           <span>项目</span>
         </NuxtLink>
+        <NuxtLink to="/canvas" class="nav-link" :class="{ active: route.path.startsWith('/canvas') }">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="M21 15l-5-5L5 21"/>
+          </svg>
+          <span>画布</span>
+        </NuxtLink>
         <NuxtLink to="/assets" class="nav-link" :class="{ active: route.path.startsWith('/assets') }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
@@ -66,13 +74,42 @@
             </NuxtLink>
           </div>
         </div>
-        <NuxtLink to="/videos/repaint" class="nav-link" :class="{ active: route.path.startsWith('/videos/repaint') }">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-            <path d="M12 11v6"/><path d="M9 14h6"/>
-          </svg>
-          <span>视频转绘</span>
-        </NuxtLink>
+        <div
+          ref="toolboxNavRef"
+          class="nav-dropdown"
+          :class="{ open: toolboxMenuOpen, active: isToolboxRoute }"
+        >
+          <button
+            type="button"
+            class="nav-link nav-dropdown-trigger"
+            :class="{ active: isToolboxRoute }"
+            aria-haspopup="menu"
+            :aria-expanded="toolboxMenuOpen"
+            @click="toggleToolboxMenu"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+            </svg>
+            <span>工具箱</span>
+            <svg class="nav-dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+          <div v-if="toolboxMenuOpen" class="nav-dropdown-menu" role="menu">
+            <NuxtLink
+              v-for="item in toolboxNavItems"
+              :key="item.to"
+              :to="item.to"
+              class="nav-dropdown-item"
+              :class="{ active: route.path === item.to || route.path.startsWith(item.to + '/') }"
+              role="menuitem"
+              @click="toolboxMenuOpen = false"
+            >
+              <span class="nav-dropdown-item-label">{{ item.label }}</span>
+              <span v-if="item.refHint" class="nav-dropdown-item-ref">{{ item.refHint }}</span>
+            </NuxtLink>
+          </div>
+        </div>
         <NuxtLink to="/images" class="nav-link" :class="{ active: route.path.startsWith('/images') }">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
@@ -96,23 +133,16 @@
 
       <div class="header-right">
         <div v-if="teams.length" class="team-switcher">
-          <div class="team-switcher-block">
-            <div class="team-switcher-row">
-              <label class="team-switcher-label">团队</label>
-              <select
-                class="team-select"
-                :value="activeTeamId ?? ''"
-                @change="onTeamChange"
-              >
-                <option v-for="t in teams" :key="t.id" :value="t.id">
-                  {{ t.name }}（{{ t.member_count }}人）
-                </option>
-              </select>
-            </div>
-            <div v-if="activeTeamMemberNames.length" class="team-member-names" :title="activeTeamMemberNames.join('、')">
-              {{ activeTeamMemberNames.join('、') }}
-            </div>
-          </div>
+          <label class="team-switcher-label">团队</label>
+          <select
+            class="team-select"
+            :value="activeTeamId ?? ''"
+            @change="onTeamChange"
+          >
+            <option v-for="t in teams" :key="t.id" :value="t.id">
+              {{ t.name }}（{{ t.member_count }}人）
+            </option>
+          </select>
         </div>
         <div v-if="user" class="user-menu">
           <NuxtLink
@@ -188,15 +218,18 @@
 <script setup>
 import brandLogo from '~/assets/huobao-logo.png'
 import { buildVideoNavItems } from '~/constants/video-channels.js'
+import { buildToolboxNavItems } from '~/constants/toolbox-items.js'
 
 const route = useRoute()
 const showBrandImage = ref(true)
 const { user, isAdmin, init, logout } = useAuth()
-const { teams, activeTeamId, activeTeamMemberNames, selectTeam, canManageTeam, loadActiveTeamMembers } = useTeam()
+const { teams, activeTeamId, selectTeam, canManageTeam, loadActiveTeamMembers } = useTeam()
 const { rechargeEnabled } = useRechargeAccess()
 
 const videoMenuOpen = ref(false)
 const videoNavRef = ref(null)
+const toolboxMenuOpen = ref(false)
+const toolboxNavRef = ref(null)
 const creditsMenuOpen = ref(false)
 const creditsMenuRef = ref(null)
 
@@ -207,19 +240,41 @@ const isCreditsRoute = computed(() => {
 })
 
 const videoNavItems = computed(() => buildVideoNavItems(true))
+const toolboxNavItems = computed(() => buildToolboxNavItems({ isAdmin: isAdmin.value }))
+const isToolboxRoute = computed(() => toolboxNavItems.value.some(
+  item => route.path === item.to || route.path.startsWith(item.to + '/'),
+))
 
 function toggleVideoMenu() {
   videoMenuOpen.value = !videoMenuOpen.value
-  if (videoMenuOpen.value) creditsMenuOpen.value = false
+  if (videoMenuOpen.value) {
+    creditsMenuOpen.value = false
+    toolboxMenuOpen.value = false
+  }
 }
 
 function closeVideoMenu() {
   videoMenuOpen.value = false
 }
 
+function toggleToolboxMenu() {
+  toolboxMenuOpen.value = !toolboxMenuOpen.value
+  if (toolboxMenuOpen.value) {
+    videoMenuOpen.value = false
+    creditsMenuOpen.value = false
+  }
+}
+
+function closeToolboxMenu() {
+  toolboxMenuOpen.value = false
+}
+
 function toggleCreditsMenu() {
   creditsMenuOpen.value = !creditsMenuOpen.value
-  if (creditsMenuOpen.value) videoMenuOpen.value = false
+  if (creditsMenuOpen.value) {
+    videoMenuOpen.value = false
+    toolboxMenuOpen.value = false
+  }
 }
 
 function closeCreditsMenu() {
@@ -232,6 +287,10 @@ function onDocumentClick(event) {
     const el = videoNavRef.value
     if (el && !el.contains(target)) closeVideoMenu()
   }
+  if (toolboxMenuOpen.value) {
+    const el = toolboxNavRef.value
+    if (el && !el.contains(target)) closeToolboxMenu()
+  }
   if (creditsMenuOpen.value) {
     const el = creditsMenuRef.value
     if (el && !el.contains(target)) closeCreditsMenu()
@@ -241,12 +300,14 @@ function onDocumentClick(event) {
 function onDocumentKeydown(event) {
   if (event.key === 'Escape') {
     closeVideoMenu()
+    closeToolboxMenu()
     closeCreditsMenu()
   }
 }
 
 watch(() => route.path, () => {
   closeVideoMenu()
+  closeToolboxMenu()
   closeCreditsMenu()
 })
 watch(() => route.query.tab, () => closeCreditsMenu())
@@ -421,16 +482,6 @@ onUnmounted(() => {
 .header-right { display: flex; align-items: center; gap: 16px; margin-left: auto; }
 .team-switcher {
   display: flex;
-  align-items: flex-start;
-}
-.team-switcher-block {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  max-width: 220px;
-}
-.team-switcher-row {
-  display: flex;
   align-items: center;
   gap: 8px;
 }
@@ -449,15 +500,6 @@ onUnmounted(() => {
   background: var(--bg-2);
   color: var(--text-1);
   font-size: 12px;
-}
-.team-member-names {
-  padding-left: 34px;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .user-menu {
   display: flex;
@@ -579,5 +621,15 @@ onUnmounted(() => {
   max-height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+/* 设置页为左右分栏，须覆盖上方通用 column 规则（否则侧栏与内容会纵向堆叠） */
+.content > :deep(.settings-layout) {
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: stretch;
+  min-height: 0;
+  width: 100%;
+  max-height: none;
 }
 </style>

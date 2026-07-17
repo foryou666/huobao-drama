@@ -146,6 +146,8 @@
 
         <div class="range-presets">
 
+          <button type="button" class="btn btn-sm" :class="{ active: rangePreset === 1 }" @click="setRangePreset(1)">当天</button>
+
           <button type="button" class="btn btn-sm" :class="{ active: rangePreset === 7 }" @click="setRangePreset(7)">近 7 天</button>
 
           <button type="button" class="btn btn-sm" :class="{ active: rangePreset === 30 }" @click="setRangePreset(30)">近 30 天</button>
@@ -439,11 +441,11 @@ function fmtDateInput(d) {
 
 
 
-const rangePreset = ref(7)
+const rangePreset = ref(1)
 
 const dateTo = ref(fmtDateInput(new Date()))
 
-const dateFrom = ref(fmtDateInput(new Date(Date.now() - 6 * 86400000)))
+const dateFrom = ref(fmtDateInput(new Date()))
 
 
 

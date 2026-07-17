@@ -18,4 +18,10 @@ if (!fs.existsSync(source)) {
 
 fs.rmSync(target, { recursive: true, force: true })
 fs.cpSync(source, target, { recursive: true })
-console.log(`已同步前端静态资源 -> ${target}`)
+
+const directorDeskPublic = path.join(projectRoot, 'frontend', 'public', 'director-3d')
+const directorDeskTarget = path.join(target, 'director-3d')
+if (fs.existsSync(directorDeskPublic)) {
+  fs.cpSync(directorDeskPublic, directorDeskTarget, { recursive: true })
+  console.log(`已复制 3D 导演台 -> ${directorDeskTarget}`)
+}

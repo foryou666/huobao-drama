@@ -42,31 +42,33 @@ const STEP_AGENT: Record<string, string | null> = {
   'prod:chars': 'grid_prompt_generator',
   'prod:scenes': 'grid_prompt_generator',
   'prod:dubbing': 'voice_assigner',
-  'prod:shots': 'grid_prompt_generator',
   'prod:videos': 'storyboard_breaker',
   'prod:compose': 'storyboard_breaker',
   'export:merge': 'storyboard_breaker',
 }
 
 const STEP_LABELS: Record<string, string> = {
-  'script:raw': '原始内容',
-  'script:rewrite': 'AI 改写',
-  'script:extract': '提取角色场景',
+  'script:raw': '本集原文',
+  'script:rewrite': '整理剧本',
+  'script:extract': '提取资产',
   'script:voice': '音色分配',
   'script:storyboard': '分镜拆解',
   'prod:chars': '角色形象',
   'prod:scenes': '场景图片',
   'prod:dubbing': '配音生成',
-  'prod:shots': '镜头图片',
   'prod:videos': '视频生成',
   'prod:compose': '视频合成',
   'export:merge': '拼接导出',
 }
 
 export const ASSISTANT_QUICK_CHIPS: Record<string, string[]> = {
-  'script:raw': ['按红果风格改写剧本并保存', '压缩废话，保留爽点'],
-  'script:rewrite': ['对白再短一点，更红果', '加强集末悬念钩子'],
-  'script:extract': ['补全遗漏角色并去重保存', '合并重复场景'],
+  'script:raw': ['按红果风格整理剧本并保存，便于提取角色场景', '压缩废话，保留爽点'],
+  'script:rewrite': ['对白再短一点，更红果', '加强集末悬念钩子，方便后续分镜'],
+  'script:extract': [
+    '从剧本提取角色、场景、道具文字描述并去重保存',
+    '补全遗漏角色与道具，合并重复场景',
+    '按剧本补全角色外观、场景氛围与道具描述',
+  ],
   'script:voice': ['按性格为本集角色重新分配音色', '女主换更甜的声音'],
   'script:storyboard': [
     '读取剧本并生成完整工业镜头列表并导入',
@@ -76,7 +78,6 @@ export const ASSISTANT_QUICK_CHIPS: Record<string, string[]> = {
   'prod:chars': ['生成本集所有角色图片', '重新生成本集缺图角色', '优化本集角色 image_prompt'],
   'prod:scenes': ['生成本集所有场景图片', '重新生成本集缺失场景图', '优化本集场景 image_prompt'],
   'prod:dubbing': ['为本集所有镜头生成配音', '检查本集未分配音色的角色并分配', '重新生成第1镜配音'],
-  'prod:shots': ['为选中镜头生成首帧', '批量生成缺失的首帧', '首帧构图再电影感一点'],
   'prod:videos': ['生成所有镜头视频', '重新生成选中镜头视频', '优化选中镜头 video_prompt 口型细则'],
   'prod:compose': ['合成所有已有视频的镜头', '检查未合成镜头并说明原因'],
   'export:merge': ['拼接本集成片', '查看当前制作进度'],

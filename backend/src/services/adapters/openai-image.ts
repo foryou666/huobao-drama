@@ -20,6 +20,7 @@ function resolveModel(record: ImageGenerationRecord, config: AIConfig): string {
 }
 
 function isGptImageModel(model: string): boolean {
+  // 花镜 Image-2 不支持 /v1/images/edits，仅 gpt-image* 走编辑接口
   return /gpt-image|chatgpt-image/i.test(model)
 }
 
@@ -104,7 +105,8 @@ export class OpenAIImageAdapter implements ImageProviderAdapter {
   }
 
   parseGenerateResponse(result: any): ImageGenResponse {
-    if (result.task_id || result.id) {
+    const asyncStatus = String(result.status || '').toLowerCase()
+    if (result.task_id || (result.id && ['queued', 'processing', 'pending', 'running'].includes(asyncStatus))) {
       return { isAsync: true, taskId: result.task_id || result.id }
     }
     const imageUrl = result.data?.[0]?.url || result.url

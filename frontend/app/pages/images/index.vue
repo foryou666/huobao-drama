@@ -1,5 +1,12 @@
 <template>
-  <div class="studio-page">
+  <div
+    class="studio-page"
+    :class="{ 'is-dragover': pageDragOver }"
+    @dragenter.prevent="onPageDragEnter"
+    @dragover.prevent="onPageDragOver"
+    @dragleave.prevent="onPageDragLeave"
+    @drop.prevent="onPageDrop"
+  >
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">图片生成</h1>
@@ -24,7 +31,24 @@
             查看全部
           </button>
         </div>
-        <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
+        <select
+          v-if="userOptions.length"
+          v-model.number="filterUserId"
+          class="studio-filter-select studio-member-select"
+          :class="{ active: viewScope === 'user' }"
+          title="查看指定用户"
+          @change="onUserFilterChange"
+        >
+          <option :value="null">指定用户</option>
+          <option
+            v-for="u in userOptions"
+            :key="u.id"
+            :value="u.id"
+          >
+            {{ u.display_name || u.username }}
+          </option>
+        </select>
+        <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
         </select>
@@ -49,7 +73,15 @@
     </div>
 
     <div ref="feedRef" class="studio-feed">
-      <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
+      <div v-if="loading && !items.length" class="studio-grid studio-grid-skeleton">
+        <article v-for="n in 8" :key="n" class="studio-card studio-card-skeleton">
+          <div class="studio-card-media ratio-portrait studio-skeleton-block" />
+          <div class="studio-card-body">
+            <div class="studio-skeleton-line studio-skeleton-line-wide" />
+            <div class="studio-skeleton-line studio-skeleton-line-narrow" />
+          </div>
+        </article>
+      </div>
       <div v-else-if="!items.length" class="studio-empty card">
         <p>还没有图片，在底部输入描述并点击「生成图片」</p>
       </div>
@@ -59,12 +91,13 @@
           v-for="item in items"
           :key="item.id"
           class="studio-card"
+          :class="{ 'studio-card-pinned': item.is_pinned }"
           @click="openDetail(item)"
         >
           <div class="studio-card-media" :class="cardRatioClass(item)">
             <img
-              v-if="playableUrl(item)"
-              :src="displayUrl(playableUrl(item))"
+              v-if="cardImageUrl(item)"
+              :src="cardImageUrl(item)"
               alt=""
               loading="lazy"
               decoding="async"
@@ -81,9 +114,27 @@
             <div v-if="item.reference_images?.length" class="studio-card-ref-badge">
               {{ item.reference_images.length }} 图
             </div>
+            <div
+              v-if="item.is_pinned"
+              class="studio-card-pinned-badge"
+              :class="{ 'with-ref': item.reference_images?.length }"
+            >
+              置顶
+            </div>
             <div class="studio-card-status">
               <span class="tag" :class="statusTagClass(item.status)">{{ statusLabel(item.status) }}</span>
             </div>
+            <button
+              v-if="isAdmin && viewScope !== 'mine'"
+              type="button"
+              class="studio-card-pin"
+              :class="{ active: item.is_pinned }"
+              :title="item.is_pinned ? '取消置顶' : '置顶图片'"
+              :disabled="pinningId === item.id"
+              @click.stop="togglePin(item)"
+            >
+              {{ item.is_pinned ? '取消' : '置顶' }}
+            </button>
             <button
               v-if="playableUrl(item)"
               type="button"
@@ -107,6 +158,7 @@
           <div class="studio-card-body">
             <p class="studio-card-prompt">{{ previewPrompt(item.prompt) }}</p>
             <div class="studio-card-meta">
+              <span v-if="item.is_pinned" class="tag tag-accent">置顶</span>
               <span class="mono dim">#{{ item.id }}</span>
               <span v-if="item.is_manual" class="tag">手动</span>
               <span v-if="item.drama_title" class="dim">{{ item.drama_title }}</span>
@@ -120,6 +172,7 @@
                 下载
               </button>
             </div>
+            <p v-if="operatorLabel(item)" class="studio-card-operator">操作人 {{ operatorLabel(item) }}</p>
           </div>
         </article>
       </div>
@@ -148,6 +201,7 @@
       :dramas="dramas"
       :default-drama-id="filterDramaId"
       @generate="onGenerate"
+      @need-dramas="ensureDramasLoaded"
     />
 
     <div v-if="detailItem" class="studio-detail-overlay" @click.self="detailItem = null">
@@ -156,31 +210,49 @@
           <div>
             <h3>图片详情 #{{ detailItem.id }}</h3>
             <p class="dim">{{ formatTime(detailItem.created_at) }}</p>
+            <p v-if="operatorLabel(detailItem)" class="studio-detail-operator">操作人 {{ operatorLabel(detailItem) }}</p>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="detailItem = null">关闭</button>
         </div>
 
         <div class="studio-detail-body">
           <div class="studio-detail-media" :class="cardRatioClass(detailItem)">
-            <img
+            <button
               v-if="playableUrl(detailItem)"
-              :src="displayUrl(playableUrl(detailItem))"
-              alt=""
-              class="studio-detail-image"
-            />
+              type="button"
+              class="studio-detail-image-btn"
+              title="点击查看原图"
+              @click="openImageViewer(displayUrl(playableUrl(detailItem)), `生成结果 #${detailItem.id}`)"
+            >
+              <img
+                :src="displayUrl(playableUrl(detailItem))"
+                alt=""
+                class="studio-detail-image"
+              />
+            </button>
             <div v-else class="studio-detail-empty">
               {{ detailItem.error_msg || statusLabel(detailItem.status) }}
             </div>
           </div>
 
           <div class="studio-detail-side">
-            <div v-if="detailItem.reference_images?.length" class="studio-detail-refs">
-              <img
-                v-for="(ref, idx) in detailItem.reference_images"
-                :key="ref.path + idx"
-                :src="ref.display_url || displayUrl(ref.path)"
-                alt=""
-              />
+            <div v-if="detailItem.reference_images?.length" class="studio-detail-refs-wrap">
+              <div class="studio-detail-refs-head">
+                <span class="studio-detail-refs-title">参考图</span>
+                <span class="dim studio-detail-refs-hint">点击放大查看原图</span>
+              </div>
+              <div class="studio-detail-refs">
+                <button
+                  v-for="(ref, idx) in detailItem.reference_images"
+                  :key="ref.path + idx"
+                  type="button"
+                  class="studio-detail-ref-btn"
+                  :title="`参考图 ${idx + 1}`"
+                  @click="openImageViewer(refImageUrl(ref), `参考图 ${idx + 1}`)"
+                >
+                  <img :src="refThumbUrl(ref)" alt="" />
+                </button>
+              </div>
             </div>
             <pre class="studio-detail-prompt">{{ detailItem.prompt || '—' }}</pre>
             <div class="studio-detail-actions">
@@ -195,6 +267,14 @@
               </button>
               <button type="button" class="btn btn-sm" @click="reuseDetail">复用到输入框</button>
               <button
+                v-if="playableUrl(detailItem)"
+                type="button"
+                class="btn btn-sm btn-primary"
+                @click="referenceModifyDetail"
+              >
+                引用修改
+              </button>
+              <button
                 v-if="canAttachToEntity(detailItem)"
                 type="button"
                 class="btn btn-sm btn-primary"
@@ -203,6 +283,15 @@
                 添加到资产
               </button>
               <button type="button" class="btn btn-sm" @click="copyPrompt(detailItem.prompt)">复制提示词</button>
+              <button
+                v-if="isAdmin && viewScope !== 'mine'"
+                type="button"
+                class="btn btn-sm"
+                :disabled="pinningId === detailItem.id"
+                @click="togglePin(detailItem)"
+              >
+                {{ detailItem.is_pinned ? '取消置顶' : '置顶图片' }}
+              </button>
               <NuxtLink
                 v-if="episodeLink(detailItem)"
                 :to="episodeLink(detailItem)"
@@ -215,39 +304,113 @@
         </div>
       </div>
     </div>
+
+    <div v-if="pageDragOver" class="studio-drop-overlay" aria-hidden="true">
+      <div class="studio-drop-overlay-card card">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" />
+        </svg>
+        <p>松开鼠标上传参考图</p>
+        <span class="dim">支持 PNG / JPG / WebP 等图片格式</span>
+      </div>
+    </div>
+
+    <div
+      v-if="imageViewer.open && imageViewer.src"
+      class="studio-image-viewer-overlay"
+      @click.self="closeImageViewer"
+    >
+      <div class="studio-image-viewer card">
+        <div class="studio-image-viewer-head">
+          <span class="studio-image-viewer-title">{{ imageViewer.title || '图片预览' }}</span>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closeImageViewer">关闭</button>
+        </div>
+        <div class="studio-image-viewer-body">
+          <img :src="imageViewer.src" :alt="imageViewer.title || '图片预览'" />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { extractImageFilesFromDataTransfer, isFileDragEvent } from '~/utils/clipboard-image.js'
 import { toast } from 'vue-sonner'
 import { dramaAPI, imageAPI } from '~/composables/useApi'
-import { mediaDisplayUrl, prefetchMediaUrlsInBackground } from '~/utils/media-url.js'
+import { loadImageStudioCapabilities, getCachedImageStudioCapabilities, applyImageStudioCapabilitiesToComposer } from '~/composables/useImageStudioCapabilities'
+import { useAuth } from '~/composables/useAuth'
+import { cacheVersion, mediaDisplayUrl, mediaGridUrl, prefetchLedgerMedia, seedMediaUrlCacheFromImageLedgerItems } from '~/utils/media-url.js'
 import { downloadMediaFile } from '~/utils/download-media.js'
 import ImageStudioComposer from '~/components/ImageStudioComposer.vue'
 import AddGeneratedImageToEntityModal from '~/components/AddGeneratedImageToEntityModal.vue'
 import { formatImageGenerationError } from '~/utils/image-generation-error.js'
+import { aspectRatioFromImageItem } from '~/utils/studio-image-aspect-preference.js'
 import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
 
 const route = useRoute()
+const { isAdmin } = useAuth()
 
 const loading = ref(false)
 const loadingMore = ref(false)
 const generating = ref(false)
 const items = ref([])
 const dramas = ref([])
+const dramasLoaded = ref(false)
+const dramasLoading = ref(false)
 const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
 const pagination = ref({ limit: 30, offset: 0, total: 0, has_more: false })
 const filterDramaId = ref(String(route.query.drama_id || ''))
 const filterStatus = ref('all')
 const viewScope = ref('mine')
+const filterUserId = ref(null)
+const userOptions = ref([])
 const detailItem = ref(null)
 const detailDownloading = ref(false)
+const imageViewer = ref({ open: false, src: '', title: '' })
 const composerRef = ref(null)
 const feedRef = ref(null)
 const attachModalOpen = ref(false)
 const attachImageItem = ref(null)
+const pinningId = ref(null)
+const pageDragDepth = ref(0)
+const pageDragOver = computed(() => pageDragDepth.value > 0)
 let pollTimer = null
+const LEDGER_CACHE_PREFIX = 'studio-image-ledger-v1'
+const DRAMA_CACHE_KEY = 'studio-image-dramas-lite-v1'
+
+function ledgerCacheKey() {
+  return `${LEDGER_CACHE_PREFIX}:${viewScope.value}:${filterDramaId.value || 'all'}:${filterStatus.value}`
+}
+
+function restoreLedgerCache() {
+  try {
+    const raw = sessionStorage.getItem(ledgerCacheKey())
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.items) || !parsed.items.length) return false
+    items.value = parsed.items.map(normalizeItem)
+    stats.value = parsed.stats || stats.value
+    pagination.value = parsed.pagination || pagination.value
+    seedMediaUrlCacheFromImageLedgerItems(items.value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistLedgerCache() {
+  try {
+    sessionStorage.setItem(ledgerCacheKey(), JSON.stringify({
+      items: items.value,
+      stats: stats.value,
+      pagination: pagination.value,
+      savedAt: Date.now(),
+    }))
+  } catch {
+    // ignore quota / private mode
+  }
+}
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -279,11 +442,13 @@ function normalizeItem(row) {
     status: row.status || 'pending',
     error_msg: sanitizeUserFacingProviderError(row.error_msg || row.errorMsg || ''),
     size: row.size,
-    aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
+    aspect_ratio: aspectRatioFromImageItem(row),
     reference_images: row.reference_images || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_image_url: row.display_image_url || '',
+    display_thumbnail_url: row.display_thumbnail_url || '',
+    thumb_path: row.thumb_path || '',
     image_url: row.image_url || row.imageUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -292,15 +457,58 @@ function normalizeItem(row) {
     storyboard_title: row.storyboard_title || '',
     storyboard_number: row.storyboard_number,
     storyboard_exists: row.storyboard_exists !== false,
+    is_pinned: !!(row.is_pinned ?? row.isPinned),
+    pinned_at: row.pinned_at || row.pinnedAt || null,
+    operator_id: row.operator_id ?? null,
+    operator_name: row.operator_name || '',
+    username: row.username || '',
+    display_name: row.display_name || '',
   }
+}
+
+function operatorLabel(item) {
+  if (!item) return ''
+  return item.operator_name || item.display_name || item.username || ''
 }
 
 function playableUrl(item) {
   return item?.display_image_url || item?.local_path || item?.image_url || ''
 }
 
+function cardImageUrl(item) {
+  void cacheVersion.value
+  const raw = item?.local_path || item?.image_url || ''
+  const grid = mediaGridUrl(raw, item?.thumb_path)
+  if (grid) return grid
+  if (item?.display_thumbnail_url) return item.display_thumbnail_url
+  if (item?.display_image_url) return item.display_image_url
+  return mediaDisplayUrl(raw)
+}
+
 function displayUrl(raw) {
   return mediaDisplayUrl(raw)
+}
+
+function refImageUrl(ref) {
+  const raw = ref?.path || ref?.display_url || ''
+  return displayUrl(raw)
+}
+
+function refThumbUrl(ref) {
+  return ref?.display_url || displayUrl(ref?.path) || ''
+}
+
+function openImageViewer(src, title = '') {
+  if (!src) return
+  imageViewer.value = { open: true, src, title }
+}
+
+function closeImageViewer() {
+  imageViewer.value = { open: false, src: '', title: '' }
+}
+
+function handleImageViewerKeydown(event) {
+  if (event.key === 'Escape' && imageViewer.value.open) closeImageViewer()
 }
 
 function isProcessing(item) {
@@ -323,7 +531,7 @@ function statusTagClass(status) {
 }
 
 function cardRatioClass(item) {
-  const ratio = item?.aspect_ratio || '9:16'
+  const ratio = item?.aspect_ratio || '16:9'
   return ratio === '16:9' ? 'ratio-landscape' : 'ratio-portrait'
 }
 
@@ -351,6 +559,7 @@ function canAttachToEntity(item) {
 
 function openAttachModal(item) {
   if (!canAttachToEntity(item)) return
+  void ensureDramasLoaded()
   attachImageItem.value = item
   attachModalOpen.value = true
 }
@@ -376,6 +585,20 @@ function reuseDetail() {
     feedRef.value?.scrollTo({ top: feedRef.value.scrollHeight, behavior: 'smooth' })
   })
   toast.success('已填入输入框，可修改后重新生成')
+}
+
+function referenceModifyDetail() {
+  if (!detailItem.value) return
+  const ok = composerRef.value?.referenceModifyFromItem(detailItem.value)
+  if (!ok) {
+    toast.warning('当前图片不可用，无法引用')
+    return
+  }
+  detailItem.value = null
+  nextTick(() => {
+    feedRef.value?.scrollTo({ top: feedRef.value.scrollHeight, behavior: 'smooth' })
+  })
+  toast.success('已引用到输入框，请输入修改描述后生成')
 }
 
 async function copyPrompt(text) {
@@ -418,6 +641,29 @@ async function downloadDetail() {
   }
 }
 
+async function togglePin(item) {
+  if (!item?.id || pinningId.value === item.id) return
+  pinningId.value = item.id
+  try {
+    if (item.is_pinned) {
+      await imageAPI.unpin(item.id)
+      toast.success('已取消置顶')
+    } else {
+      await imageAPI.pin(item.id)
+      toast.success('已置顶')
+    }
+    await reload()
+    if (detailItem.value?.id === item.id) {
+      const refreshed = items.value.find(row => row.id === item.id)
+      if (refreshed) detailItem.value = refreshed
+    }
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    pinningId.value = null
+  }
+}
+
 function buildQuery(offset = 0, limit = pagination.value.limit) {
   return {
     drama_id: filterDramaId.value ? Number(filterDramaId.value) : undefined,
@@ -425,6 +671,8 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
+    studio_only: true,
+    user_id: viewScope.value === 'user' && filterUserId.value ? filterUserId.value : undefined,
   }
 }
 
@@ -439,11 +687,9 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  const mediaPaths = nextItems.flatMap(item => [
-    item.local_path,
-    ...(item.reference_images || []).map(ref => ref.path),
-  ]).filter(Boolean)
-  prefetchMediaUrlsInBackground(mediaPaths)
+  seedMediaUrlCacheFromImageLedgerItems(nextItems)
+  prefetchLedgerMedia(nextItems)
+  persistLedgerCache()
 }
 
 async function refreshLedger() {
@@ -455,7 +701,7 @@ async function refreshLedger() {
 }
 
 async function reload() {
-  loading.value = true
+  if (!items.value.length) loading.value = true
   try {
     await loadLedger({ offset: 0 })
   } finally {
@@ -482,7 +728,116 @@ function setStatus(status) {
 function setViewScope(scope) {
   if (viewScope.value === scope) return
   viewScope.value = scope
+  if (scope !== 'user') {
+    filterUserId.value = null
+  }
   reload()
+}
+
+function onUserFilterChange() {
+  if (filterUserId.value) {
+    viewScope.value = 'user'
+    reload()
+    return
+  }
+  if (viewScope.value === 'user') {
+    setViewScope('all')
+  }
+}
+
+async function loadUserOptions() {
+  try {
+    const caps = await loadImageStudioCapabilities()
+    applyUserOptionsFromCaps(caps)
+  } catch {
+    userOptions.value = []
+  }
+}
+
+function applyUserOptionsFromCaps(caps) {
+  userOptions.value = caps?.user_filter_options || []
+}
+
+function restoreDramasCache() {
+  try {
+    const raw = sessionStorage.getItem(DRAMA_CACHE_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.items) || !parsed.items.length) return false
+    dramas.value = parsed.items
+    dramasLoaded.value = true
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistDramasCache() {
+  try {
+    sessionStorage.setItem(DRAMA_CACHE_KEY, JSON.stringify({
+      items: dramas.value,
+      savedAt: Date.now(),
+    }))
+  } catch {
+    // ignore
+  }
+}
+
+async function refreshDramasInBackground() {
+  try {
+    const dramaRes = await dramaAPI.listLite({ pageSize: 200 })
+    dramas.value = dramaRes?.items || []
+    dramasLoaded.value = true
+    persistDramasCache()
+  } catch {
+    // keep cached list
+  }
+}
+
+async function ensureDramasLoaded() {
+  if (dramasLoading.value) return
+  if (dramasLoaded.value) {
+    void refreshDramasInBackground()
+    return
+  }
+  restoreDramasCache()
+  if (dramasLoaded.value) {
+    void refreshDramasInBackground()
+    return
+  }
+  dramasLoading.value = true
+  try {
+    const dramaRes = await dramaAPI.listLite({ pageSize: 200 })
+    dramas.value = dramaRes?.items || []
+    dramasLoaded.value = true
+    persistDramasCache()
+  } catch {
+    dramasLoaded.value = false
+  } finally {
+    dramasLoading.value = false
+  }
+}
+
+function bumpStatsForStatus(status) {
+  const next = { ...stats.value }
+  next.total = (next.total || 0) + 1
+  if (status === 'completed') next.completed = (next.completed || 0) + 1
+  else if (status === 'failed') next.failed = (next.failed || 0) + 1
+  else next.processing = (next.processing || 0) + 1
+  stats.value = next
+}
+
+function prependSubmittedItem(generation) {
+  if (!generation?.id) return
+  const item = normalizeItem({
+    ...generation,
+    is_manual: true,
+    status: generation.status || 'pending',
+  })
+  if (items.value.some(row => row.id === item.id)) return
+  items.value = [item, ...items.value]
+  bumpStatsForStatus(item.status)
+  persistLedgerCache()
 }
 
 async function onGenerate(payload) {
@@ -491,9 +846,10 @@ async function onGenerate(payload) {
   try {
     const generation = await imageAPI.generate(payload)
     toast.success('图片任务已提交')
-    filterStatus.value = 'all'
+    prependSubmittedItem(generation)
     await reload()
     void pollGeneration(generation?.id)
+    startPolling()
   } catch (err) {
     toast.error(formatImageGenerationError(err?.message || '生成失败'))
   } finally {
@@ -548,20 +904,54 @@ function stopPolling() {
   }
 }
 
-onMounted(async () => {
-  const dramaRes = await dramaAPI.list()
-  dramas.value = dramaRes?.items || dramaRes || []
-  await reload()
-  startPolling()
+function onPageDragEnter(event) {
+  if (!isFileDragEvent(event)) return
+  pageDragDepth.value += 1
+}
+
+function onPageDragOver(event) {
+  if (!isFileDragEvent(event)) return
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+}
+
+function onPageDragLeave(event) {
+  if (!isFileDragEvent(event)) return
+  pageDragDepth.value = Math.max(0, pageDragDepth.value - 1)
+}
+
+function onPageDrop(event) {
+  pageDragDepth.value = 0
+  const files = extractImageFilesFromDataTransfer(event.dataTransfer)
+  if (!files.length) {
+    toast.warning('请拖入图片文件')
+    return
+  }
+  if (!composerRef.value?.uploadFiles) return
+  composerRef.value.uploadFiles(files, { source: 'drop' })
+  nextTick(() => {
+    feedRef.value?.scrollTo({ top: feedRef.value.scrollHeight, behavior: 'smooth' })
+  })
+}
+
+onMounted(() => {
+  const cachedCaps = getCachedImageStudioCapabilities()
+  if (cachedCaps) applyUserOptionsFromCaps(cachedCaps)
+  restoreLedgerCache()
+  void loadUserOptions()
+  if (filterDramaId.value) void ensureDramasLoaded()
+  reload().finally(() => startPolling())
+  window.addEventListener('keydown', handleImageViewerKeydown)
 })
 
 onUnmounted(() => {
   stopPolling()
+  window.removeEventListener('keydown', handleImageViewerKeydown)
 })
 </script>
 
 <style scoped>
 .studio-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -570,6 +960,45 @@ onUnmounted(() => {
     radial-gradient(circle at top right, rgba(124, 77, 255, 0.08), transparent 40%),
     radial-gradient(circle at top left, rgba(76, 125, 255, 0.08), transparent 35%),
     var(--bg-base);
+}
+
+.studio-page.is-dragover {
+  outline: 2px dashed rgba(76, 125, 255, 0.35);
+  outline-offset: -6px;
+}
+
+.studio-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(12, 18, 28, 0.42);
+  pointer-events: none;
+}
+
+.studio-drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 28px 36px;
+  border: 1px dashed var(--accent);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text-1);
+  text-align: center;
+}
+
+.studio-drop-overlay-card p {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.studio-drop-overlay-card span {
+  font-size: 12px;
 }
 
 .studio-header {
@@ -622,6 +1051,11 @@ onUnmounted(() => {
 
 .studio-scope-btn.active {
   background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.studio-member-select.active {
+  border-color: var(--accent);
   color: var(--accent-text);
 }
 
@@ -678,6 +1112,52 @@ onUnmounted(() => {
   color: var(--text-3);
 }
 
+.studio-grid-skeleton {
+  pointer-events: none;
+}
+
+.studio-card-skeleton {
+  cursor: default;
+}
+
+.studio-card-skeleton:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.studio-skeleton-block {
+  background: linear-gradient(
+    90deg,
+    var(--bg-2, rgba(255, 255, 255, 0.04)) 0%,
+    var(--bg-3, rgba(255, 255, 255, 0.08)) 50%,
+    var(--bg-2, rgba(255, 255, 255, 0.04)) 100%
+  );
+  background-size: 200% 100%;
+  animation: studio-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.studio-skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-2, rgba(255, 255, 255, 0.04)) 0%,
+    var(--bg-3, rgba(255, 255, 255, 0.08)) 50%,
+    var(--bg-2, rgba(255, 255, 255, 0.04)) 100%
+  );
+  background-size: 200% 100%;
+  animation: studio-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+
+.studio-skeleton-line-wide { width: 88%; }
+.studio-skeleton-line-narrow { width: 52%; margin-bottom: 0; }
+
+@keyframes studio-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 .studio-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -696,6 +1176,11 @@ onUnmounted(() => {
 .studio-card:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.studio-card-pinned {
+  border-color: rgba(255, 193, 7, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 193, 7, 0.2);
 }
 
 .studio-card-media {
@@ -759,6 +1244,22 @@ onUnmounted(() => {
   color: #fff;
 }
 
+.studio-card-pinned-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: rgba(255, 193, 7, 0.88);
+  color: #1a1400;
+  font-weight: 600;
+}
+
+.studio-card-pinned-badge.with-ref {
+  top: 32px;
+}
+
 .studio-card-status {
   position: absolute;
   top: 8px;
@@ -780,6 +1281,35 @@ onUnmounted(() => {
   line-height: 1;
   cursor: pointer;
   opacity: 0.85;
+}
+
+.studio-card-pin {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 2;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(15, 20, 28, 0.72);
+  color: #fff;
+  font-size: 10px;
+  line-height: 28px;
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+.studio-card-pin.active {
+  background: rgba(255, 193, 7, 0.9);
+  color: #1a1400;
+  font-weight: 600;
+}
+
+.studio-card-pin:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .studio-card-attach {
@@ -832,6 +1362,12 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
+.studio-card-operator {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 .tag-warn {
   border-color: rgba(255, 167, 38, 0.35);
   color: #ffb74d;
@@ -874,6 +1410,12 @@ onUnmounted(() => {
   font-size: 18px;
 }
 
+.studio-detail-operator {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
 .studio-detail-body {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
@@ -886,11 +1428,122 @@ onUnmounted(() => {
   background: #000;
 }
 
+.studio-detail-image-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
 .studio-detail-image {
   width: 100%;
   display: block;
   object-fit: contain;
   max-height: 70vh;
+}
+
+.studio-detail-refs-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.studio-detail-refs-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.studio-detail-refs-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.studio-detail-refs-hint {
+  font-size: 11px;
+}
+
+.studio-detail-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.studio-detail-ref-btn {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-1);
+  cursor: zoom-in;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.studio-detail-ref-btn:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.studio-detail-ref-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.studio-image-viewer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.studio-image-viewer {
+  width: min(960px, 100%);
+  max-height: 92vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.studio-image-viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.studio-image-viewer-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.studio-image-viewer-body {
+  padding: 12px;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio-image-viewer-body img {
+  max-width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 8px;
 }
 
 .studio-detail-empty {
@@ -908,20 +1561,6 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-}
-
-.studio-detail-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.studio-detail-refs img {
-  width: 56px;
-  height: 56px;
-  object-fit: cover;
-  border-radius: 10px;
-  border: 1px solid var(--border);
 }
 
 .studio-detail-prompt {

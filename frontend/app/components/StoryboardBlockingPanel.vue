@@ -5,7 +5,10 @@
         <span class="blocking-panel-title">场景站位图 (Blocking)</span>
         <span class="dim blocking-panel-copy">3D 纯色人偶站位示意图，仅作空间布局参考，避免干扰后续视频生成</span>
       </div>
-      <span v-if="shotLabel" class="tag mono">{{ shotLabel }}</span>
+      <div class="blocking-panel-head-actions">
+          <NuxtLink v-if="directorHref" :to="directorHref" class="btn btn-sm">3D 导演台</NuxtLink>
+        <span v-if="shotLabel" class="tag mono">{{ shotLabel }}</span>
+      </div>
     </div>
 
     <div v-if="shotModeHint" class="blocking-mode-hint dim">{{ shotModeHint }}</div>
@@ -118,7 +121,7 @@
             删除站位图
           </button>
           <span v-if="disableReason" class="blocking-hint blocking-hint-warn">{{ disableReason }}</span>
-          <span v-else class="dim blocking-hint">需已绑定场景且场景/角色均有参考图；消耗 6 积分</span>
+          <span v-else class="dim blocking-hint">需已绑定场景且场景/角色均有参考图；消耗 12 积分</span>
         </div>
       </div>
     </template>
@@ -155,6 +158,7 @@ const props = defineProps({
   initialPrompt: { type: String, default: '' },
   imageReferenceSupported: { type: Boolean, default: true },
   characterName: { type: Function, default: (id) => `#${id}` },
+  directorHref: { type: String, default: '' },
 })
 
 const emit = defineEmits(['entry-change', 'notes-blur', 'generate', 'gen-first', 'gen-last', 'clear', 'preview'])
@@ -194,6 +198,12 @@ function normalizePath(raw) {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+}
+.blocking-panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 .blocking-panel-title {
   display: block;

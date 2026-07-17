@@ -3,6 +3,7 @@ import { detectVideoShots } from '../utils/shot-detect.js'
 import { extractAudioWav } from '../utils/extract-audio.js'
 import { transcribeRepaintAudio } from './repaint-asr.js'
 import { analyzeShotsWithVisionSafe } from './repaint-shot-vision.js'
+import { analyzeFullVideoUnderstandingSafe } from './repaint-video-understanding.js'
 import { logTaskError, logTaskProgress, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import {
   assignUtterancesToShots,
@@ -198,34 +199,82 @@ export async function runRepaintAnalysis(params: RunRepaintAnalysisParams): Prom
   analysis.utterances = utterances
   analysis.shot_assignments = assignUtterancesToShots(analysis.shots, utterances)
 
-  if (utterances.length) {
-    try {
-      logTaskProgress('RepaintAnalysis', 'entity-extract')
-      const extracted = await extractEntitiesFromTimeline(analysis)
-      analysis.characters = extracted.characters
-      analysis.scenes = extracted.scenes
-      analysis.props = extracted.props
-      analysis.shot_assignments = extracted.shot_assignments
-    } catch (err: any) {
-      warnings.push(`实体抽取失败：${err.message || err}`)
-      logTaskError('RepaintAnalysis', 'entity-extract', { error: err.message })
-    }
-  } else {
-    warnings.push('无台词轴，跳过实体抽取（可手动添加角色/场景）')
-  }
-
+  let usedFullVideoUnderstanding = false
   try {
-    logTaskProgress('RepaintAnalysis', 'shot-vision')
-    const { visuals, warning } = await analyzeShotsWithVisionSafe(
+    logTaskProgress('RepaintAnalysis', 'full-video-understand')
+    const { result, warning } = await analyzeFullVideoUnderstandingSafe(
       analysis,
       params.sourceVideoPath,
       params.dramaId,
     )
-    if (visuals.length) analysis.shot_visuals = visuals
-    if (warning) warnings.push(warning)
+    if (warning) warnings.push(`整片视频理解：${warning}`)
+    if (result) {
+      analysis.video_summary = result.video_summary
+      analysis.characters = result.characters
+      analysis.scenes = result.scenes
+      analysis.props = result.props
+      analysis.shot_assignments = result.shot_assignments
+      analysis.shot_visuals = result.shot_visuals
+      usedFullVideoUnderstanding = true
+    }
   } catch (err: any) {
-    warnings.push(`视觉理解失败：${err.message || err}`)
-    logTaskError('RepaintAnalysis', 'shot-vision', { error: err.message })
+    warnings.push(`整片视频理解失败：${err.message || err}`)
+    logTaskError('RepaintAnalysis', 'full-video-understand', { error: err.message })
+  }
+
+  if (!usedFullVideoUnderstanding) {
+    if (utterances.length) {
+      try {
+        logTaskProgress('RepaintAnalysis', 'entity-extract')
+        const extracted = await extractEntitiesFromTimeline(analysis)
+        analysis.characters = extracted.characters
+        analysis.scenes = extracted.scenes
+        analysis.props = extracted.props
+        analysis.shot_assignments = extracted.shot_assignments
+      } catch (err: any) {
+        warnings.push(`实体抽取失败：${err.message || err}`)
+        logTaskError('RepaintAnalysis', 'entity-extract', { error: err.message })
+      }
+    } else {
+      warnings.push('无台词轴，跳过实体抽取（可手动添加角色/场景）')
+    }
+
+    try {
+      logTaskProgress('RepaintAnalysis', 'shot-vision')
+      const { visuals, warning } = await analyzeShotsWithVisionSafe(
+        analysis,
+        params.sourceVideoPath,
+        params.dramaId,
+      )
+      if (visuals.length) analysis.shot_visuals = visuals
+      if (warning) warnings.push(warning)
+    } catch (err: any) {
+      warnings.push(`逐帧视觉理解失败：${err.message || err}`)
+      logTaskError('RepaintAnalysis', 'shot-vision', { error: err.message })
+    }
+  } else {
+    const weakShots = analysis.shots.filter(s => {
+      const visual = analysis.shot_visuals?.find(v => v.shot_id === s.id)
+      return !visual?.shot_size || !visual?.action_blocking
+    })
+    if (weakShots.length) {
+      try {
+        logTaskProgress('RepaintAnalysis', 'shot-vision-supplement', { count: weakShots.length })
+        const { visuals, warning } = await analyzeShotsWithVisionSafe(
+          { ...analysis, shots: weakShots },
+          params.sourceVideoPath,
+          params.dramaId,
+        )
+        if (visuals.length) {
+          const byId = new Map((analysis.shot_visuals || []).map(v => [v.shot_id, v]))
+          for (const visual of visuals) byId.set(visual.shot_id, visual)
+          analysis.shot_visuals = [...byId.values()]
+        }
+        if (warning) warnings.push(`薄弱镜头视觉补全：${warning}`)
+      } catch (err: any) {
+        warnings.push(`薄弱镜头视觉补全失败：${err.message || err}`)
+      }
+    }
   }
 
   analysis.warnings = warnings.length ? warnings : undefined
@@ -238,6 +287,7 @@ export async function runRepaintAnalysis(params: RunRepaintAnalysisParams): Prom
     scenes: analysis.scenes.length,
     props: analysis.props.length,
     shot_visuals: analysis.shot_visuals?.length || 0,
+    video_summary: analysis.video_summary ? analysis.video_summary.length : 0,
   })
 
   return analysis

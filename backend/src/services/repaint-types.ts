@@ -61,6 +61,8 @@ export interface RepaintAnalysis {
   props: RepaintPropDraft[]
   shot_assignments: RepaintShotAssignment[]
   shot_visuals?: RepaintShotVisual[]
+  /** 整片视频理解摘要 */
+  video_summary?: string
   audio_path?: string
   analyzed_at?: string
   warnings?: string[]
@@ -92,6 +94,7 @@ export function parseRepaintAnalysis(raw?: string | null): RepaintAnalysis | nul
       props: Array.isArray(parsed.props) ? parsed.props : [],
       shot_assignments: Array.isArray(parsed.shot_assignments) ? parsed.shot_assignments : [],
       shot_visuals: Array.isArray(parsed.shot_visuals) ? parsed.shot_visuals : undefined,
+      video_summary: parsed.video_summary ? String(parsed.video_summary) : undefined,
       audio_path: parsed.audio_path,
       analyzed_at: parsed.analyzed_at,
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : undefined,

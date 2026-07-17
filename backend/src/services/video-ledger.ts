@@ -1,14 +1,13 @@
 import { db, schema } from '../db/index.js'
-import { and, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { toSnakeCase } from '../utils/transform.js'
-import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
-import { resolvePosterDisplayUrl } from '../utils/video-poster.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
 import type { AuthUser } from '../middleware/auth.js'
 import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
+import { videoPosterPathForSource } from '../utils/video-poster.js'
 
-/** 列表接口只返回路径（卡片仅展示数量，避免逐条 OSS 签名） */
+/** 列表接口只返回路径（卡片展示走前端批量 resolve，避免逐条 OSS 签名） */
 function parseReferenceImagePaths(row: {
   imageUrl?: string | null
   firstFrameUrl?: string | null
@@ -47,24 +46,7 @@ function parseReferenceImagePaths(row: {
     } catch { /* ignore */ }
   }
 
-  for (const ref of parseVideoContentRefs(row.referencePayload)) {
-    if (ref.type === 'image') push(ref.url)
-  }
-
   return paths.map(path => ({ path }))
-}
-
-function parseReferenceVideos(row: { referencePayload?: string | null }) {
-  return parseVideoContentRefs(row.referencePayload)
-    .filter(ref => ref.type === 'video')
-    .map((ref, idx) => {
-      const path = String(ref.url || '').trim().replace(/^\/+/, '')
-      return {
-        path,
-        label: ref.label || `参考视频${idx + 1}`,
-      }
-    })
-    .filter(item => item.path)
 }
 
 export interface VideoLedgerQuery {
@@ -148,12 +130,26 @@ function buildAccessibleDramaIds(user: AuthUser, activeTeamId: number | null | u
   return ids
 }
 
-function buildLedgerSqlConditions(query: VideoLedgerQuery): SQL[] {
+function buildLedgerSqlConditions(
+  query: VideoLedgerQuery,
+  accessibleDramaIds: Set<number>,
+): SQL[] {
   const conditions: SQL[] = [isNull(schema.videoGenerations.deletedAt)]
 
   if (query.dramaId) {
     conditions.push(eq(schema.videoGenerations.dramaId, query.dramaId))
+  } else if (query.user.role !== 'admin' || query.activeTeamId != null) {
+    const accessibleList = [...accessibleDramaIds]
+    if (!accessibleList.length) {
+      conditions.push(sql`0 = 1`)
+    } else {
+      conditions.push(or(
+        isNull(schema.videoGenerations.dramaId),
+        inArray(schema.videoGenerations.dramaId, accessibleList),
+      )!)
+    }
   }
+
   if (query.provider?.trim()) {
     conditions.push(eq(schema.videoGenerations.provider, query.provider.trim()))
   }
@@ -177,6 +173,7 @@ function buildLedgerSqlConditions(query: VideoLedgerQuery): SQL[] {
     const kw = `%${query.keyword.trim().replace(/[%_]/g, '')}%`
     conditions.push(sql`lower(${schema.videoGenerations.prompt}) like lower(${kw})`)
   }
+
   const targetUserId = query.userId ?? (query.mineOnly ? query.user.id : null)
   if (targetUserId) {
     conditions.push(or(
@@ -188,16 +185,40 @@ function buildLedgerSqlConditions(query: VideoLedgerQuery): SQL[] {
   return conditions
 }
 
+function warmVideoPosters(rows: typeof schema.videoGenerations.$inferSelect[]) {
+  void (async () => {
+    const { ensureVideoPoster } = await import('../utils/video-poster.js')
+    for (const row of rows) {
+      if (row.status !== 'completed') continue
+      const path = row.localPath || row.videoUrl
+      if (!path) continue
+      try {
+        await ensureVideoPoster(path)
+      } catch {
+        /* ignore */
+      }
+    }
+  })()
+}
+
+function emptyLedgerResult(limit: number, offset: number) {
+  return {
+    items: [],
+    stats: { total: 0, completed: 0, processing: 0, failed: 0 },
+    pagination: { limit, offset, total: 0, has_more: false },
+  }
+}
+
 export function listVideoLedger(query: VideoLedgerQuery) {
   const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100)
   const offset = Math.max(Number(query.offset || 0), 0)
   const accessibleDramaIds = buildAccessibleDramaIds(query.user, query.activeTeamId)
 
-  const sqlConditions = buildLedgerSqlConditions(query)
+  const sqlConditions = buildLedgerSqlConditions(query, accessibleDramaIds)
   let rows = db.select().from(schema.videoGenerations)
     .where(and(...sqlConditions))
+    .orderBy(desc(schema.videoGenerations.createdAt))
     .all()
-    .filter(r => !r.dramaId || accessibleDramaIds.has(r.dramaId))
 
   const targetUserId = query.userId ?? (query.mineOnly ? query.user.id : null)
   if (targetUserId && rows.some(r => r.userId == null)) {
@@ -208,21 +229,39 @@ export function listVideoLedger(query: VideoLedgerQuery) {
     })
   }
 
-  const storyboardIds = [...new Set(rows.map(r => r.storyboardId).filter((id): id is number => !!id))]
-  const storyboards = storyboardIds.length
-    ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
-    : []
-  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+  if (!rows.length) {
+    return emptyLedgerResult(limit, offset)
+  }
 
   if (query.episodeId) {
-    rows = rows.filter(r => {
+    const storyboardIds = [...new Set(rows.map(r => r.storyboardId).filter((id): id is number => !!id))]
+    const storyboards = storyboardIds.length
+      ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
+      : []
+    const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+    rows = rows.filter((r) => {
       const sb = r.storyboardId ? sbMap.get(r.storyboardId) : null
       return sb?.episodeId === query.episodeId
     })
   }
 
+  const stats = {
+    total: rows.length,
+    completed: rows.filter(r => r.status === 'completed').length,
+    processing: rows.filter(r => r.status === 'processing' || r.status === 'pending').length,
+    failed: rows.filter(r => r.status === 'failed').length,
+  }
+
+  const page = rows.slice(offset, offset + limit)
+
+  const storyboardIds = [...new Set(page.map(r => r.storyboardId).filter((id): id is number => !!id))]
+  const storyboards = storyboardIds.length
+    ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
+    : []
+  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+
   const episodeIds = [...new Set(storyboards.map(sb => sb.episodeId).filter((id): id is number => !!id))]
-  const dramaIds = [...new Set(rows.map(r => r.dramaId).filter((id): id is number => !!id))]
+  const dramaIds = [...new Set(page.map(r => r.dramaId).filter((id): id is number => !!id))]
 
   const episodes = episodeIds.length
     ? db.select().from(schema.episodes).where(inArray(schema.episodes.id, episodeIds)).all().filter(e => !e.deletedAt)
@@ -234,16 +273,6 @@ export function listVideoLedger(query: VideoLedgerQuery) {
     : []
   const dramaMap = new Map(dramas.map(d => [d.id, d]))
 
-  rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
-
-  const stats = {
-    total: rows.length,
-    completed: rows.filter(r => r.status === 'completed').length,
-    processing: rows.filter(r => r.status === 'processing' || r.status === 'pending').length,
-    failed: rows.filter(r => r.status === 'failed').length,
-  }
-
-  const page = rows.slice(offset, offset + limit)
   const items = page.map((row) => {
     const sb = row.storyboardId ? sbMap.get(row.storyboardId) : null
     const ep = sb ? epMap.get(sb.episodeId) : null
@@ -264,14 +293,11 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       reference_mode: row.referenceMode,
       video_url: row.videoUrl,
       local_path: row.localPath,
+      poster_path: videoPosterPathForSource(rawVideo),
       created_at: row.createdAt,
       updated_at: row.updatedAt,
       completed_at: row.completedAt,
-      display_video_url: resolveDisplayMediaUrl(rawVideo),
-      display_poster_url: resolvePosterDisplayUrl(rawVideo),
       reference_images: parseReferenceImagePaths(row),
-      reference_videos: parseReferenceVideos(row),
-      reference_payload: row.referencePayload,
       is_manual: !row.storyboardId,
       drama_title: drama?.title || null,
       episode_id: ep?.id || null,
@@ -282,6 +308,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       storyboard_exists: !!sb,
     })
   })
+
+  warmVideoPosters(page)
 
   return {
     items,

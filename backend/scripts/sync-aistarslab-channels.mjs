@@ -6,6 +6,8 @@ import 'dotenv/config'
 import { eq } from 'drizzle-orm'
 import { db, schema } from '../src/db/index.js'
 import { now } from '../src/utils/response.js'
+import { applyAistarslabChannelVisibility, setAistarslabChannelEnabled } from '../src/utils/aistarslab-channel-settings.js'
+import { AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS } from '../src/constants/aistarslab.js'
 import {
   findAistarslabVideoConfigRow,
   loadAistarslabVideoConfigFromProvider,
@@ -13,8 +15,8 @@ import {
   resolveDefaultAistarslabSelection,
   syncAistarslabModelCreditPricing,
   computeAistarslabUpstreamCreditCost,
+  filterAistarslabConfigForDisplay,
 } from '../src/utils/aistarslab-video-options.js'
-import { applyAistarslabChannelVisibility, setAistarslabChannelEnabled } from '../src/utils/aistarslab-channel-settings.js'
 import { getActionCost } from '../src/services/credits.js'
 import { aistarslabModelCreditAction } from '../src/constants/aistarslab.js'
 
@@ -33,15 +35,17 @@ if (!remote.channels.length) {
   process.exit(1)
 }
 
-for (const channel of remote.channels) {
-  setAistarslabChannelEnabled(channel.channel, true)
-}
-
 syncAistarslabModelCreditPricing(remote)
 
+const displayFiltered = filterAistarslabConfigForDisplay(remote, AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS)
+for (const channel of remote.channels) {
+  const show = displayFiltered.channels.some(item => item.channel === channel.channel)
+  setAistarslabChannelEnabled(channel.channel, show)
+}
+
 const visible = applyAistarslabChannelVisibility(remote)
-const defaults = resolveDefaultAistarslabSelection(remote)
-const modelIds = [...new Set(remote.channels.flatMap(ch => ch.models.map(m => m.model)))]
+const defaults = resolveDefaultAistarslabSelection(visible)
+const modelIds = [...new Set(visible.channels.flatMap(ch => ch.models.map(m => m.model)))]
 const ts = now()
 
 db.update(schema.aiServiceConfigs)
@@ -52,13 +56,13 @@ db.update(schema.aiServiceConfigs)
   .where(eq(schema.aiServiceConfigs.id, row.id))
   .run()
 
-console.log(`\n上游共 ${remote.channels.length} 条线路、${modelIds.length} 个模型`)
+console.log(`\n上游共 ${remote.channels.length} 条线路、${[...new Set(remote.channels.flatMap(ch => ch.models.map(m => m.model)))].length} 个模型`)
+console.log(`展示规则: 仅 Seedance 模型；上游参考价（最长时长）≤ ${AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS} 积分`)
 console.log(`默认选择: 线路 ${defaults.channel} · ${defaults.model}`)
-console.log(`前台展示 ${visible.channels.length} 条线路（已启用）\n`)
+console.log(`前台展示 ${visible.channels.length} 条线路\n`)
 
-for (const channel of remote.channels) {
-  const enabled = visible.channels.some(item => item.channel === channel.channel)
-  console.log(`线路 ${channel.channel} ${channel.title} [${enabled ? '展示' : '禁用'}] · ${channel.secondsMin}-${channel.secondsMax}s`)
+for (const channel of visible.channels) {
+  console.log(`线路 ${channel.channel} ${channel.title} · ${channel.secondsMin}-${channel.secondsMax}s`)
   for (const model of channel.models) {
     const upstream = computeAistarslabUpstreamCreditCost(
       remote,
@@ -71,9 +75,17 @@ for (const channel of remote.channels) {
     const priceHint = model.fixedTotalCredits
       ? `上游 ${model.fixedTotalCredits} 积分/条`
       : model.creditsPerSecond
-        ? `上游 ${model.creditsPerSecond} 积分/秒（15秒≈${Math.round(model.creditsPerSecond * 15)}）`
-        : `上游约 ${upstream} 积分`
+        ? `上游 ${model.creditsPerSecond} 积分/秒（${channel.secondsMax}秒=${upstream}）`
+        : `上游 ${upstream} 积分`
     console.log(`  · ${model.model} ${model.label} · ${priceHint} · 用户 ${userCost} 积分/次`)
+  }
+}
+
+const hidden = remote.channels.filter(ch => !visible.channels.some(item => item.channel === ch.channel))
+if (hidden.length) {
+  console.log(`\n已隐藏 ${hidden.length} 条线路（非 Seedance / 上游 > ${AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS} / 无可用模型）:`)
+  for (const channel of hidden) {
+    console.log(`  · 线路 ${channel.channel} ${channel.title}`)
   }
 }
 

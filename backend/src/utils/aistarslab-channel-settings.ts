@@ -1,4 +1,6 @@
 import { getAppMeta, setAppMeta } from '../db/index.js'
+import { AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS } from '../constants/aistarslab.js'
+import { filterAistarslabConfigForDisplay } from './aistarslab-video-options.js'
 
 export const AISTARSLAB_CHANNEL_ENABLED_META_KEY = 'aistarslab_channel_enabled'
 
@@ -45,10 +47,11 @@ export function filterEnabledAistarslabChannels<T extends { channel: string }>(c
 }
 
 export function applyAistarslabChannelVisibility<T extends { channels: Array<{ channel: string }> }>(config: T): T {
+  const displayFiltered = filterAistarslabConfigForDisplay(config as any, AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS)
   return {
-    ...config,
-    channels: filterEnabledAistarslabChannels(config.channels),
-  }
+    ...displayFiltered,
+    channels: filterEnabledAistarslabChannels(displayFiltered.channels),
+  } as unknown as T
 }
 
 export function listAistarslabChannelSettings(channels: Array<{ channel: string; title?: string; description?: string }>) {

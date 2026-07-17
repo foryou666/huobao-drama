@@ -5,7 +5,9 @@
 import { MiniMaxImageAdapter } from './minimax-image'
 import { MiniMaxVideoAdapter } from './minimax-video'
 import { MiniMaxTTSAdapter } from './minimax-tts'
+import { IndexTTS2Adapter } from './indextts2'
 import { OpenAIImageAdapter } from './openai-image'
+import { ApimartImageAdapter } from './apimart-image'
 import { GeminiImageAdapter } from './gemini-image'
 import { VolcEngineImageAdapter } from './volcengine-image'
 import { VolcEngineVideoAdapter } from './volcengine-video'
@@ -15,6 +17,7 @@ import { AliVideoAdapter } from './ali-video'
 import { ChengmengVideoAdapter } from './chengmeng-video'
 import { GeeknowGrokVideoAdapter } from './geeknow-grok-video'
 import { JimengWebVideoAdapter } from './jimeng-web-video'
+import { XyqWebVideoAdapter } from './xyq-web-video'
 import { AistarslabVideoAdapter } from './aistarslab-video'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
@@ -29,6 +32,7 @@ export const imageAdapters: Record<string, ImageProviderAdapter> = {
   chatfire: new OpenAIImageAdapter(),
   geeknow: new OpenAIImageAdapter(),
   qilingze: new OpenAIImageAdapter(),
+  apimart: new ApimartImageAdapter(),
 }
 
 // 视频 Adapter 注册表
@@ -40,6 +44,7 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
   chengmeng: new ChengmengVideoAdapter(),
   geeknow: new GeeknowGrokVideoAdapter(),
   jimeng_web: new JimengWebVideoAdapter(),
+  xyq_web: new XyqWebVideoAdapter(),
   aistarslab: new AistarslabVideoAdapter(),
   // Chatfire 视频 - 待确认 API 格式
 }
@@ -47,6 +52,8 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
 // TTS Adapter 注册表
 export const ttsAdapters: Record<string, TTSProviderAdapter> = {
   minimax: new MiniMaxTTSAdapter(),
+  indextts2: new IndexTTS2Adapter(),
+  tts2: new IndexTTS2Adapter(),
 }
 
 export function getTTSAdapter(provider: string): TTSProviderAdapter {

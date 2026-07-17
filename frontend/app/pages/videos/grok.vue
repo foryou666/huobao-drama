@@ -3,6 +3,10 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">视频生成（Grok）</h1>
+        <StudioGuideButton
+          title="Grok 通道说明"
+          text="使用 Grok 视频生成能力；可关联项目并用参考图/提示词创作。具体可用模型和计费规则以页面选项为准。"
+        />
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -23,7 +27,7 @@
             查看全部
           </button>
         </div>
-        <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
+        <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
         </select>
@@ -48,7 +52,15 @@
     </div>
 
     <div ref="feedRef" class="studio-feed">
-      <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
+      <div v-if="loading && !items.length" class="studio-grid studio-grid-skeleton">
+        <article v-for="n in 8" :key="`sk-${n}`" class="studio-card studio-card-skeleton">
+          <div class="studio-card-media ratio-portrait studio-skeleton-block" />
+          <div class="studio-card-body">
+            <div class="studio-skeleton-line studio-skeleton-line-wide" />
+            <div class="studio-skeleton-line studio-skeleton-line-narrow" />
+          </div>
+        </article>
+      </div>
       <div v-else-if="!items.length" class="studio-empty card">
         <p>还没有 Grok 视频，在底部输入描述并点击「Grok 生成」</p>
       </div>
@@ -195,13 +207,22 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, videoAPI } from '~/composables/useApi'
+import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchMediaUrlsInBackground, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
+import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
 import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
+import {
+  buildVideoLedgerCacheKey,
+  restoreVideoLedgerCache,
+  persistVideoLedgerCache,
+  loadVideoDramasLite,
+  finalizeVideoLedgerItems,
+} from '~/utils/video-studio-page.js'
+
+const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-grok-v1'
 
 const GROK_MODEL_IDS = [
   'grok-video-1.5-max',
@@ -239,6 +260,18 @@ const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
 let pollTimer = null
+
+function videoLedgerCacheKey() {
+  return buildVideoLedgerCacheKey(VIDEO_LEDGER_CACHE_PREFIX, [
+    viewScope.value,
+    filterDramaId.value || 'all',
+    filterStatus.value,
+  ])
+}
+
+function ensureDramasLoaded() {
+  if (!dramas.value.length) void loadVideoDramasLite(dramas)
+}
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -297,6 +330,7 @@ function normalizeItem(row) {
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
     display_poster_url: row.display_poster_url || '',
+    poster_path: row.poster_path || row.posterPath || '',
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -471,14 +505,14 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  const mediaPaths = collectMediaPrefetchPaths(
-    ...nextItems.flatMap(item => [
-      item.local_path,
-      item.video_url,
-      ...(item.reference_images || []).map(ref => ref.path),
-    ]),
-  )
-  if (mediaPaths.length) prefetchMediaUrlsInBackground(mediaPaths)
+  finalizeVideoLedgerItems(nextItems)
+  if (!append) {
+    persistVideoLedgerCache(videoLedgerCacheKey(), {
+      items: items.value,
+      stats: stats.value,
+      pagination: pagination.value,
+    })
+  }
 }
 
 async function refreshLedger() {
@@ -490,7 +524,7 @@ async function refreshLedger() {
 }
 
 async function reload() {
-  loading.value = true
+  if (!items.value.length) loading.value = true
   try {
     await loadLedger({ offset: 0 })
   } finally {
@@ -618,12 +652,22 @@ function stopPolling() {
   }
 }
 
-onMounted(async () => {
-  await loadGrokOptions()
-  const dramaRes = await dramaAPI.list()
-  dramas.value = dramaRes?.items || dramaRes || []
-  await reload()
-  startPolling()
+onMounted(() => {
+  const cached = restoreVideoLedgerCache(videoLedgerCacheKey())
+  if (cached?.items?.length) {
+    items.value = cached.items.map(normalizeItem)
+    stats.value = cached.stats || stats.value
+    pagination.value = cached.pagination || pagination.value
+    finalizeVideoLedgerItems(items.value)
+  } else {
+    loading.value = true
+  }
+  void loadGrokOptions()
+  void loadVideoDramasLite(dramas)
+  void loadLedger({ offset: 0 }).finally(() => {
+    loading.value = false
+    startPolling()
+  })
 })
 
 onUnmounted(() => {
@@ -651,32 +695,42 @@ onUnmounted(() => {
 
 .studio-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px 12px;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.studio-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
 .studio-title {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.studio-desc {
   margin: 0;
-  font-size: 13px;
-  color: var(--text-3);
-  max-width: 560px;
+  font-size: 20px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .studio-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  min-width: 0;
+  flex: 1;
+}
+
+.studio-header-actions .studio-filter-select {
+  min-width: 0;
+  max-width: 160px;
 }
 
 .studio-scope-toggle {
@@ -1004,6 +1058,23 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.studio-grid-skeleton { pointer-events: none; }
+.studio-card-skeleton { cursor: default; }
+.studio-card-skeleton:hover { transform: none; box-shadow: none; }
+.studio-skeleton-block,
+.studio-skeleton-line {
+  background: linear-gradient(90deg, var(--bg-2) 25%, var(--bg-1) 50%, var(--bg-2) 75%);
+  background-size: 200% 100%;
+  animation: studio-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.studio-skeleton-line { height: 10px; margin-bottom: 8px; border-radius: 4px; }
+.studio-skeleton-line-wide { width: 88%; }
+.studio-skeleton-line-narrow { width: 52%; margin-bottom: 0; }
+@keyframes studio-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 @media (max-width: 860px) {

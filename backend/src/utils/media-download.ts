@@ -127,43 +127,22 @@ async function openOssReadStreamForStaticPath(staticPath: string): Promise<Reada
 /** 打开 static 逻辑路径的读取流：线上优先 OSS，本地仅作开发回退 */
 
 export async function openMediaReadStream(staticPath: string): Promise<{ stream: ReadableStreamType; source: 'local' | 'oss' }> {
-
   const normalized = assertSafeStaticMediaPath(staticPath)
-
   const absPath = getAbsolutePath(normalized)
 
-
+  if (fs.existsSync(absPath)) {
+    return { stream: createReadStream(absPath), source: 'local' }
+  }
 
   if (!shouldPreferLocalStaticPath(normalized)) {
-
     const ossStream = await openOssReadStreamForStaticPath(normalized)
-
     if (ossStream) return { stream: ossStream, source: 'oss' }
-
-  } else if (fs.existsSync(absPath)) {
-
-    return { stream: createReadStream(absPath), source: 'local' }
-
   }
-
-
 
   const ossStream = await openOssReadStreamForStaticPath(normalized)
-
   if (ossStream) return { stream: ossStream, source: 'oss' }
 
-
-
-  if (fs.existsSync(absPath)) {
-
-    return { stream: createReadStream(absPath), source: 'local' }
-
-  }
-
-
-
   throw new Error('file not found')
-
 }
 
 

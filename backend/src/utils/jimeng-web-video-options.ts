@@ -12,7 +12,7 @@ import {
   resolveJimengSubmitModel,
 } from '../constants/jimeng-web.js'
 import { hasJimengWebSession, maskJimengSessionId, getJimengWebSession, listJimengWebSessions, getActiveJimengSessionId, toPublicJimengSession } from '../services/jimeng-web-session.js'
-import { validateJimengSession } from '../services/jimeng-web-client.js'
+import { validateJimengSession, getJimengUserCredit } from '../services/jimeng-web-client.js'
 
 export const JIMENG_SESSION_STYLE_PREFIX = 'jimeng_session:'
 
@@ -35,15 +35,20 @@ export function resolveJimengSessionForStyle(style?: string | null) {
 export async function listJimengSessionSummaries() {
   const store = listJimengWebSessions()
   const activeId = getActiveJimengSessionId()
-  const items = []
-  for (const session of store) {
+  return Promise.all(store.map(async (session) => {
     const valid = await validateJimengSession(session)
-    items.push({
+    const credits = valid ? await getJimengUserCredit(session) : null
+    return {
       ...toPublicJimengSession(session, activeId),
       valid,
-    })
-  }
-  return items
+      gift_credit: credits?.giftCredit ?? null,
+      purchase_credit: credits?.purchaseCredit ?? null,
+      vip_credit: credits?.vipCredit ?? null,
+      total_credit: credits?.totalCredit ?? null,
+      credit_expire_at: credits?.creditExpireAt ?? null,
+      credit_expire_at_iso: credits?.creditExpireAtIso ?? null,
+    }
+  }))
 }
 
 export function isJimengVideoRequest(body: Record<string, unknown>): boolean {

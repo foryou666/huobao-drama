@@ -36,22 +36,35 @@ function parseBearer(header?: string) {
   return header.slice(7).trim() || null
 }
 
-export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
+export type AuthResolveResult =
+  | { ok: true; user: AuthUser }
+  | { ok: false; reason: 'invalid_token' | 'not_found' | 'frozen' }
+
+export async function resolveAuthUserDetailed(token: string): Promise<AuthResolveResult> {
   try {
     const payload = await verify(token, getAuthSecret(), 'HS256')
     const userId = Number(payload.sub)
-    if (!userId) return null
+    if (!userId) return { ok: false, reason: 'invalid_token' }
     const [row] = db.select().from(schema.users).where(eq(schema.users.id, userId)).all()
-    if (!row || !row.isActive) return null
+    if (!row) return { ok: false, reason: 'not_found' }
+    if (!row.isActive) return { ok: false, reason: 'frozen' }
     return {
-      id: row.id,
-      username: row.username,
-      displayName: row.displayName || row.username,
-      role: row.role as UserRole,
+      ok: true,
+      user: {
+        id: row.id,
+        username: row.username,
+        displayName: row.displayName || row.username,
+        role: row.role as UserRole,
+      },
     }
   } catch {
-    return null
+    return { ok: false, reason: 'invalid_token' }
   }
+}
+
+export async function resolveAuthUser(token: string): Promise<AuthUser | null> {
+  const result = await resolveAuthUserDetailed(token)
+  return result.ok ? result.user : null
 }
 
 export const requireAuth = createMiddleware<{ Variables: AuthVariables }>(async (c, next) => {
@@ -60,9 +73,12 @@ export const requireAuth = createMiddleware<{ Variables: AuthVariables }>(async 
 
   const token = parseBearer(c.req.header('Authorization'))
   if (!token) return unauthorized(c, '请先登录')
-  const user = await resolveAuthUser(token)
-  if (!user) return unauthorized(c, '登录已失效，请重新登录')
-  c.set('user', user)
+  const result = await resolveAuthUserDetailed(token)
+  if (!result.ok) {
+    if (result.reason === 'frozen') return unauthorized(c, '账号已冻结，请联系管理员')
+    return unauthorized(c, '登录已失效，请重新登录')
+  }
+  c.set('user', result.user)
   await next()
 })
 

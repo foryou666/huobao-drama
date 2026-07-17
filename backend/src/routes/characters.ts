@@ -29,7 +29,8 @@ import {
 } from '../utils/character-image-variants.js'
 import { buildOutfitChangePrompt, slugifyOutfitId } from '../utils/character-outfit-prompts.js'
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
-import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { tryChargeUser, tryChargeImageUser, tryRefundCharge, tryPreflightBatchImageCharge, chargeBatchImageItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { resolveBillingImageModel, resolveBillingImageProvider } from '../utils/image-billing.js'
 import { linkCharacterToEpisode } from '../utils/episode-entity-links.js'
 import path from 'path'
 
@@ -365,13 +366,13 @@ app.post('/:id/transform-image', async (c) => {
   const prompt = buildCharacterTransformPrompt(preset, char.name)
   const isOutfitSource = sourceKey !== 'primary'
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_TRANSFORM, {
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.CHARACTER_TRANSFORM, config.model, {
     summary: `角色风格转换：${char.name} · ${preset.label}`,
     dramaId: char.dramaId,
     episodeId: ep.id,
     resourceType: 'character',
     resourceId: id,
-  })
+  }, config.provider)
   if (billed.error) return billed.error
 
   try {
@@ -467,13 +468,13 @@ app.post('/:id/generate-outfit', async (c) => {
   const outfitId = String(body.outfit_id || existingOutfit?.outfit_id || slugifyOutfitId(label, costumeAssetId))
   const prompt = buildOutfitChangePrompt(char.name, label, body.prompt)
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_OUTFIT, {
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.CHARACTER_OUTFIT, config.model, {
     summary: `角色换装：${char.name} · ${label}`,
     dramaId: char.dramaId,
     episodeId: ep.id,
     resourceType: 'character',
     resourceId: id,
-  })
+  }, config.provider)
   if (billed.error) return billed.error
 
   try {
@@ -545,13 +546,15 @@ app.post('/:id/generate-image', async (c) => {
     db.update(schema.characters).set({ imagePrompt: prompt, updatedAt: now() }).where(eq(schema.characters.id, id)).run()
   }
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.CHARACTER_IMAGE, {
+  const billingModel = resolveBillingImageModel({ imageConfigId: ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ep.imageConfigId })
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.CHARACTER_IMAGE, billingModel, {
     summary: `生成角色图：${char.name}`,
     dramaId: char.dramaId,
     episodeId: ep.id,
     resourceType: 'character',
     resourceId: id,
-  })
+  }, billingProvider)
   if (billed.error) return billed.error
 
   try {
@@ -598,7 +601,9 @@ app.post('/batch-generate-images', async (c) => {
   const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, Number(body.episode_id))).all()
   if (!ep) return badRequest(c, 'Episode not found')
 
-  const preflight = tryPreflightBatchCharge(c, CREDIT_ACTIONS.CHARACTER_IMAGE, ids.length)
+  const billingModel = resolveBillingImageModel({ imageConfigId: ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ep.imageConfigId })
+  const preflight = tryPreflightBatchImageCharge(c, CREDIT_ACTIONS.CHARACTER_IMAGE, ids.length, billingModel, billingProvider)
   if (preflight.error) return preflight.error
 
   const results: Array<{ character_id: number; image_generation_id: number }> = []
@@ -614,14 +619,14 @@ app.post('/batch-generate-images', async (c) => {
       continue
     }
     const prompt = resolveCharacterImagePrompt(char)
-    const charge = chargeBatchItem(preflight.user.id, CREDIT_ACTIONS.CHARACTER_IMAGE, {
+    const charge = chargeBatchImageItem(preflight.user.id, CREDIT_ACTIONS.CHARACTER_IMAGE, billingModel, {
       summary: `批量生成角色图：${char.name}`,
       dramaId: char.dramaId,
       episodeId: ep.id,
       resourceType: 'character',
       resourceId: cid,
       metadata: { batch: 'character_images' },
-    })
+    }, billingProvider)
     if (!charge.ok) {
       failed.push({ character_id: cid, error: charge.message || '积分不足' })
       break

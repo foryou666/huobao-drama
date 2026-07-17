@@ -14,12 +14,14 @@ import { isChengmengProvider, isChengmengBalanceError, CHENGMENG_VIDEO_MODELS } 
 import { isAistarslabProvider } from '../constants/aistarslab.js'
 import { mapGrokAspectRatio } from '../constants/geeknow-grok.js'
 import { normalizeJimengAspectRatio, resolveJimengSubmitModel } from '../constants/jimeng-web.js'
+import { normalizeXyqAspectRatio, normalizeXyqDuration } from '../constants/xyq-web.js'
 import { normalizeDoubaoTrainingAspectRatio, normalizeDoubaoTrainingDuration } from '../constants/doubao-training.js'
 import { processDoubaoTrainingVideoGeneration } from './doubao-training-video.js'
 import { applyTrainingVideoOverlay } from '../utils/training-video-overlay.js'
 import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
 import { ensureVideoPoster } from '../utils/video-poster.js'
 import { buildJimengVirtualConfig, processJimengWebVideoGeneration } from './jimeng-web-video.js'
+import { buildXyqVirtualConfig, processXyqWebVideoGeneration } from './xyq-web-video.js'
 import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import {
   normalizeChengmengContentRefs,
@@ -99,6 +101,7 @@ interface GenerateVideoParams {
   provider?: string
   aistarslabChannel?: string
   jimengSessionId?: string
+  xyqSessionId?: string
   doubaoTrainingSessionId?: string
   creditTransactionId?: number
   userId?: number
@@ -108,6 +111,8 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const ts = now()
   const config = params.provider === 'jimeng_web'
     ? buildJimengVirtualConfig(params.model)
+    : params.provider === 'xyq_web'
+      ? buildXyqVirtualConfig(params.model)
     : params.provider === 'doubao_training'
       ? buildDoubaoTrainingVirtualConfig(params.model)
       : params.configId
@@ -144,11 +149,14 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
   const useAistarslab = isAistarslabProvider(config.provider)
   const useGeeknowGrok = config.provider === 'geeknow'
   const useJimengWeb = config.provider === 'jimeng_web'
+  const useXyqWeb = config.provider === 'xyq_web'
   const useDoubaoTraining = config.provider === 'doubao_training'
   const storedModel = useChengmeng
     ? (params.model || CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST)
     : useJimengWeb
       ? resolveJimengSubmitModel(params.model)
+      : useXyqWeb
+        ? (params.model || config.model)
       : useDoubaoTraining
         ? (params.model || config.model)
         : (params.model || config.model)
@@ -160,6 +168,8 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
       ? mapGrokAspectRatio(rawAspect)
       : useJimengWeb
         ? normalizeJimengAspectRatio(rawAspect, defaultAspect)
+        : useXyqWeb
+          ? normalizeXyqAspectRatio(rawAspect, defaultAspect)
         : useDoubaoTraining
           ? normalizeDoubaoTrainingAspectRatio(rawAspect)
           : normalizeSeedanceRatio(rawAspect, params.model || config.model, { hasReferenceMedia })
@@ -191,10 +201,14 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
     referencePayload: params.contentRefs?.length ? JSON.stringify(params.contentRefs) : null,
     duration: useDoubaoTraining
       ? normalizeDoubaoTrainingDuration(params.duration)
+      : useXyqWeb
+        ? normalizeXyqDuration(params.duration)
       : (params.duration || 15),
     aspectRatio,
     style: useJimengWeb
       ? (params.jimengSessionId ? `jimeng_session:${params.jimengSessionId}` : null)
+      : useXyqWeb
+        ? (params.xyqSessionId ? `xyq_key:${params.xyqSessionId}` : null)
       : useDoubaoTraining
         ? (params.doubaoTrainingSessionId ? `doubao_training_session:${params.doubaoTrainingSessionId}` : null)
         : (params.aistarslabChannel || null),
@@ -234,6 +248,9 @@ export async function generateVideo(params: GenerateVideoParams): Promise<number
 async function processVideoGeneration(id: number, config: AIConfig, options?: { allowChengmengFallback?: boolean }) {
   if (config.provider === 'jimeng_web') {
     return processJimengWebVideoGeneration(id)
+  }
+  if (config.provider === 'xyq_web') {
+    return processXyqWebVideoGeneration(id)
   }
   if (config.provider === 'doubao_training') {
     return processDoubaoTrainingVideoGeneration(id)
@@ -752,6 +769,19 @@ export async function refreshVideoFromProvider(id: number): Promise<typeof schem
     return updated || null
   }
 
+  if (config.provider === 'xyq_web') {
+    if (!record.taskId) throw new Error('该记录无 task_id，无法向S通道5查询')
+    const poll = await import('./xyq-web-video.js').then(m => m.pollXyqVideoOnce(record.taskId!, record.style))
+    if (poll.status === 'completed' && poll.videoUrl) {
+      await handleVideoComplete(id, poll.videoUrl, record.duration, record.storyboardId)
+    } else if (poll.status === 'failed' || poll.status === 'canceled' || poll.status === 'requires_action') {
+      failVideoGeneration(id, poll.error || 'S通道5视频生成失败')
+    }
+    const [updated] = db.select().from(schema.videoGenerations)
+      .where(eq(schema.videoGenerations.id, id)).all()
+    return updated || null
+  }
+
   const adapter = getVideoAdapter(config.provider)
   if (adapter.provider === 'vidu') {
     throw new Error('Vidu 视频请等待 Webhook 回调')
@@ -805,6 +835,19 @@ export function resumeProcessingVideoTasks() {
       })
       import('./jimeng-web-video.js').then(m => {
         m.pollJimengVideoTask(row.id, row.taskId!, row.storyboardId, row.duration, row.style).catch(err => {
+          logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
+        })
+      })
+      continue
+    }
+    if (row.provider === 'xyq_web') {
+      logTaskProgress('VideoTask', 'resume-poll', {
+        id: row.id,
+        taskId: row.taskId,
+        provider: row.provider,
+      })
+      import('./xyq-web-video.js').then(m => {
+        m.pollXyqVideoTask(row.id, row.taskId!, row.storyboardId, row.duration, row.style).catch(err => {
           logTaskError('VideoTask', 'resume-poll', { id: row.id, error: err.message })
         })
       })

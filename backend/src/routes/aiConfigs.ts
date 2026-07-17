@@ -22,6 +22,12 @@ import {
   listChengmengModelOptionsForApi,
   syncChengmengModelCreditPricing,
 } from '../utils/chengmeng-video-options.js'
+import {
+  isApimartProvider,
+  isRetryableApimartFetchError,
+  isRetryableApimartHttpStatus,
+  listApimartApiBases,
+} from '../constants/apimart.js'
 
 const app = new Hono()
 
@@ -86,7 +92,7 @@ function buildProbe(serviceType: string, provider: string, baseUrl: string, mode
     return { method: 'POST', url: url.toString(), headers: geminiHeaders(apiKey, true), body: {} }
   }
 
-  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'geeknow' || p === 'qilingze') {
+  if (p === 'openai' || p === 'openrouter' || p === 'chatfire' || p === 'geeknow' || p === 'qilingze' || p === 'apimart') {
     return {
       method: 'GET',
       url: joinProviderUrl(baseUrl, '/v1', '/models'),
@@ -430,55 +436,100 @@ app.post('/test', async (c) => {
   }
 
   const model = Array.isArray(body.model) ? body.model[0] : body.model
-  const probe = buildProbe(body.service_type, body.provider, body.base_url, model, body.api_key)
-  const probeUrl = redactUrl(probe.url)
+  const probeBases = isApimartProvider(body.provider)
+    ? listApimartApiBases({
+      baseUrl: body.base_url,
+      settings: typeof body.settings === 'object' && body.settings ? body.settings : undefined,
+    })
+    : [body.base_url]
+
+  let lastProbe = buildProbe(body.service_type, body.provider, probeBases[0], model, body.api_key)
+  let probeUrl = redactUrl(lastProbe.url)
+  let lastError = ''
 
   logTaskProgress('AIConfig', 'probe-start', {
     serviceType: body.service_type,
     provider: body.provider,
-    method: probe.method,
+    method: lastProbe.method,
     url: probeUrl,
+    mirrorCount: probeBases.length,
   })
 
   try {
-    const resp = await fetch(probe.url, {
-      method: probe.method,
-      headers: probe.headers,
-      body: probe.body ? JSON.stringify(probe.body) : undefined,
-    })
-    const text = await resp.text()
-    const tunnelDown = /tunnel.*unavailable|cpolar/i.test(text)
-    const reachable = [200, 204, 400, 401, 403].includes(resp.status)
-    let message = reachable
-      ? (resp.ok ? '端点可访问，认证与路径基本正常' : '端点已响应，请根据状态码判断认证或路径是否正确')
-      : '端点未按预期响应，请检查 Base URL 和代理前缀'
-    if (tunnelDown || (resp.status === 502 && body.provider === 'chengmeng')) {
-      message = '橙盟 API 隧道不可用。请将 Base URL 改为 https://api.chengmeng.site（勿使用 cpolar 临时地址）'
+    for (let i = 0; i < probeBases.length; i += 1) {
+      const baseUrl = probeBases[i]
+      const probe = buildProbe(body.service_type, body.provider, baseUrl, model, body.api_key)
+      lastProbe = probe
+      probeUrl = redactUrl(probe.url)
+      try {
+        const resp = await fetch(probe.url, {
+          method: probe.method,
+          headers: probe.headers,
+          body: probe.body ? JSON.stringify(probe.body) : undefined,
+          signal: AbortSignal.timeout(30_000),
+        })
+        const text = await resp.text()
+        const tunnelDown = /tunnel.*unavailable|cpolar/i.test(text)
+        const reachable = [200, 204, 400, 401, 403].includes(resp.status)
+        let message = reachable
+          ? (resp.ok ? '端点可访问，认证与路径基本正常' : '端点已响应，请根据状态码判断认证或路径是否正确')
+          : '端点未按预期响应，请检查 Base URL 和代理前缀'
+        if (isApimartProvider(body.provider) && i > 0 && reachable) {
+          message = `${message}（已自动切换到备用域名 ${baseUrl}）`
+        }
+        if (tunnelDown || (resp.status === 502 && body.provider === 'chengmeng')) {
+          message = '橙盟 API 隧道不可用。请将 Base URL 改为 https://api.chengmeng.site（勿使用 cpolar 临时地址）'
+        }
+        const payload = {
+          ok: resp.ok,
+          reachable,
+          status: resp.status,
+          status_text: resp.statusText,
+          method: probe.method,
+          url: probeUrl,
+          message,
+          response_preview: text.slice(0, 240),
+          active_base_url: baseUrl,
+        }
+        if (reachable) {
+          logTaskSuccess('AIConfig', 'probe-done', {
+            provider: body.provider,
+            status: resp.status,
+            url: probeUrl,
+            activeBaseUrl: baseUrl,
+          })
+        } else if (
+          isApimartProvider(body.provider)
+          && i < probeBases.length - 1
+          && isRetryableApimartHttpStatus(resp.status)
+        ) {
+          lastError = message
+          continue
+        } else {
+          logTaskError('AIConfig', 'probe-unexpected', {
+            provider: body.provider,
+            status: resp.status,
+            url: probeUrl,
+          })
+        }
+        return success(c, payload)
+      } catch (error: any) {
+        lastError = error.message || '请求失败'
+        if (isApimartProvider(body.provider) && i < probeBases.length - 1 && isRetryableApimartFetchError(error)) {
+          continue
+        }
+        throw error
+      }
     }
-    const payload = {
-      ok: resp.ok,
-      reachable,
-      status: resp.status,
-      status_text: resp.statusText,
-      method: probe.method,
+
+    return success(c, {
+      ok: false,
+      reachable: false,
+      method: lastProbe.method,
       url: probeUrl,
-      message,
-      response_preview: text.slice(0, 240),
-    }
-    if (reachable) {
-      logTaskSuccess('AIConfig', 'probe-done', {
-        provider: body.provider,
-        status: resp.status,
-        url: probeUrl,
-      })
-    } else {
-      logTaskError('AIConfig', 'probe-unexpected', {
-        provider: body.provider,
-        status: resp.status,
-        url: probeUrl,
-      })
-    }
-    return success(c, payload)
+      message: lastError || 'APIMart 主域名与备用域名均不可达',
+      response_preview: '',
+    })
   } catch (error: any) {
     logTaskError('AIConfig', 'probe-failed', {
       provider: body.provider,
@@ -488,7 +539,7 @@ app.post('/test', async (c) => {
     return success(c, {
       ok: false,
       reachable: false,
-      method: probe.method,
+      method: lastProbe.method,
       url: probeUrl,
       message: error.message || '请求失败',
       response_preview: '',

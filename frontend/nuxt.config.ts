@@ -26,6 +26,14 @@ export default defineNuxtConfig({
   },
   experimental: {
     appManifest: false,
+    // ssr:false 时若仍生成/请求 _payload.json，静态托管会回退 HTML，客户端 JSON 解析失败 → 500
+    payloadExtraction: false,
+  },
+  nitro: {
+    prerender: {
+      crawlLinks: false,
+      routes: ['/'],
+    },
   },
   app: {
     head: {

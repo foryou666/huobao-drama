@@ -13,7 +13,7 @@ import {
   putLocalFileToOss,
   signOssObjectKey,
 } from './oss-upload.js'
-import { projectAssetObjectKey, referenceUploadObjectKey, resolveDramaIdForStaticPath } from './oss-path.js'
+import { projectAssetObjectKey, referenceUploadObjectKey, resolveDramaIdForStaticPath, subtitleRemovedObjectKey } from './oss-path.js'
 import { uploadStaticToOss } from './oss-upload.js'
 
 function normalizeStaticPath(raw: string): string {
@@ -251,6 +251,26 @@ export async function trySyncStoryboardImageAfterGeneration(
   }
 }
 
+/** 去字幕成品同步 OSS */
+export async function syncSubtitleRemovedToOss(localPath: string): Promise<string | null> {
+  if (!isOssConfigured()) return null
+  const normalized = normalizeStaticPath(localPath)
+  if (!normalized.startsWith('static/videos/subtitle-removed/')) {
+    throw new Error(`仅支持去字幕成品路径: ${localPath}`)
+  }
+
+  const absPath = getAbsolutePath(normalized)
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`本地文件不存在: ${normalized}`)
+  }
+
+  const objectKey = subtitleRemovedObjectKey(normalized)
+  await putLocalFileToOss(absPath, objectKey)
+  upsertMapping(normalized, objectKey)
+  logTaskProgress('OSS', 'subtitle-removed-synced', { path: normalized, objectKey })
+  return objectKey
+}
+
 /** 通用 static 同步 OSS（生成/合成/回填）；已有映射则跳过上传 */
 export async function trySyncStaticToOss(
   localPath: string,
@@ -263,7 +283,12 @@ export async function trySyncStaticToOss(
 
   try {
     const existing = lookupOssObjectKey(normalized)
-    if (existing) return existing
+    const hasValidMapping = existing && !existing.includes('unknown/asset/')
+    if (hasValidMapping) return existing
+
+    if (normalized.startsWith('static/videos/subtitle-removed/')) {
+      return await syncSubtitleRemovedToOss(normalized)
+    }
 
     if (normalized.startsWith('static/uploads/')) {
       return await syncReferenceUploadToOss(normalized)

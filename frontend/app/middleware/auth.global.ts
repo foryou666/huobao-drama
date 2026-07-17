@@ -16,4 +16,12 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (to.path === '/settings' && !isAdmin.value && !canManageTeam.value) {
     return navigateTo('/')
   }
+
+  if (to.path.startsWith('/videos/repaint') && !isAdmin.value) {
+    return navigateTo('/')
+  }
+
+  if (to.path.startsWith('/subtitle-remover') && !isAdmin.value) {
+    return navigateTo('/')
+  }
 })

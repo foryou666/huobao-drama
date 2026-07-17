@@ -27,6 +27,20 @@ export const AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER = 1.5
 /** 用户售价相对上游参考价的默认倍率 */
 export const AISTARSLAB_USER_PRICE_MULTIPLIER = 1.5
 
+/**
+ * 通道3 同步/展示规则：线路最长时长下上游参考价超过此值的不同步、不展示（积分）
+ * 见 filterAistarslabConfigForSync、syncAistarslabChannelsFromProvider
+ */
+export const AISTARSLAB_SYNC_MAX_UPSTREAM_CREDITS = 500
+/** @deprecated 与 AISTARSLAB_SYNC_MAX_UPSTREAM_CREDITS 相同 */
+export const AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS = AISTARSLAB_SYNC_MAX_UPSTREAM_CREDITS
+
+/** 通道3 上游线路同步规则（sync 脚本与 API 拉取时自动应用） */
+export const AISTARSLAB_SYNC_RULES = [
+  '仅同步 Seedance 2.0 模型（不同步 Grok / Gemini）',
+  `上游参考价（线路最长时长）≤ ${AISTARSLAB_SYNC_MAX_UPSTREAM_CREDITS} 积分`,
+] as const
+
 export function aistarslabModelCreditAction(channel?: string | null, model?: string | null): string {
   const ch = String(channel || AISTARSLAB_DEFAULT_CHANNEL).trim()
   const slug = String(model || AISTARSLAB_DEFAULT_MODEL).trim().replace(/\./g, '-')
@@ -46,6 +60,23 @@ export function isAistarslabVideoModel(model?: string | null): boolean {
   if (!normalized) return false
   const slug = normalized.includes(':') ? normalized.split(':').pop()! : normalized
   return slug.startsWith('seedance-2.0-') || slug.startsWith('seedance-2.0')
+}
+
+/** Grok / Gemini 等非 Seedance 模型，不参与通道3 同步 */
+export function isAistarslabExcludedSyncModel(model?: string | null): boolean {
+  const id = normalizeAistarslabModelSlug(model).toLowerCase()
+  return id.includes('grok') || id.includes('gemini')
+}
+
+/** 是否满足通道3 上游同步条件（Seedance 且非 Grok/Gemini） */
+export function isAistarslabSyncEligibleModel(model?: string | null): boolean {
+  return isAistarslabVideoModel(model) && !isAistarslabExcludedSyncModel(model)
+}
+
+/** 线路标题/描述含 Grok、Gemini 时整线不同步 */
+export function isAistarslabExcludedSyncChannel(title?: string | null, description?: string | null): boolean {
+  const text = `${title || ''} ${description || ''}`.toLowerCase()
+  return /\bgrok\b/.test(text) || /\bgemini\b/.test(text)
 }
 
 export function normalizeAistarslabDuration(duration?: number | null): number {
@@ -102,6 +133,15 @@ export function sanitizeAistarslabUserFacingText(text?: string | null): string {
   return value || String(text ?? '').trim()
 }
 
+/** 用户可见线路名：去掉上游标题中的 480P（如「480P-推荐1」→「推荐1」） */
 export function sanitizeAistarslabChannelTitle(title?: string | null): string {
-  return sanitizeAistarslabUserFacingText(title)
+  const original = String(title ?? '').trim()
+  let value = sanitizeAistarslabUserFacingText(original)
+  if (!value) return original
+  // 勿向用户展示 480P / 480p 分辨率字样
+  value = value.replace(/480\s*[Pp]/g, '')
+  value = value.replace(/[-—_·]{2,}/g, '-')
+  value = value.replace(/^[-—_·\s]+|[-—_·\s]+$/g, '')
+  value = value.replace(/\s{2,}/g, ' ').trim()
+  return value || original
 }

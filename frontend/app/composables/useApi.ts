@@ -68,7 +68,7 @@ export const api = {
   post: <T = any>(p: string, b?: any) => req<T>('POST', p, b),
   put: <T = any>(p: string, b?: any) => req<T>('PUT', p, b),
   patch: <T = any>(p: string, b?: any) => req<T>('PATCH', p, b),
-  del: <T = any>(p: string) => req<T>('DELETE', p),
+  del: <T = any>(p: string, b?: any) => req<T>('DELETE', p, b),
 }
 
 export const mediaAPI = {
@@ -77,14 +77,71 @@ export const mediaAPI = {
 }
 
 export const dramaAPI = {
-  list: (opts?: { includeArchived?: boolean }) =>
-    api.get<{ items: any[] }>(`/dramas${opts?.includeArchived ? '?include_archived=1' : ''}`),
-  get: (id: number) => api.get(`/dramas/${id}`),
+  list: (opts?: { includeArchived?: boolean; lite?: boolean; pageSize?: number }) => {
+    const q = new URLSearchParams()
+    if (opts?.includeArchived) q.set('include_archived', '1')
+    if (opts?.lite) q.set('lite', '1')
+    if (opts?.pageSize) q.set('page_size', String(opts.pageSize))
+    const qs = q.toString()
+    return api.get<{ items: any[] }>(`/dramas${qs ? `?${qs}` : ''}`)
+  },
+  listLite: (opts?: { includeArchived?: boolean; pageSize?: number }) =>
+    dramaAPI.list({ ...opts, lite: true }),
+  get: (id: number, opts?: { workbench?: boolean }) => {
+    const q = opts?.workbench ? '?workbench=1' : ''
+    return api.get(`/dramas/${id}${q}`)
+  },
   create: (data: any) => api.post('/dramas', data),
   update: (id: number, data: any) => api.put(`/dramas/${id}`, data),
   del: (id: number) => api.del(`/dramas/${id}`),
   archive: (id: number) => api.post(`/dramas/${id}/archive`),
   restore: (id: number) => api.post(`/dramas/${id}/restore`),
+  generateCover: (id: number, data?: {
+    prompt?: string
+    character_ids?: number[]
+    scene_ids?: number[]
+    character_image_refs?: Record<number, string>
+    scene_image_refs?: Record<number, string>
+    aspect_ratios?: Array<'9:16' | '16:9' | '3:4' | '4:3'>
+  }) =>
+    api.post<{
+      image_generation_id?: number
+      items?: Array<{ aspect_ratio: '9:16' | '16:9' | '3:4' | '4:3'; image_generation_id: number }>
+      credits_balance?: number
+    }>(
+      `/dramas/${id}/generate-cover`,
+      data || {},
+    ),
+  listCoverCandidates: (id: number) =>
+    api.get<{
+      items?: Array<{
+        id: number
+        status?: string
+        aspect_ratio?: '9:16' | '16:9' | '3:4' | '4:3' | null
+        size?: string | null
+        local_path?: string | null
+        image_url?: string | null
+        path?: string | null
+        prompt?: string | null
+        created_at?: string
+        completed_at?: string | null
+        error_msg?: string | null
+      }>
+    }>(`/dramas/${id}/cover-candidates`),
+  applyCover: (id: number, data: {
+    covers: Partial<Record<'3:4' | '4:3', string>>
+    primary_aspect_ratio?: '3:4' | '4:3'
+  }) =>
+    api.post<{
+      thumbnail?: string
+      cover_url?: string
+      cover_3_4?: string | null
+      cover_4_3?: string | null
+      covers?: Partial<Record<'3:4' | '4:3', string | null>>
+    }>(
+      `/dramas/${id}/apply-cover`,
+      data,
+    ),
   shares: (id: number) => api.get(`/dramas/${id}/shares`),
   addShare: (id: number, teamId: number) => api.post(`/dramas/${id}/shares`, { team_id: teamId }),
   removeShare: (id: number, teamId: number) => api.del(`/dramas/${id}/shares/${teamId}`),
@@ -148,24 +205,67 @@ export const storyboardAPI = {
   del: (id: number) => api.del(`/storyboards/${id}`),
 }
 
-async function uploadForm(path: string, form: FormData) {
+function uploadFormHeaders() {
   const headers: Record<string, string> = {}
   const token = getAuthToken()
   if (token) headers.Authorization = `Bearer ${token}`
   const teamId = getActiveTeamId()
   if (teamId) headers['X-Team-Id'] = String(teamId)
-  const resp = await fetch(`${BASE}${path}`, { method: 'POST', headers, body: form })
-  const json = await resp.json()
-  if (!resp.ok || (json.code && json.code >= 400)) {
-    if (resp.status === 401) {
+  return headers
+}
+
+function parseUploadFormResponse(status: number, text: string) {
+  let json: { code?: number; message?: string; data?: unknown } = {}
+  try {
+    json = JSON.parse(text)
+  } catch {
+    throw new Error(`上传响应无法解析 (HTTP ${status})`)
+  }
+  if (status >= 400 || (json.code && json.code >= 400)) {
+    if (status === 401) {
       clearAuthSession()
       if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
         window.location.href = '/login'
       }
     }
-    throw new Error(json.message || `${resp.status}`)
+    throw new Error(json.message || `${status}`)
   }
   return json.data ?? json
+}
+
+async function uploadForm(
+  path: string,
+  form: FormData,
+  opts?: { onProgress?: (percent: number) => void },
+) {
+  if (typeof XMLHttpRequest === 'undefined' || !opts?.onProgress) {
+    const resp = await fetch(`${BASE}${path}`, { method: 'POST', headers: uploadFormHeaders(), body: form })
+    const text = await resp.text()
+    return parseUploadFormResponse(resp.status, text)
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${BASE}${path}`)
+    const headers = uploadFormHeaders()
+    for (const [key, value] of Object.entries(headers)) {
+      xhr.setRequestHeader(key, value)
+    }
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return
+      opts.onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)))
+    }
+    xhr.onload = () => {
+      try {
+        resolve(parseUploadFormResponse(xhr.status, xhr.responseText))
+      } catch (err: any) {
+        reject(err)
+      }
+    }
+    xhr.onerror = () => reject(new Error('上传失败'))
+    xhr.onabort = () => reject(new Error('上传已取消'))
+    xhr.send(form)
+  })
 }
 
 export const uploadAPI = {
@@ -184,6 +284,11 @@ export const uploadAPI = {
       form.append('drama_id', String(dramaId))
     }
     return uploadForm('/upload/video', form)
+  },
+  audio: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return uploadForm('/upload/audio', form)
   },
 }
 
@@ -431,16 +536,39 @@ export const sceneAPI = {
 
 export const assetAPI = {
   categories: () => api.get('/assets/categories'),
-  list: (params?: { drama_id?: number; type?: string; q?: string }) => {
+  list: async (params?: { drama_id?: number; type?: string; q?: string }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
     if (params?.type) query.set('type', params.type)
     if (params?.q) query.set('q', params.q)
-    return api.get(`/assets${query.size ? `?${query.toString()}` : ''}`)
+    const data = await api.get(`/assets${query.size ? `?${query.toString()}` : ''}`)
+    if (Array.isArray(data)) return data
+    return data?.items ?? []
+  },
+  listWithCounts: async (params?: { drama_id?: number; type?: string; q?: string }) => {
+    const query = new URLSearchParams()
+    if (params?.drama_id) query.set('drama_id', String(params.drama_id))
+    if (params?.type) query.set('type', params.type)
+    if (params?.q) query.set('q', params.q)
+    const data = await api.get(`/assets${query.size ? `?${query.toString()}` : ''}`)
+    if (Array.isArray(data)) {
+      const counts: Record<string, number> = {}
+      for (const item of data) {
+        const key = String(item?.type || '')
+        if (!key) continue
+        counts[key] = (counts[key] || 0) + 1
+      }
+      return { items: data, counts }
+    }
+    return {
+      items: data?.items ?? [],
+      counts: data?.counts ?? {},
+    }
   },
   create: (data: any) => api.post('/assets', data),
   update: (id: number, data: any) => api.put(`/assets/${id}`, data),
   del: (id: number) => api.del(`/assets/${id}`),
+  deleteImage: (id: number, url: string) => api.del(`/assets/${id}/images`, { url }),
   sync: (dramaId: number) => api.post('/assets/sync', { drama_id: dramaId }),
   upload: (form: FormData) => uploadForm('/assets/upload', form),
   uploadToAsset: (id: number, form: FormData) => uploadForm(`/assets/${id}/upload`, form),
@@ -489,6 +617,7 @@ export const imageAPI = {
     offset?: number
     mine_only?: boolean
     studio_only?: boolean
+    user_id?: number
   }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
@@ -500,8 +629,11 @@ export const imageAPI = {
     if (params?.mine_only === false) query.set('mine_only', '0')
     else if (params?.mine_only !== undefined) query.set('mine_only', '1')
     if (params?.studio_only) query.set('studio_only', '1')
+    if (params?.user_id) query.set('user_id', String(params.user_id))
     return api.get(`/images/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
+  pin: (id: number) => api.post(`/images/${id}/pin`),
+  unpin: (id: number) => api.del(`/images/${id}/pin`),
 }
 export const gridAPI = {
   prompt: (d: any) => api.post('/grid/prompt', d),
@@ -514,6 +646,7 @@ export const videoAPI = {
   chengmengOptions: () => api.get('/videos/chengmeng-options'),
   grokOptions: () => api.get('/videos/grok-options'),
   jimengOptions: () => api.get('/videos/jimeng-options'),
+  xyqOptions: () => api.get('/videos/xyq-options'),
   doubaoTrainingOptions: () => api.get('/videos/doubao-training-options'),
   officialOptions: () => api.get('/videos/official-options'),
   aistarslabOptions: () => api.get('/videos/aistarslab-options'),
@@ -572,6 +705,93 @@ export const repaintAPI = {
     api.patch(`/repaint/${id}/segments/${segmentId}`, data),
   generateSegment: (id: number, segmentId: number) =>
     api.post(`/repaint/${id}/segments/${segmentId}/generate`),
+  merge: (id: number) => api.post(`/repaint/${id}/merge`),
+}
+
+export const ttsAPI = {
+  list: (params: { limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return api.get(`/tts${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/tts/${id}`),
+  voices: () => api.get('/tts/voices'),
+  generate: (data: Record<string, unknown>) => api.post('/tts', data),
+  getConfig: () => api.get('/tts/config'),
+  saveConfig: (data: Record<string, unknown>) => api.put('/tts/config', data),
+  testConfig: (data: { base_url: string }) => api.post('/tts/config/test', data),
+}
+
+export const subtitleRemoverAPI = {
+  list: () => api.get('/subtitle-remover'),
+  get: (id: number) => api.get(`/subtitle-remover/${id}`),
+  downloadUrl: (id: number) => `/api/v1/subtitle-remover/${id}/download`,
+  create: (form: FormData, opts?: { onProgress?: (percent: number) => void }) =>
+    uploadForm('/subtitle-remover', form, opts),
+  getConfig: () => api.get('/subtitle-remover/config'),
+  saveConfig: (data: Record<string, unknown>) => api.put('/subtitle-remover/config', data),
+  testConfig: (data: { base_url: string; api_key?: string }) => api.post('/subtitle-remover/config/test', data),
+}
+
+export const canvasAPI = {
+  list: () => api.get<{ items: any[] }>('/canvas/boards'),
+  dramasWithoutBoard: () => api.get<{ items: any[] }>('/canvas/dramas-without-board'),
+  create: (data: { drama_id: number; title?: string }) => api.post('/canvas/boards', data),
+  get: (id: number) => api.get(`/canvas/boards/${id}`),
+  byDrama: (dramaId: number) => api.get(`/canvas/boards/by-drama/${dramaId}`),
+  patch: (id: number, data: Record<string, unknown>) => api.patch(`/canvas/boards/${id}`, data),
+  del: (id: number) => api.del(`/canvas/boards/${id}`),
+  pool: (id: number, episodeId?: number | null) => {
+    const q = episodeId != null ? `?episode_id=${episodeId}` : ''
+    return api.get(`/canvas/boards/${id}/pool${q}`)
+  },
+  studio: (id: number) => api.get(`/canvas/boards/${id}/studio`),
+  saveLayout: (id: number, data: Record<string, unknown>) => api.put(`/canvas/boards/${id}/layout`, data),
+  importNodes: (id: number, refs: Array<{ ref_type: string; ref_id: number; x?: number; y?: number }>) =>
+    api.post(`/canvas/boards/${id}/nodes/import`, { refs }),
+  sync: (id: number, opts?: { revive_removed?: boolean }) =>
+    api.post(`/canvas/boards/${id}/sync`, opts || {}),
+  addNote: (id: number, data?: { text?: string; x?: number; y?: number }) =>
+    api.post(`/canvas/boards/${id}/nodes/note`, data || {}),
+  removeNode: (id: number, nodeKey: string) => api.del(`/canvas/boards/${id}/nodes/${encodeURIComponent(nodeKey)}`),
+}
+
+export const narrationAPI = {
+  list: () => api.get('/narration'),
+  get: (id: number) => api.get(`/narration/${id}`),
+  create: (opts: { title?: string; novel_text?: string; file?: File }) => {
+    if (opts.file) {
+      const form = new FormData()
+      form.append('file', opts.file)
+      if (opts.title?.trim()) form.append('title', opts.title.trim())
+      return uploadForm('/narration', form)
+    }
+    return api.post('/narration', {
+      title: opts.title,
+      novel_text: opts.novel_text,
+    })
+  },
+  patch: (id: number, data: Record<string, unknown>) => api.patch(`/narration/${id}`, data),
+  segment: (id: number) => api.post(`/narration/${id}/segment`),
+  extract: (id: number) => api.post(`/narration/${id}/extract`),
+  patchAnalysis: (id: number, analysis: Record<string, unknown>) =>
+    api.patch(`/narration/${id}/analysis`, { analysis }),
+  tts: (id: number) => api.post(`/narration/${id}/tts`),
+  previewVoice: (id: number, data: { voice_id: string; text?: string }) =>
+    api.post(`/narration/${id}/preview-voice`, data),
+  resplitSegments: (id: number) => api.post(`/narration/${id}/resplit-segments`),
+  listVoices: () => api.get('/narration/voices'),
+  assetReadiness: (id: number) => api.get(`/narration/${id}/asset-readiness`),
+  generateAllAssets: (id: number) => api.post(`/narration/${id}/assets/generate-all`),
+  generateAsset: (id: number, type: 'characters' | 'scenes' | 'props', entityId: string) =>
+    api.post(`/narration/${id}/assets/${type}/${entityId}/generate`),
+  patchSegment: (id: number, segmentId: number, data: { text?: string; video_prompt?: string }) =>
+    api.patch(`/narration/${id}/segments/${segmentId}`, data),
+  generateSegment: (id: number, segmentId: number) =>
+    api.post(`/narration/${id}/segments/${segmentId}/generate`),
+  generateAll: (id: number) => api.post(`/narration/${id}/generate-all`),
+  exportJianying: (id: number) => api.post(`/narration/${id}/export-jianying`),
 }
 
 export const jimengSessionAPI = {
@@ -582,6 +802,22 @@ export const jimengSessionAPI = {
   remove: (id: string) => api.del(`/jimeng/session/${id}`),
   clear: () => api.del('/jimeng/session'),
   validate: (id?: string) => api.post(id ? `/jimeng/session/${id}/validate` : '/jimeng/session/validate'),
+}
+export const xyqSessionAPI = {
+  list: () => api.get('/xyq/sessions'),
+  get: () => api.get('/xyq/session'),
+  save: (d: {
+    id?: string
+    access_key?: string
+    api_key?: string
+    cookie?: string | null
+    label?: string
+    set_active?: boolean
+  }) => api.put('/xyq/session', d),
+  setActive: (id: string) => api.put(`/xyq/session/${id}/active`),
+  remove: (id: string) => api.del(`/xyq/session/${id}`),
+  clear: () => api.del('/xyq/session'),
+  validate: (id?: string) => api.post(id ? `/xyq/session/${id}/validate` : '/xyq/session/validate'),
 }
 export const doubaoTrainingSessionAPI = {
   list: () => api.get('/doubao-training/sessions'),

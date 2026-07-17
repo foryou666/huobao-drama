@@ -3,6 +3,7 @@ import path from 'path'
 import { Readable } from 'stream'
 import { success, badRequest, notFound, serverError } from '../utils/response.js'
 import { resolveDisplayMediaUrl, resolveDisplayMediaUrls } from '../utils/media-display-url.js'
+import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
 import {
   assertSafeStaticMediaPath,
   mimeForStaticPath,
@@ -27,6 +28,14 @@ app.post('/resolve-urls', async (c) => {
   const body = await c.req.json().catch(() => ({}))
   const paths = Array.isArray(body.paths) ? body.paths.map(String) : []
   if (!paths.length) return badRequest(c, 'paths is required')
+
+  for (const raw of paths) {
+    const normalized = String(raw || '').trim().replace(/^\/+/, '')
+    if (normalized.startsWith('static/videos/subtitle-removed/')) {
+      await trySyncStaticToOss(normalized).catch(() => null)
+    }
+  }
+
   const urls = resolveDisplayMediaUrls(paths)
   return success(c, { urls })
 })

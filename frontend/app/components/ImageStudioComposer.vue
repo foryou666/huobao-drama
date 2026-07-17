@@ -147,7 +147,7 @@
           <div class="composer-options">
             <label class="composer-option">
               <span class="composer-option-label">项目</span>
-              <select v-model="dramaId" class="composer-select" @change="onDramaChange">
+              <select v-model="dramaId" class="composer-select" @focus="emit('need-dramas')" @change="onDramaChange">
                 <option value="">不关联项目</option>
                 <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
               </select>
@@ -160,22 +160,26 @@
                 type="button"
                 class="composer-pill"
                 :class="{ active: aspectRatio === ratio }"
-                @click="aspectRatio = ratio"
+                @click="selectAspectRatio(ratio)"
               >
                 {{ ratio }}
               </button>
             </div>
 
-            <div v-if="modelOptions.length" class="composer-pills composer-pills-models">
+            <div class="composer-pills composer-pills-models">
+              <span class="composer-pill active composer-pill-static">Image 2</span>
+            </div>
+
+            <div class="composer-pills">
               <button
-                v-for="model in modelOptions"
-                :key="model"
+                v-for="opt in resolutionOptions"
+                :key="opt.id"
                 type="button"
                 class="composer-pill"
-                :class="{ active: selectedModel === model }"
-                @click="selectModel(model)"
+                :class="{ active: selectedResolution === opt.id }"
+                @click="selectResolution(opt.id)"
               >
-                {{ modelLabel(model) }}
+                {{ resolutionLabel(opt) }}
               </button>
             </div>
 
@@ -262,7 +266,8 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, imageAPI, uploadAPI } from '~/composables/useApi'
+import { dramaAPI, uploadAPI } from '~/composables/useApi'
+import { loadImageStudioCapabilities, getCachedImageStudioCapabilities, applyImageStudioCapabilitiesToComposer } from '~/composables/useImageStudioCapabilities'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
 import { handlePasteImageUpload } from '~/utils/clipboard-image.js'
 import { startReferenceImageUpload } from '~/utils/reference-image-upload.js'
@@ -293,6 +298,20 @@ import {
   STUDIO_IMAGE_MODEL_DEFAULT,
   STUDIO_IMAGE_MODEL_OPTIONS,
 } from '~/utils/studio-image-model-preference.js'
+import {
+  aspectRatioFromImageItem,
+  resolveStudioImageAspectRatio,
+  setLastStudioImageAspectRatio,
+  STUDIO_IMAGE_ASPECT_OPTIONS,
+} from '~/utils/studio-image-aspect-preference.js'
+import {
+  resolveStudioImageResolution,
+  resolutionFromImageItem,
+  setLastStudioImageResolution,
+  STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK,
+  STUDIO_IMAGE_RESOLUTION_DEFAULT,
+  STUDIO_IMAGE_RESOLUTION_OPTIONS,
+} from '~/utils/studio-image-resolution-preference.js'
 
 const props = defineProps({
   generating: { type: Boolean, default: false },
@@ -300,30 +319,45 @@ const props = defineProps({
   defaultDramaId: { type: String, default: '' },
 })
 
-const emit = defineEmits(['generate'])
+const emit = defineEmits(['generate', 'need-dramas'])
 
 const maxImages = ref(6)
 const supportsReference = ref(true)
-const aspectRatios = ['9:16', '16:9']
+const aspectRatios = STUDIO_IMAGE_ASPECT_OPTIONS
 const modelOptions = ref([...STUDIO_IMAGE_MODEL_OPTIONS])
 const selectedModel = ref(STUDIO_IMAGE_MODEL_DEFAULT)
-
-const MODEL_LABELS = {
-  'gpt-image-2': 'GPT Image 2',
-  'nano-banana-2': 'Nano Banana 2',
-}
-
-function modelLabel(model) {
-  return MODEL_LABELS[model] || model
-}
+const resolutionOptions = ref(
+  STUDIO_IMAGE_RESOLUTION_OPTIONS.map(id => ({
+    id,
+    label: id.toUpperCase(),
+    credit_cost: STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[id],
+  })),
+)
+const selectedResolution = ref(resolveStudioImageResolution())
 
 function selectModel(model) {
   selectedModel.value = model
   setLastStudioImageModel(model)
 }
 
+function selectResolution(resolution) {
+  const value = String(resolution || '').trim().toLowerCase()
+  if (!STUDIO_IMAGE_RESOLUTION_OPTIONS.includes(value)) return
+  selectedResolution.value = value
+  setLastStudioImageResolution(value)
+}
+
+function resolutionLabel(opt) {
+  const id = String(opt?.id || '').toUpperCase()
+  const cost = Number(opt?.credit_cost)
+  if (Number.isFinite(cost) && cost > 0) return `${id} · ${cost}积分`
+  const fallback = STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[opt?.id]
+  if (fallback) return `${id} · ${fallback}积分`
+  return id || '1K'
+}
+
 function modelSupportsReference(model) {
-  return /gpt-image|chatgpt-image/i.test(String(model || ''))
+  return /gpt-image|chatgpt-image|^image-2/i.test(String(model || ''))
 }
 
 const prompt = ref('')
@@ -333,7 +367,12 @@ const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
 const projectProps = ref([])
-const aspectRatio = ref('9:16')
+const aspectRatio = ref(resolveStudioImageAspectRatio())
+
+function selectAspectRatio(ratio) {
+  aspectRatio.value = ratio
+  setLastStudioImageAspectRatio(ratio)
+}
 const dramaId = ref('')
 const promptEl = ref(null)
 const mentionOpen = ref(false)
@@ -425,17 +464,53 @@ function resetBinding() {
 
 async function loadCapabilities() {
   try {
-    const caps = await imageAPI.capabilities()
-    if (caps?.max_reference_images) maxImages.value = Number(caps.max_reference_images)
-    supportsReference.value = caps?.supports_reference !== false
-    const models = Array.isArray(caps?.models) && caps.models.length
-      ? caps.models.map(String)
-      : [...STUDIO_IMAGE_MODEL_OPTIONS]
-    modelOptions.value = models
-    selectedModel.value = resolveStudioImageModel(models)
+    const caps = await loadImageStudioCapabilities()
+    applyImageStudioCapabilitiesToComposer(caps, {
+      maxImages,
+      supportsReference,
+      modelOptions,
+      selectedModel,
+      resolutionOptions,
+      selectedResolution,
+    }, {
+      modelOptions: [...STUDIO_IMAGE_MODEL_OPTIONS],
+      resolveModel: resolveStudioImageModel,
+      resolveResolution: resolveStudioImageResolution,
+      resolutionOptions: STUDIO_IMAGE_RESOLUTION_OPTIONS.map(id => ({
+        id,
+        label: id.toUpperCase(),
+        credit_cost: STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[id],
+      })),
+    })
+    selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
+    setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
   } catch {
     selectedModel.value = resolveStudioImageModel(modelOptions.value)
+    selectedResolution.value = resolveStudioImageResolution()
   }
+}
+
+function applyCachedCapabilities() {
+  const caps = getCachedImageStudioCapabilities()
+  if (!caps) return
+  applyImageStudioCapabilitiesToComposer(caps, {
+    maxImages,
+    supportsReference,
+    modelOptions,
+    selectedModel,
+    resolutionOptions,
+    selectedResolution,
+  }, {
+    modelOptions: [...STUDIO_IMAGE_MODEL_OPTIONS],
+    resolveModel: resolveStudioImageModel,
+    resolveResolution: resolveStudioImageResolution,
+    resolutionOptions: STUDIO_IMAGE_RESOLUTION_OPTIONS.map(id => ({
+      id,
+      label: id.toUpperCase(),
+      credit_cost: STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[id],
+    })),
+  })
+  selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
 }
 
 async function loadProjectAssets(id) {
@@ -813,9 +888,12 @@ function submit() {
   const payload = {
     aspect_ratio: aspectRatio.value,
     image_type: 'studio',
-    model: selectedModel.value,
+    model: STUDIO_IMAGE_MODEL_DEFAULT,
+    resolution: selectedResolution.value || STUDIO_IMAGE_RESOLUTION_DEFAULT,
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
+  setLastStudioImageAspectRatio(aspectRatio.value)
+  setLastStudioImageResolution(payload.resolution)
 
   if (dramaLinked.value) {
     const issues = validateStudioPrompt(
@@ -853,12 +931,11 @@ function submit() {
 
 function loadFromItem(item) {
   prompt.value = String(item?.prompt || '')
-  aspectRatio.value = item?.aspect_ratio || item?.aspectRatio || '9:16'
-  const itemModel = String(item?.model || '').trim()
-  if (itemModel && modelOptions.value.includes(itemModel)) {
-    selectedModel.value = itemModel
-    setLastStudioImageModel(itemModel)
-  }
+  aspectRatio.value = aspectRatioFromImageItem(item)
+  selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
+  setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
+  selectedResolution.value = resolutionFromImageItem(item)
+  setLastStudioImageResolution(selectedResolution.value)
   if (item?.drama_id) {
     dramaId.value = String(item.drama_id)
     loadProjectAssets(dramaId.value)
@@ -872,6 +949,35 @@ function loadFromItem(item) {
   syncUploadPaths()
 }
 
+/** 将生成结果作为唯一参考图填入输入框，便于图生图修改（不复制原提示词） */
+function referenceModifyFromItem(item) {
+  const path = normalizeMediaPath(item?.local_path || item?.image_url || item?.display_image_url || '')
+  if (!path) return false
+
+  prompt.value = ''
+  aspectRatio.value = aspectRatioFromImageItem(item)
+  selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
+  setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
+  selectedResolution.value = resolutionFromImageItem(item)
+  setLastStudioImageResolution(selectedResolution.value)
+  if (item?.drama_id) {
+    dramaId.value = String(item.drama_id)
+    loadProjectAssets(dramaId.value)
+  }
+  resetBinding()
+  uploadedRefs.value = [{
+    path,
+    preview: gridUrl(path) || mediaDisplayUrl(path),
+  }]
+  syncUploadPaths()
+  syncPromptImageHeader()
+  nextTick(() => {
+    const el = promptEl.value
+    el?.focus()
+  })
+  return true
+}
+
 function clearPrompt() {
   prompt.value = ''
 }
@@ -881,7 +987,8 @@ function onPreviewKeydown(event) {
 }
 
 onMounted(() => {
-  loadCapabilities()
+  applyCachedCapabilities()
+  void loadCapabilities()
   window.addEventListener('keydown', onPreviewKeydown)
 })
 
@@ -889,7 +996,12 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onPreviewKeydown)
 })
 
-defineExpose({ loadFromItem, clearPrompt })
+defineExpose({
+  loadFromItem,
+  referenceModifyFromItem,
+  clearPrompt,
+  uploadFiles: uploadImageFiles,
+})
 </script>
 
 <style scoped>
@@ -1179,6 +1291,11 @@ defineExpose({ loadFromItem, clearPrompt })
   border-color: var(--accent);
   background: var(--accent-bg);
   color: var(--accent-text);
+}
+
+.composer-pill-static {
+  cursor: default;
+  pointer-events: none;
 }
 
 .composer-upload-btn {

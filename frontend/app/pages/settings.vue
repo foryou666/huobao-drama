@@ -102,6 +102,15 @@
             <div class="jimeng-session-status">
               <span class="tag" :class="jimengHasValidSession ? 'tag-accent' : ''">{{ jimengSessionStatusLabel }}</span>
               <span v-if="jimengSessions.length" class="mono dim">{{ jimengSessions.length }} 个 Session</span>
+              <button
+                v-if="jimengSessions.length"
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="jimengSessionSaving || jimengCreditsLoading"
+                @click="loadJimengSessionStatus"
+              >
+                {{ jimengCreditsLoading ? '刷新中…' : '刷新积分' }}
+              </button>
             </div>
           </div>
           <div v-if="jimengSessions.length" class="jimeng-session-list">
@@ -115,6 +124,14 @@
                 <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
                 <span class="mono dim">{{ item.session_id_masked }}</span>
                 <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span
+                  v-if="item.valid && item.total_credit != null"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="jimengCreditTitle(item)"
+                >
+                  剩余 {{ item.total_credit }} 积分<span v-if="formatJimengCreditExpire(item)"> · 到期 {{ formatJimengCreditExpire(item) }}</span>
+                </span>
+                <span v-else-if="item.valid" class="dim mono jimeng-credit-tag">积分 —</span>
                 <span v-if="item.is_active" class="tag">当前启用</span>
               </div>
               <div class="jimeng-session-row-actions">
@@ -172,10 +189,127 @@
         <section class="setup-panel card jimeng-session-panel">
           <div class="setup-panel-head compact">
             <div>
-              <div class="setup-kicker">通道5</div>
+              <div class="setup-kicker">S通道5</div>
+              <div class="setup-title">小云雀 Access Key</div>
+              <div class="setup-desc">
+                Access Key 用于生成；网页 Cookie 用于查询剩余积分与包月到期（与即梦一致）。仅管理员配置。
+                <a href="https://xyq.jianying.com" target="_blank" rel="noopener">打开官网</a>
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                Key：登录官网 → 顶部 <strong>CLI/API → API</strong> → 新建密钥。<br />
+                Cookie：F12 → Network → 刷新 → 选中 <code>xyq.jianying.com</code> 请求 → Headers → Cookie → 粘贴到下方。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="xyqHasValidKey ? 'tag-accent' : ''">{{ xyqKeyStatusLabel }}</span>
+              <span v-if="xyqSessions.length" class="mono dim">{{ xyqSessions.length }} 个 Key</span>
+              <button
+                v-if="xyqSessions.length"
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="xyqSessionSaving || xyqCreditsLoading"
+                @click="loadXyqSessionStatus"
+              >
+                {{ xyqCreditsLoading ? '刷新中…' : '刷新积分' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="xyqSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in xyqSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span class="mono dim">{{ item.access_key_masked }}</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span
+                  v-if="item.valid && item.total_credit != null"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="jimengCreditTitle(item)"
+                >
+                  剩余 {{ item.total_credit }} 积分<span v-if="formatJimengCreditExpire(item)"> · 到期 {{ formatJimengCreditExpire(item) }}</span>
+                </span>
+                <span v-else-if="item.valid && item.has_cookie" class="dim mono jimeng-credit-tag">积分 —</span>
+                <span v-else-if="item.valid" class="dim mono jimeng-credit-tag">未绑 Cookie</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="xyqSessionSaving"
+                  @click="activateXyqSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="xyqSessionSaving"
+                  @click="openXyqEditDialog(item)"
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="xyqSessionSaving"
+                  @click="validateXyqSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="xyqSessionSaving"
+                  @click="removeXyqSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何 Access Key</div>
+          <textarea
+            v-model="xyqSessionInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴 Access Key（必填）…"
+          />
+          <textarea
+            v-model="xyqSessionCookieInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴网页 Cookie（可选，绑定后可显示剩余积分 / 到期）…"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="xyqSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选，如：账号A）" />
+            <button type="button" class="btn btn-sm btn-primary" :disabled="xyqSessionSaving || !xyqSessionInput.trim()" @click="saveXyqSession">
+              {{ xyqSessionSaving ? '保存中…' : '添加 Key' }}
+            </button>
+            <button
+              v-if="xyqSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="xyqSessionSaving"
+              @click="clearXyqSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">培训</div>
               <div class="setup-title">豆包培训 Session</div>
               <div class="setup-desc">
-                doubao.com Cookie 鉴权，用于内部培训练手。每账号每日 {{ doubaoTrainingDailyQuota }} 次免费额度，生成后自动叠加培训标识。
+                doubao.com Cookie 鉴权，用于内部培训练手（官网 Seedance 2.0 Fast / Mini，默认 Mini）。每账号每日 {{ doubaoTrainingDailyQuota }} 次，生成后自动叠加培训标识。
+                若提示风控验证，请先在浏览器打开豆包完成验证再重新复制 Cookie。
                 <a href="https://www.doubao.com/chat/create-video" target="_blank" rel="noopener">打开豆包</a>
               </div>
               <div class="setup-desc jimeng-cookie-hint">
@@ -253,6 +387,102 @@
             >
               清除全部
             </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">AI 配音</div>
+              <div class="setup-title">IndexTTS2 API</div>
+              <div class="setup-desc">
+                用于「AI 配音」页面与解说旁白合成。填写 Gradio 根地址（如 x-gpu 容器 URL）或完整 REST API 地址。
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                Gradio 示例：<code>https://xxx.container.x-gpu.com/</code>（末尾斜杠可有可无）。
+                保存后优先于服务器环境变量 <code>INDEXTTS2_API_URL</code>。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="ttsConfigConfigured ? 'tag-accent' : ''">{{ ttsConfigStatusLabel }}</span>
+              <span v-if="ttsConfigSource === 'env'" class="mono dim">当前来自环境变量</span>
+            </div>
+          </div>
+          <div class="tts-config-fields">
+            <label class="tts-config-label">
+              API 地址
+              <input v-model="ttsConfigForm.base_url" class="input" type="url" placeholder="https://xxx.container.x-gpu.com/" />
+            </label>
+            <label class="tts-config-label">
+              API Key（可选）
+              <input v-model="ttsConfigForm.api_key" class="input" type="password" placeholder="无则留空" autocomplete="new-password" />
+            </label>
+            <label class="tts-config-label">
+              默认音色
+              <input v-model="ttsConfigForm.default_voice" class="input" placeholder="voice_01" />
+            </label>
+          </div>
+          <div v-if="ttsConfigTestResult" class="tts-config-test-result" :class="{ ok: ttsConfigTestResult.reachable }">
+            {{ ttsConfigTestResult.message }}
+            <span v-if="ttsConfigTestResult.status" class="mono dim">HTTP {{ ttsConfigTestResult.status }}</span>
+          </div>
+          <div class="jimeng-session-actions">
+            <button type="button" class="btn btn-sm btn-primary" :disabled="ttsConfigSaving || !ttsConfigForm.base_url.trim()" @click="saveTtsConfig">
+              {{ ttsConfigSaving ? '保存中…' : '保存配置' }}
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="ttsConfigTesting || !ttsConfigForm.base_url.trim()" @click="testTtsConfig">
+              {{ ttsConfigTesting ? '测试中…' : '测试连通' }}
+            </button>
+            <label class="tts-config-active-toggle">
+              <input v-model="ttsConfigForm.is_active" type="checkbox" />
+              启用此配置
+            </label>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">工具箱</div>
+              <div class="setup-title">去字幕 API（本机 VSR）</div>
+              <div class="setup-desc">
+                本机 GPU 运行
+                <a href="https://github.com/foryou666/video-subtitle-remover" target="_blank" rel="noopener">video-subtitle-remover</a>
+                + <code>tools/vsr-api</code>，线上服务器通过隧道访问。
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                本机启动：<code>cd tools/vsr-api; .\setup.ps1; .\start.ps1</code>。
+                用 cpolar/ngrok 暴露 <code>:7861</code>，此处填隧道根地址（无末尾斜杠）。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="vsrConfigConfigured ? 'tag-accent' : ''">{{ vsrConfigStatusLabel }}</span>
+              <span v-if="vsrConfigSource === 'env'" class="mono dim">当前来自环境变量</span>
+            </div>
+          </div>
+          <div class="tts-config-fields">
+            <label class="tts-config-label">
+              API 地址
+              <input v-model="vsrConfigForm.base_url" class="input" type="url" placeholder="https://xxx.cpolar.cn" />
+            </label>
+            <label class="tts-config-label">
+              API Key
+              <input v-model="vsrConfigForm.api_key" class="input" type="password" placeholder="与 VSR_API_KEY 一致" autocomplete="new-password" />
+            </label>
+          </div>
+          <div v-if="vsrConfigTestResult" class="tts-config-test-result" :class="{ ok: vsrConfigTestResult.reachable }">
+            {{ vsrConfigTestResult.message }}
+            <span v-if="vsrConfigTestResult.vsr_ready != null" class="mono dim">VSR {{ vsrConfigTestResult.vsr_ready ? '就绪' : '未安装' }}</span>
+          </div>
+          <div class="jimeng-session-actions">
+            <button type="button" class="btn btn-sm btn-primary" :disabled="vsrConfigSaving || !vsrConfigForm.base_url.trim()" @click="saveVsrConfig">
+              {{ vsrConfigSaving ? '保存中…' : '保存配置' }}
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="vsrConfigTesting || !vsrConfigForm.base_url.trim()" @click="testVsrConfig">
+              {{ vsrConfigTesting ? '测试中…' : '测试连通' }}
+            </button>
+            <label class="tts-config-active-toggle">
+              <input v-model="vsrConfigForm.is_active" type="checkbox" />
+              启用此配置
+            </label>
           </div>
         </section>
         <div class="sections">
@@ -442,7 +672,7 @@
       </div>
 
       <!-- ===== 积分管理 ===== -->
-      <div v-if="tab === 'credits' && isAdmin" class="settings-scroll">
+      <div v-else-if="tab === 'credits' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">积分管理</h2>
           <p class="settings-desc">配置各操作的积分单价，并为团队成员充值。后续可按 1 元 = 100 积分 对接充值。</p>
@@ -638,7 +868,7 @@
       </div>
 
       <!-- ===== 团队管理 ===== -->
-      <div v-if="tab === 'team'" class="settings-scroll">
+      <div v-else-if="tab === 'team'" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">团队管理</h2>
           <p class="settings-desc">
@@ -725,10 +955,10 @@
       </div>
 
       <!-- ===== 用户管理 ===== -->
-      <div v-if="tab === 'users' && isAdmin" class="settings-scroll">
+      <div v-else-if="tab === 'users' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">用户管理</h2>
-          <p class="settings-desc">创建团队成员账号。普通用户可制作项目；管理员可修改全局设置。</p>
+          <p class="settings-desc">创建团队成员账号，可为已有用户重置密码或冻结/解冻账号。冻结后用户无法登录且现有会话立即失效。普通用户可制作项目；管理员可修改全局设置。</p>
         </div>
         <section class="setup-panel card">
           <div class="setup-title">新建用户</div>
@@ -747,15 +977,40 @@
           <div class="setup-title">已有用户</div>
           <table class="user-table">
             <thead>
-              <tr><th>用户名</th><th>显示名</th><th>角色</th><th>积分</th><th>最近登录</th></tr>
+              <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>积分</th><th>最近登录</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="u in teamUsers" :key="u.id">
                 <td>{{ u.username }}</td>
                 <td>{{ u.display_name }}</td>
                 <td><span class="tag">{{ u.role === 'admin' ? '管理员' : '用户' }}</span></td>
+                <td>
+                  <span v-if="u.is_active" class="tag tag-success">正常</span>
+                  <span v-else class="tag tag-danger">已冻结</span>
+                </td>
                 <td class="mono">{{ u.credits_balance ?? 0 }}</td>
                 <td class="dim mono">{{ u.last_login_at ? fmtUserTime(u.last_login_at) : '—' }}</td>
+                <td class="user-table-actions">
+                  <button type="button" class="btn btn-sm" @click="openPasswordDialog(u)">改密码</button>
+                  <button
+                    v-if="u.is_active && u.id !== user?.id"
+                    type="button"
+                    class="btn btn-sm btn-danger-outline"
+                    :disabled="userFreezeLoadingId === u.id"
+                    @click="toggleUserFreeze(u, false)"
+                  >
+                    {{ userFreezeLoadingId === u.id ? '处理中…' : '冻结' }}
+                  </button>
+                  <button
+                    v-else-if="!u.is_active"
+                    type="button"
+                    class="btn btn-sm"
+                    :disabled="userFreezeLoadingId === u.id"
+                    @click="toggleUserFreeze(u, true)"
+                  >
+                    {{ userFreezeLoadingId === u.id ? '处理中…' : '解冻' }}
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -964,6 +1219,84 @@
         </div>
       </form>
     </div>
+
+    <!-- User Password Dialog -->
+    <div v-if="passwordDialogUser" class="overlay" @click.self="closePasswordDialog">
+      <form class="modal card" @submit.prevent="saveUserPassword">
+        <h2 class="modal-title">修改密码</h2>
+        <p class="dim modal-note">
+          用户：{{ passwordDialogUser.username }}
+          <span v-if="passwordDialogUser.display_name">（{{ passwordDialogUser.display_name }}）</span>
+        </p>
+        <label class="field">
+          <span class="field-label">新密码</span>
+          <input
+            v-model="passwordEditValue"
+            class="input"
+            type="password"
+            placeholder="至少 6 位"
+            minlength="6"
+            autocomplete="new-password"
+            required
+          />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn" @click="closePasswordDialog">取消</button>
+          <button type="submit" class="btn btn-primary" :disabled="passwordSaving">
+            {{ passwordSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- S通道5 / 小云雀 Key 编辑 -->
+    <div v-if="xyqEditDialog" class="overlay" @click.self="closeXyqEditDialog">
+      <form class="modal card config-modal" @submit.prevent="saveXyqEditDialog">
+        <div class="config-modal-head">
+          <div>
+            <h2 class="modal-title">编辑 Access Key</h2>
+            <div class="modal-note">
+              当前 Key：{{ xyqEditForm.access_key_masked || '—' }}
+              <span v-if="xyqEditForm.has_cookie"> · 已绑 Cookie</span>
+              <span v-else> · 未绑 Cookie</span>
+            </div>
+          </div>
+        </div>
+        <label class="field">
+          <span class="field-label">备注</span>
+          <input v-model="xyqEditForm.label" class="input" type="text" placeholder="如：账号A" />
+        </label>
+        <label class="field">
+          <span class="field-label">Access Key <span class="dim">（留空则不改）</span></span>
+          <textarea
+            v-model="xyqEditForm.access_key"
+            class="input jimeng-session-input"
+            rows="2"
+            placeholder="粘贴新的 Access Key；留空保持原 Key"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">网页 Cookie <span class="dim">（用于查询剩余积分 / 到期）</span></span>
+          <textarea
+            v-model="xyqEditForm.cookie"
+            class="input jimeng-session-input"
+            rows="4"
+            placeholder="粘贴 Cookie；留空则不改已有 Cookie"
+            :disabled="xyqEditForm.clear_cookie"
+          />
+        </label>
+        <label class="field field-inline">
+          <input v-model="xyqEditForm.clear_cookie" type="checkbox" />
+          <span class="field-label">清除已绑定的 Cookie</span>
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn" @click="closeXyqEditDialog">取消</button>
+          <button type="submit" class="btn btn-primary" :disabled="xyqSessionSaving">
+            {{ xyqSessionSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
 
@@ -971,7 +1304,7 @@
 import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, Users, Coins, Building2 } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI, jimengSessionAPI, doubaoTrainingSessionAPI } from '~/composables/useApi'
+import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI, jimengSessionAPI, xyqSessionAPI, doubaoTrainingSessionAPI, ttsAPI, subtitleRemoverAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
 import { VIDEO_CHANNEL_ADMIN_GUIDE } from '~/constants/video-channels.js'
 
@@ -986,7 +1319,7 @@ watch([isAdmin, canManageTeam], () => {
 const baseTabs = computed(() => {
   if (isAdmin.value) {
     return [
-      { id: 'ai', label: 'AI 服务', icon: Cpu },
+  { id: 'ai', label: 'AI 服务', icon: Cpu },
       { id: 'team', label: '团队', icon: Building2 },
       { id: 'credits', label: '积分', icon: Coins },
       { id: 'users', label: '用户', icon: Users },
@@ -1023,6 +1356,23 @@ const jimengSessions = ref([])
 const jimengSessionInput = ref('')
 const jimengSessionLabel = ref('')
 const jimengSessionSaving = ref(false)
+const xyqSessions = ref([])
+const xyqSessionInput = ref('')
+const xyqSessionCookieInput = ref('')
+const xyqSessionLabel = ref('')
+const xyqSessionSaving = ref(false)
+const xyqCreditsLoading = ref(false)
+const xyqEditDialog = ref(false)
+const xyqEditForm = ref({
+  id: '',
+  label: '',
+  access_key: '',
+  access_key_masked: '',
+  cookie: '',
+  has_cookie: false,
+  clear_cookie: false,
+})
+const jimengCreditsLoading = ref(false)
 
 const doubaoTrainingSessions = ref([])
 const doubaoTrainingSessionInput = ref('')
@@ -1030,8 +1380,50 @@ const doubaoTrainingSessionLabel = ref('')
 const doubaoTrainingSessionSaving = ref(false)
 const doubaoTrainingDailyQuota = ref(5)
 
+const ttsConfigForm = reactive({
+  base_url: '',
+  api_key: '',
+  default_voice: 'voice_01',
+  is_active: true,
+})
+const ttsConfigSaving = ref(false)
+const ttsConfigTesting = ref(false)
+const ttsConfigTestResult = ref(null)
+const ttsConfigSource = ref('none')
+const ttsConfigConfigured = computed(() => !!ttsConfigForm.base_url.trim())
+const ttsConfigStatusLabel = computed(() => {
+  if (ttsConfigSource.value === 'database' && ttsConfigForm.is_active) return '已配置'
+  if (ttsConfigSource.value === 'env') return '环境变量'
+  if (ttsConfigForm.base_url.trim()) return '未保存'
+  return '未配置'
+})
+
+const vsrConfigForm = reactive({
+  base_url: '',
+  api_key: '',
+  is_active: true,
+})
+const vsrConfigSaving = ref(false)
+const vsrConfigTesting = ref(false)
+const vsrConfigTestResult = ref(null)
+const vsrConfigSource = ref('none')
+const vsrConfigConfigured = computed(() => !!vsrConfigForm.base_url.trim())
+const vsrConfigStatusLabel = computed(() => {
+  if (vsrConfigSource.value === 'database' && vsrConfigForm.is_active) return '已配置'
+  if (vsrConfigSource.value === 'env') return '环境变量'
+  if (vsrConfigForm.base_url.trim()) return '未保存'
+  return '未配置'
+})
+
 const jimengHasValidSession = computed(() => jimengSessions.value.some(item => item.valid))
 const jimengSessionConfigured = computed(() => jimengSessions.value.length > 0)
+const xyqHasValidKey = computed(() => xyqSessions.value.some(item => item.valid))
+const xyqKeyConfigured = computed(() => xyqSessions.value.length > 0)
+const xyqKeyStatusLabel = computed(() => {
+  if (xyqHasValidKey.value) return 'Key 可用'
+  if (xyqKeyConfigured.value) return 'Key 均无效'
+  return '未配置 Access Key'
+})
 
 const jimengSessionStatusLabel = computed(() => {
   if (jimengHasValidSession.value) return '有可用 Session'
@@ -1055,6 +1447,105 @@ async function loadDoubaoTrainingSessionStatus() {
     doubaoTrainingSessions.value = res?.items || []
   } catch {
     doubaoTrainingSessions.value = []
+  }
+}
+
+async function loadTtsConfig() {
+  if (!isAdmin.value) return
+  try {
+    const res = await ttsAPI.getConfig()
+    ttsConfigSource.value = res?.source || 'none'
+    ttsConfigForm.base_url = res?.base_url || ''
+    ttsConfigForm.api_key = res?.api_key || ''
+    ttsConfigForm.default_voice = res?.default_voice || 'voice_01'
+    ttsConfigForm.is_active = res?.is_active !== false
+    ttsConfigTestResult.value = null
+  } catch (e) {
+    toast.error(e.message || '加载 TTS 配置失败')
+  }
+}
+
+async function saveTtsConfig() {
+  if (!ttsConfigForm.base_url.trim()) return
+  ttsConfigSaving.value = true
+  try {
+    const res = await ttsAPI.saveConfig({
+      base_url: ttsConfigForm.base_url.trim(),
+      api_key: ttsConfigForm.api_key || undefined,
+      default_voice: ttsConfigForm.default_voice.trim() || 'voice_01',
+      is_active: ttsConfigForm.is_active,
+    })
+    ttsConfigSource.value = res?.source || 'database'
+    ttsConfigForm.api_key = res?.api_key || '********'
+    toast.success('TTS API 配置已保存')
+    await loadCfgs()
+  } catch (e) {
+    toast.error(e.message || '保存失败')
+  } finally {
+    ttsConfigSaving.value = false
+  }
+}
+
+async function testTtsConfig() {
+  if (!ttsConfigForm.base_url.trim()) return
+  ttsConfigTesting.value = true
+  ttsConfigTestResult.value = null
+  try {
+    ttsConfigTestResult.value = await ttsAPI.testConfig({ base_url: ttsConfigForm.base_url.trim() })
+  } catch (e) {
+    ttsConfigTestResult.value = { reachable: false, message: e.message || '测试失败' }
+  } finally {
+    ttsConfigTesting.value = false
+  }
+}
+
+async function loadVsrConfig() {
+  if (!isAdmin.value) return
+  try {
+    const res = await subtitleRemoverAPI.getConfig()
+    vsrConfigSource.value = res?.source || 'none'
+    vsrConfigForm.base_url = res?.base_url || ''
+    vsrConfigForm.api_key = res?.api_key || ''
+    vsrConfigForm.is_active = res?.is_active !== false
+    vsrConfigTestResult.value = null
+  } catch (e) {
+    toast.error(e.message || '加载去字幕配置失败')
+  }
+}
+
+async function saveVsrConfig() {
+  if (!vsrConfigForm.base_url.trim()) return
+  vsrConfigSaving.value = true
+  try {
+    const res = await subtitleRemoverAPI.saveConfig({
+      base_url: vsrConfigForm.base_url.trim(),
+      api_key: vsrConfigForm.api_key || undefined,
+      is_active: vsrConfigForm.is_active,
+    })
+    vsrConfigSource.value = res?.source || 'database'
+    vsrConfigForm.api_key = res?.api_key || '********'
+    toast.success('去字幕 API 配置已保存')
+    await loadCfgs()
+  } catch (e) {
+    toast.error(e.message || '保存失败')
+  } finally {
+    vsrConfigSaving.value = false
+  }
+}
+
+async function testVsrConfig() {
+  if (!vsrConfigForm.base_url.trim()) return
+  vsrConfigTesting.value = true
+  vsrConfigTestResult.value = null
+  try {
+    vsrConfigTestResult.value = await subtitleRemoverAPI.testConfig({
+      base_url: vsrConfigForm.base_url.trim(),
+      api_key: vsrConfigForm.api_key || undefined,
+    })
+  } catch (e) {
+    vsrConfigTestResult.value = { reachable: false, message: e.message || '测试失败' }
+  } finally {
+    vsrConfigTesting.value = false
   }
 }
 
@@ -1134,12 +1625,173 @@ async function clearDoubaoTrainingSession() {
 
 async function loadJimengSessionStatus() {
   if (!isAdmin.value) return
+  jimengCreditsLoading.value = true
   try {
     const res = await jimengSessionAPI.list()
     jimengSessions.value = res?.items || res?.sessions || []
   } catch {
     jimengSessions.value = []
+  } finally {
+    jimengCreditsLoading.value = false
   }
+}
+
+async function loadXyqSessionStatus() {
+  if (!isAdmin.value) return
+  xyqCreditsLoading.value = true
+  try {
+    const res = await xyqSessionAPI.list()
+    xyqSessions.value = res?.items || res?.sessions || []
+  } catch {
+    xyqSessions.value = []
+  } finally {
+    xyqCreditsLoading.value = false
+  }
+}
+
+async function saveXyqSession() {
+  if (!xyqSessionInput.value.trim()) return
+  xyqSessionSaving.value = true
+  try {
+    const cookie = xyqSessionCookieInput.value.trim()
+    const res = await xyqSessionAPI.save({
+      access_key: xyqSessionInput.value.trim(),
+      cookie: cookie || undefined,
+      label: xyqSessionLabel.value || undefined,
+      set_active: true,
+    })
+    xyqSessionInput.value = ''
+    xyqSessionCookieInput.value = ''
+    xyqSessionLabel.value = ''
+    await loadXyqSessionStatus()
+    toast.success(res?.valid ? 'Access Key 已添加且有效' : 'Access Key 已添加，但验证未通过')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+function openXyqEditDialog(item) {
+  xyqEditForm.value = {
+    id: item.id,
+    label: item.label || '',
+    access_key: '',
+    access_key_masked: item.access_key_masked || '',
+    cookie: '',
+    has_cookie: !!item.has_cookie,
+    clear_cookie: false,
+  }
+  xyqEditDialog.value = true
+}
+
+function closeXyqEditDialog() {
+  xyqEditDialog.value = false
+}
+
+async function saveXyqEditDialog() {
+  const form = xyqEditForm.value
+  if (!form.id) return
+  const accessKey = String(form.access_key || '').trim()
+  const cookie = String(form.cookie || '').trim()
+  xyqSessionSaving.value = true
+  try {
+    const payload = {
+      id: form.id,
+      label: form.label ?? '',
+      set_active: false,
+    }
+    if (accessKey) payload.access_key = accessKey
+    if (form.clear_cookie) payload.cookie = null
+    else if (cookie) payload.cookie = cookie
+    await xyqSessionAPI.save(payload)
+    closeXyqEditDialog()
+    await loadXyqSessionStatus()
+    toast.success('已保存')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+async function validateXyqSessionItem(id) {
+  xyqSessionSaving.value = true
+  try {
+    const res = await xyqSessionAPI.validate(id)
+    await loadXyqSessionStatus()
+    toast.success(res?.valid ? 'Access Key 有效' : 'Access Key 无效，请到小云雀重新创建密钥')
+  } catch (err) {
+    toast.error(err?.message || '验证失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+async function activateXyqSession(id) {
+  xyqSessionSaving.value = true
+  try {
+    await xyqSessionAPI.setActive(id)
+    await loadXyqSessionStatus()
+    toast.success('已设为当前启用 Access Key')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+async function removeXyqSession(id) {
+  xyqSessionSaving.value = true
+  try {
+    await xyqSessionAPI.remove(id)
+    await loadXyqSessionStatus()
+    toast.success('Access Key 已删除')
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+async function clearXyqSession() {
+  if (!confirm('确定清除全部小云雀 Access Key？')) return
+  xyqSessionSaving.value = true
+  try {
+    await xyqSessionAPI.clear()
+    await loadXyqSessionStatus()
+    toast.success('已清除全部 Access Key')
+  } catch (err) {
+    toast.error(err?.message || '清除失败')
+  } finally {
+    xyqSessionSaving.value = false
+  }
+}
+
+function formatJimengCreditExpire(item) {
+  const unix = Number(item?.credit_expire_at)
+  const iso = item?.credit_expire_at_iso
+  const date = Number.isFinite(unix) && unix > 0
+    ? new Date(unix * 1000)
+    : (iso ? new Date(iso) : null)
+  if (!date || Number.isNaN(date.getTime())) return ''
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${d} ${hh}:${mm}`
+}
+
+function jimengCreditTitle(item) {
+  if (item?.total_credit == null) return ''
+  const parts = []
+  if (item.gift_credit != null) parts.push(`赠送 ${item.gift_credit}`)
+  if (item.purchase_credit != null) parts.push(`购买 ${item.purchase_credit}`)
+  if (item.vip_credit != null) parts.push(`VIP ${item.vip_credit}`)
+  const expire = formatJimengCreditExpire(item)
+  if (expire) parts.push(`到期 ${expire}`)
+  return parts.length ? `${parts.join(' · ')}（合计 ${item.total_credit}）` : `合计 ${item.total_credit} 积分`
 }
 
 async function saveJimengSession() {
@@ -1304,8 +1956,8 @@ const providerPresets = {
     chengmeng: {
       label: '橙盟 Seedance 2.0 9图过人脸',
       baseUrl: 'https://api.chengmeng.site',
-      models: ['70'],
-      hint: 'Base URL 填 https://api.chengmeng.site；模型从上游 /api/models 同步（当前默认 model_id=70 九图满血 / 49 十图线路1）；创建任务仅需 model_id，无需 group_id',
+      models: ['70', '77'],
+      hint: 'Base URL 填 https://api.chengmeng.site；模型从上游 /api/models 同步（当前默认 model_id=70 九图满血线路1 / 77 九图满血线路2）；创建任务仅需 model_id，无需 group_id',
       defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
     },
     aistarslab: {
@@ -2398,6 +3050,10 @@ async function removeMember(m) {
 // ===== Users =====
 const teamUsers = ref([])
 const userForm = reactive({ username: '', password: '', display_name: '', role: 'user' })
+const passwordDialogUser = ref(null)
+const passwordEditValue = ref('')
+const passwordSaving = ref(false)
+const userFreezeLoadingId = ref(null)
 
 function fmtUserTime(s) {
   return new Date(s).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -2431,6 +3087,56 @@ async function createTeamUser() {
   }
 }
 
+function openPasswordDialog(user) {
+  passwordDialogUser.value = user
+  passwordEditValue.value = ''
+}
+
+function closePasswordDialog() {
+  passwordDialogUser.value = null
+  passwordEditValue.value = ''
+}
+
+async function saveUserPassword() {
+  if (!passwordDialogUser.value || passwordSaving.value) return
+  const pwd = String(passwordEditValue.value || '')
+  if (pwd.length < 6) {
+    toast.error('密码至少 6 位')
+    return
+  }
+  passwordSaving.value = true
+  try {
+    await usersAPI.update(passwordDialogUser.value.id, { password: pwd })
+    toast.success(`已更新 ${passwordDialogUser.value.username} 的密码`)
+    closePasswordDialog()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    passwordSaving.value = false
+  }
+}
+
+async function toggleUserFreeze(targetUser, nextActive) {
+  if (!targetUser?.id || userFreezeLoadingId.value === targetUser.id) return
+  if (!nextActive && targetUser.id === user.value?.id) {
+    toast.error('不能冻结当前登录账号')
+    return
+  }
+  const actionLabel = nextActive ? '解冻' : '冻结'
+  if (!nextActive && !window.confirm(`确定冻结用户「${targetUser.username}」？冻结后将无法登录。`)) return
+
+  userFreezeLoadingId.value = targetUser.id
+  try {
+    await usersAPI.update(targetUser.id, { is_active: nextActive })
+    toast.success(`已${actionLabel} ${targetUser.username}`)
+    await loadTeamUsers()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    userFreezeLoadingId.value = null
+  }
+}
+
 onMounted(() => {
   if (isAdmin.value) {
     loadCfgs()
@@ -2438,7 +3144,10 @@ onMounted(() => {
     loadAllSkills()
     loadTeamUsers()
     loadJimengSessionStatus()
+    loadXyqSessionStatus()
     loadDoubaoTrainingSessionStatus()
+    loadTtsConfig()
+    loadVsrConfig()
   }
   if (canManageMembers.value) {
     refreshTeams()
@@ -2478,6 +3187,19 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
 }
 .user-table th { color: var(--text-3); font-size: 12px; font-weight: 500; }
+.user-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.btn-danger-outline {
+  border-color: rgba(239, 83, 80, 0.45);
+  color: #ef5350;
+}
+.btn-danger-outline:hover:not(:disabled) {
+  background: rgba(239, 83, 80, 0.08);
+  border-color: rgba(239, 83, 80, 0.65);
+}
 
 .setup-pricing-hint {
   margin: 0 0 12px;
@@ -2590,6 +3312,10 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.jimeng-credit-tag {
+  white-space: nowrap;
+}
+
 .jimeng-session-row-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2608,7 +3334,71 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.settings-layout { display: flex; height: 100%; background: var(--bg-base); }
+.tts-config-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.tts-config-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.tts-config-label .input {
+  font-weight: 400;
+}
+
+.tts-config-fields .tts-config-label:first-child {
+  grid-column: 1 / -1;
+}
+
+.tts-config-test-result {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  font-size: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tts-config-test-result.ok {
+  border-color: color-mix(in srgb, var(--success, #22c55e) 40%, var(--border));
+}
+
+.tts-config-active-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-left: auto;
+}
+
+@media (max-width: 900px) {
+  .tts-config-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.settings-layout {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: row;
+  align-items: stretch;
+  width: 100%;
+  min-height: 0;
+  background: var(--bg-base);
+}
 
 .settings-nav {
   width: 240px; flex-shrink: 0; padding: 16px 10px; border-right: 1px solid var(--border);
@@ -2653,8 +3443,24 @@ onMounted(() => {
   color: var(--text-3);
 }
 
-.settings-content { flex: 1; overflow: hidden; }
-.settings-scroll { height: 100%; overflow-y: auto; padding: 36px 48px; max-width: 840px; margin: 0 auto; animation: fadeUp 0.3s var(--ease-out); }
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.settings-scroll {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 36px 48px;
+  width: 100%;
+  box-sizing: border-box;
+  animation: fadeUp 0.3s var(--ease-out);
+}
 .settings-head { margin-bottom: 24px; }
 .settings-brand {
   display: flex;
@@ -2815,7 +3621,13 @@ onMounted(() => {
 .agent-card-foot { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
 
 /* Skills 布局 */
-.skills-layout { display: flex; height: 100%; overflow: hidden; }
+.skills-layout {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 .skills-agent-list {
   width: 200px; flex-shrink: 0; border-right: 1px solid var(--border);
   background: var(--bg-1); display: flex; flex-direction: column;
@@ -2841,8 +3653,7 @@ onMounted(() => {
   padding: 1px 5px; border-radius: 99px;
 }
 .skills-agent-item.active .skill-count-badge { background: rgba(255,255,255,0.2); color: inherit; }
-.skills-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
-.skills-main .settings-scroll { max-width: 900px; }
+.skills-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
 
 /* Skill */
 .skill-list { display: flex; flex-direction: column; gap: 8px; }
@@ -2854,6 +3665,12 @@ onMounted(() => {
 
 /* Shared */
 .field { display: flex; flex-direction: column; gap: 5px; }
+.field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.field-inline .field-label { margin: 0; }
 .field-label { font-size: 12px; font-weight: 500; color: var(--text-1); }
 .field-hint { font-size: 11px; color: var(--text-3); margin-top: 2px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }

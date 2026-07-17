@@ -1,10 +1,12 @@
 import { db, schema } from '../db/index.js'
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm'
 import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
+import { thumbPathForSource } from '../utils/thumbnail.js'
 import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from './drama-shares.js'
 import type { AuthUser } from '../middleware/auth.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
+import { canViewAllImageStudio } from '../utils/image-studio-access.js'
 
 function parseSizeAspectRatio(size?: string | null): string {
   const raw = String(size || '').trim()
@@ -17,9 +19,10 @@ function parseSizeAspectRatio(size?: string | null): string {
     if (w > h) return '16:9'
     if (h > w) return '9:16'
   }
-  return '9:16'
+  return '16:9'
 }
 
+/** 列表接口只返回路径（避免逐条 OSS 签名） */
 function parseReferenceImages(raw?: string | null) {
   if (!raw?.trim()) return []
   try {
@@ -28,10 +31,7 @@ function parseReferenceImages(raw?: string | null) {
     return parsed
       .map(item => String(item || '').trim())
       .filter(Boolean)
-      .map(path => ({
-        path,
-        display_url: resolveDisplayMediaUrl(path),
-      }))
+      .map(path => ({ path }))
   } catch {
     return []
   }
@@ -48,6 +48,7 @@ export interface ImageLedgerQuery {
   offset?: number
   mineOnly?: boolean
   studioOnly?: boolean
+  userId?: number
 }
 
 function buildImageOwnerMaps() {
@@ -73,6 +74,46 @@ function buildImageOwnerMaps() {
   }
 
   return { creditTxUser, generationOwner }
+}
+
+const OWNER_MAPS_TTL_MS = 60_000
+let ownerMapsCache: { at: number; maps: ReturnType<typeof buildImageOwnerMaps> } | null = null
+
+export function invalidateImageOwnerMapsCache() {
+  ownerMapsCache = null
+}
+
+function getImageOwnerMaps() {
+  const now = Date.now()
+  if (ownerMapsCache && now - ownerMapsCache.at < OWNER_MAPS_TTL_MS) {
+    return ownerMapsCache.maps
+  }
+  const maps = buildImageOwnerMaps()
+  ownerMapsCache = { at: now, maps }
+  return maps
+}
+
+function buildUserMap(userIds: number[]) {
+  if (!userIds.length) return new Map<number, typeof schema.users.$inferSelect>()
+  return new Map(
+    db.select().from(schema.users).where(inArray(schema.users.id, userIds)).all()
+      .map(u => [u.id, u]),
+  )
+}
+
+function resolveOperatorFields(
+  row: typeof schema.imageGenerations.$inferSelect,
+  ownerMaps: ReturnType<typeof buildImageOwnerMaps>,
+  userMap: Map<number, typeof schema.users.$inferSelect>,
+) {
+  const ownerUserId = resolveImageOwnerUserId(row, ownerMaps)
+  const owner = ownerUserId ? userMap.get(ownerUserId) : null
+  return {
+    operator_id: ownerUserId,
+    operator_name: owner?.displayName || owner?.username || null,
+    username: owner?.username || null,
+    display_name: owner?.displayName || owner?.username || null,
+  }
 }
 
 function resolveImageOwnerUserId(
@@ -101,53 +142,122 @@ function buildAccessibleDramaIds(user: AuthUser, activeTeamId: number | null | u
   return ids
 }
 
+function resolveThumbFields(rawImage?: string | null) {
+  const thumbPath = rawImage ? thumbPathForSource(rawImage) : null
+  if (!thumbPath) {
+    return { thumb_path: null as string | null, display_thumbnail_url: null as string | null }
+  }
+  return {
+    thumb_path: thumbPath,
+    display_thumbnail_url: resolveDisplayMediaUrl(thumbPath),
+  }
+}
+
+function warmMissingThumbnails(rows: typeof schema.imageGenerations.$inferSelect[]) {
+  void (async () => {
+    const { ensureThumbnail } = await import('../utils/thumbnail.js')
+    for (const row of rows) {
+      if (row.status !== 'completed' || !row.localPath) continue
+      try {
+        await ensureThumbnail(row.localPath)
+      } catch {
+        /* ignore */
+      }
+    }
+  })()
+}
+
+function isImageRowAccessible(
+  row: typeof schema.imageGenerations.$inferSelect,
+  accessibleDramaIds: Set<number>,
+): boolean {
+  if (!row.dramaId) return true
+  return accessibleDramaIds.has(row.dramaId)
+}
+
+function buildImageLedgerSqlConditions(query: ImageLedgerQuery): SQL[] {
+  const conditions: SQL[] = []
+
+  if (query.studioOnly) {
+    conditions.push(or(
+      isNull(schema.imageGenerations.storyboardId),
+      eq(schema.imageGenerations.imageType, 'studio'),
+    )!)
+  }
+  if (query.dramaId) {
+    conditions.push(eq(schema.imageGenerations.dramaId, query.dramaId))
+  }
+  if (query.status && query.status !== 'all') {
+    if (query.status === 'processing') {
+      conditions.push(or(
+        eq(schema.imageGenerations.status, 'processing'),
+        eq(schema.imageGenerations.status, 'pending'),
+      )!)
+    } else {
+      conditions.push(eq(schema.imageGenerations.status, query.status))
+    }
+  }
+  if (query.keyword?.trim()) {
+    const kw = `%${query.keyword.trim().replace(/[%_]/g, '')}%`
+    conditions.push(sql`lower(${schema.imageGenerations.prompt}) like lower(${kw})`)
+  }
+
+  return conditions
+}
+
 export function listImageLedger(query: ImageLedgerQuery) {
   const limit = Math.min(Math.max(Number(query.limit || 30), 1), 100)
   const offset = Math.max(Number(query.offset || 0), 0)
+  const isAdminGlobalView = canViewAllImageStudio(query.user) && (Boolean(query.userId) || !query.mineOnly)
   const accessibleDramaIds = buildAccessibleDramaIds(query.user, query.activeTeamId)
 
-  const storyboards = db.select().from(schema.storyboards).all()
-  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
-  const episodes = db.select().from(schema.episodes).all().filter(e => !e.deletedAt)
-  const epMap = new Map(episodes.map(e => [e.id, e]))
-  const dramas = db.select().from(schema.dramas).all().filter(d => !d.deletedAt)
-  const dramaMap = new Map(dramas.map(d => [d.id, d]))
+  const sqlConditions = buildImageLedgerSqlConditions(query)
+  let rows = db.select().from(schema.imageGenerations)
+    .where(sqlConditions.length ? and(...sqlConditions) : undefined)
+    .all()
 
-  let rows = db.select().from(schema.imageGenerations).all()
-    .filter(r => {
-      if (!r.dramaId) return true
-      return accessibleDramaIds.has(r.dramaId)
-    })
-
-  if (query.studioOnly) {
-    rows = rows.filter(r => !r.storyboardId || r.imageType === 'studio')
+  if (!isAdminGlobalView) {
+    rows = rows.filter(r => isImageRowAccessible(r, accessibleDramaIds))
   }
 
-  if (query.dramaId) rows = rows.filter(r => r.dramaId === query.dramaId)
   if (query.episodeId) {
-    rows = rows.filter(r => {
+    const storyboardIds = [...new Set(rows.map(r => r.storyboardId).filter((id): id is number => !!id))]
+    const storyboards = storyboardIds.length
+      ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
+      : []
+    const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+    rows = rows.filter((r) => {
       const sb = r.storyboardId ? sbMap.get(r.storyboardId) : null
       return sb?.episodeId === query.episodeId
     })
   }
-  if (query.status && query.status !== 'all') {
-    if (query.status === 'processing') {
-      rows = rows.filter(r => r.status === 'processing' || r.status === 'pending')
-    } else {
-      rows = rows.filter(r => String(r.status || 'pending') === query.status)
+
+  const showcasePins = rows.filter(r => r.isPinned)
+
+  const ownerMapsForFilter = getImageOwnerMaps()
+  if (query.userId) {
+    rows = rows.filter(r => resolveImageOwnerUserId(r, ownerMapsForFilter) === query.userId)
+  } else if (query.mineOnly) {
+    rows = rows.filter(r => resolveImageOwnerUserId(r, ownerMapsForFilter) === query.user.id)
+    const rowIds = new Set(rows.map(r => r.id))
+    for (const pin of showcasePins) {
+      if (!rowIds.has(pin.id)) {
+        rows.push(pin)
+        rowIds.add(pin.id)
+      }
     }
   }
-  if (query.keyword?.trim()) {
-    const kw = query.keyword.trim().toLowerCase()
-    rows = rows.filter(r => String(r.prompt || '').toLowerCase().includes(kw))
-  }
 
-  const ownerMaps = query.mineOnly ? buildImageOwnerMaps() : null
-  if (query.mineOnly) {
-    rows = rows.filter(r => resolveImageOwnerUserId(r, ownerMaps!) === query.user.id)
-  }
-
-  rows.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+  rows.sort((a, b) => {
+    const aPinned = a.isPinned ? 1 : 0
+    const bPinned = b.isPinned ? 1 : 0
+    if (aPinned !== bPinned) return bPinned - aPinned
+    if (aPinned && bPinned) {
+      const pinnedCmp = String(b.pinnedAt || '').localeCompare(String(a.pinnedAt || ''))
+      if (pinnedCmp !== 0) return pinnedCmp
+    }
+    return String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+  })
 
   const stats = {
     total: rows.length,
@@ -157,11 +267,38 @@ export function listImageLedger(query: ImageLedgerQuery) {
   }
 
   const page = rows.slice(offset, offset + limit)
+  const storyboardIds = [...new Set(page.map(r => r.storyboardId).filter((id): id is number => !!id))]
+  const storyboards = storyboardIds.length
+    ? db.select().from(schema.storyboards).where(inArray(schema.storyboards.id, storyboardIds)).all()
+    : []
+  const sbMap = new Map(storyboards.map(sb => [sb.id, sb]))
+
+  const episodeIds = [...new Set(storyboards.map(sb => sb.episodeId).filter((id): id is number => !!id))]
+  const dramaIds = [...new Set(page.map(r => r.dramaId).filter((id): id is number => !!id))]
+
+  const episodes = episodeIds.length
+    ? db.select().from(schema.episodes).where(inArray(schema.episodes.id, episodeIds)).all().filter(e => !e.deletedAt)
+    : []
+  const epMap = new Map(episodes.map(e => [e.id, e]))
+
+  const dramas = dramaIds.length
+    ? db.select().from(schema.dramas).where(inArray(schema.dramas.id, dramaIds)).all().filter(d => !d.deletedAt)
+    : []
+  const dramaMap = new Map(dramas.map(d => [d.id, d]))
+
+  const displayOwnerMaps = getImageOwnerMaps()
+  const ownerIds = [...new Set(
+    page.map(row => resolveImageOwnerUserId(row, displayOwnerMaps)).filter((id): id is number => !!id),
+  )]
+  const userMap = buildUserMap(ownerIds)
+
   const items = page.map((row) => {
     const sb = row.storyboardId ? sbMap.get(row.storyboardId) : null
     const ep = sb ? epMap.get(sb.episodeId) : null
     const drama = row.dramaId ? dramaMap.get(row.dramaId) : null
     const rawImage = row.localPath || row.imageUrl
+    const thumbFields = resolveThumbFields(rawImage)
+    const operator = resolveOperatorFields(row, displayOwnerMaps, userMap)
     return toSnakeCase({
       id: row.id,
       storyboard_id: row.storyboardId,
@@ -181,6 +318,7 @@ export function listImageLedger(query: ImageLedgerQuery) {
       updated_at: row.updatedAt,
       completed_at: row.completedAt,
       display_image_url: resolveDisplayMediaUrl(rawImage),
+      ...thumbFields,
       image_url: row.imageUrl,
       local_path: row.localPath,
       drama_title: drama?.title || null,
@@ -190,8 +328,13 @@ export function listImageLedger(query: ImageLedgerQuery) {
       storyboard_title: sb?.title || null,
       storyboard_number: sb?.storyboardNumber || null,
       storyboard_exists: !!sb,
+      is_pinned: !!row.isPinned,
+      pinned_at: row.pinnedAt || null,
+      ...operator,
     })
   })
+
+  warmMissingThumbnails(page)
 
   return {
     items,

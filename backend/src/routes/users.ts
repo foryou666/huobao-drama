@@ -81,10 +81,20 @@ app.put('/:id', async (c) => {
   const [row] = db.select().from(schema.users).where(eq(schema.users.id, id)).all()
   if (!row) return notFound(c, '用户不存在')
 
+  const admin = getAuthUser(c)
   const updates: Record<string, unknown> = { updatedAt: now() }
+  let freezeAction: 'user.freeze' | 'user.unfreeze' | null = null
+
   if (body.display_name !== undefined) updates.displayName = String(body.display_name).trim()
   if (body.role === 'admin' || body.role === 'user') updates.role = body.role
-  if (body.is_active !== undefined) updates.isActive = body.is_active ? 1 : 0
+  if (body.is_active !== undefined) {
+    const nextActive = Boolean(body.is_active)
+    if (!nextActive && id === admin.id) return badRequest(c, '不能冻结当前登录账号')
+    if (Boolean(row.isActive) !== nextActive) {
+      freezeAction = nextActive ? 'user.unfreeze' : 'user.freeze'
+    }
+    updates.isActive = nextActive ? 1 : 0
+  }
   if (body.password) {
     const pwd = String(body.password)
     if (pwd.length < 6) return badRequest(c, '密码至少 6 位')
@@ -92,12 +102,21 @@ app.put('/:id', async (c) => {
   }
 
   db.update(schema.users).set(updates).where(eq(schema.users.id, id)).run()
-  logActivity(getAuthUser(c), {
-    action: 'user.update',
-    summary: `更新用户 ${row.username}`,
-    resourceType: 'user',
-    resourceId: id,
-  })
+  if (freezeAction) {
+    logActivity(admin, {
+      action: freezeAction,
+      summary: `${freezeAction === 'user.freeze' ? '冻结' : '解冻'}用户 ${row.username}`,
+      resourceType: 'user',
+      resourceId: id,
+    })
+  } else {
+    logActivity(admin, {
+      action: 'user.update',
+      summary: `更新用户 ${row.username}`,
+      resourceType: 'user',
+      resourceId: id,
+    })
+  }
   return success(c)
 })
 

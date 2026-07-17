@@ -3,14 +3,17 @@ import {
   DOUBAO_TRAINING_DEFAULT_ASPECT_RATIO,
   DOUBAO_TRAINING_DAILY_QUOTA,
   DOUBAO_TRAINING_DEFAULT_DURATION,
+  DOUBAO_TRAINING_DEFAULT_MODEL,
   DOUBAO_TRAINING_DOC_URL,
   DOUBAO_TRAINING_DURATION_OPTIONS,
+  DOUBAO_TRAINING_ENABLED_MODELS,
   DOUBAO_TRAINING_OVERLAY_TEXT,
   DOUBAO_TRAINING_REF_LIMITS,
-  DOUBAO_TRAINING_VIDEO_MODEL,
+  doubaoTrainingModelLabel,
   isDoubaoTrainingVideoModel,
   normalizeDoubaoTrainingAspectRatio,
   normalizeDoubaoTrainingDuration,
+  normalizeDoubaoTrainingModel,
 } from '../constants/doubao-training.js'
 import {
   getActiveDoubaoTrainingSessionId,
@@ -97,9 +100,9 @@ export function pickDoubaoTrainingSessionWithQuota(preferredId?: string | null) 
 }
 
 export function listDoubaoTrainingModelOptions() {
-  return [{
-    id: DOUBAO_TRAINING_VIDEO_MODEL,
-    label: 'Seedance 2.0 Fast（培训）',
+  return DOUBAO_TRAINING_ENABLED_MODELS.map((id) => ({
+    id,
+    label: doubaoTrainingModelLabel(id),
     duration_min: DOUBAO_TRAINING_DURATION_OPTIONS[0],
     duration_max: DOUBAO_TRAINING_DURATION_OPTIONS[DOUBAO_TRAINING_DURATION_OPTIONS.length - 1],
     duration_default: DOUBAO_TRAINING_DEFAULT_DURATION,
@@ -107,8 +110,11 @@ export function listDoubaoTrainingModelOptions() {
     credit_action: 'video.generate.doubao_training',
     credit_cost_flat: 0,
     config_id: null,
-    default_option: true,
-  }]
+    default_option: id === DOUBAO_TRAINING_DEFAULT_MODEL,
+    hint: id === DOUBAO_TRAINING_DEFAULT_MODEL
+      ? '日常生成 · 官网免费额度默认'
+      : '快速出片',
+  }))
 }
 
 export function getDoubaoTrainingOptionsPayload() {
@@ -122,7 +128,7 @@ export function getDoubaoTrainingOptionsPayload() {
     default_overlay_text: DOUBAO_TRAINING_OVERLAY_TEXT,
     daily_quota: DOUBAO_TRAINING_DAILY_QUOTA,
     models: listDoubaoTrainingModelOptions(),
-    default_model: DOUBAO_TRAINING_VIDEO_MODEL,
+    default_model: DOUBAO_TRAINING_DEFAULT_MODEL,
     aspect_ratios: [...DOUBAO_TRAINING_ASPECT_RATIOS],
     default_aspect_ratio: DOUBAO_TRAINING_DEFAULT_ASPECT_RATIO,
     ref_limits: DOUBAO_TRAINING_REF_LIMITS,
@@ -135,4 +141,5 @@ export {
   isDoubaoTrainingVideoModel,
   normalizeDoubaoTrainingAspectRatio,
   normalizeDoubaoTrainingDuration,
+  normalizeDoubaoTrainingModel,
 }

@@ -69,7 +69,8 @@ export function videoPosterPathFromSource(raw) {
 
 export function videoPosterDisplayUrl(item) {
   if (item?.display_poster_url) return item.display_poster_url
-  const poster = videoPosterPathFromSource(item?.local_path || item?.localPath || item?.video_url || item?.videoUrl || '')
+  const poster = normalizeMediaPath(item?.poster_path || item?.posterPath)
+    || videoPosterPathFromSource(item?.local_path || item?.localPath || item?.video_url || item?.videoUrl || '')
   if (!poster) return ''
   void cacheVersion.value
   const url = mediaDisplayUrl(poster)
@@ -210,12 +211,41 @@ export function seedMediaUrlCacheFromLedgerItems(items) {
   seedMediaUrlCache(entries)
 }
 
+/** 从图片 ledger 条目预热 URL 缓存（列表接口已带 display_* 时减少二次 resolve） */
+export function seedMediaUrlCacheFromImageLedgerItems(items) {
+  const entries = []
+  for (const item of items || []) {
+    const path = normalizeMediaPath(item.local_path || item.localPath)
+    const display = item.display_image_url || item.displayImageUrl
+    if (path && String(display || '').startsWith('http')) {
+      entries.push({ path, url: display })
+    }
+    const thumbPath = normalizeMediaPath(
+      item.thumb_path || item.thumbPath || thumbPathFromSource(path),
+    )
+    const displayThumb = item.display_thumbnail_url || item.displayThumbnailUrl
+    if (thumbPath && String(displayThumb || '').startsWith('http')) {
+      entries.push({ path: thumbPath, url: displayThumb })
+    }
+    for (const ref of item.reference_images || []) {
+      const refPath = normalizeMediaPath(ref.path)
+      const refUrl = ref.display_url || ref.displayUrl
+      if (refPath && String(refUrl || '').startsWith('http')) {
+        entries.push({ path: refPath, url: refUrl })
+      }
+    }
+  }
+  seedMediaUrlCache(entries)
+}
+
 /** 列表加载后后台补全未缓存的 OSS 地址（不阻塞首屏） */
 export function prefetchLedgerMedia(items, { force = false } = {}) {
   const paths = collectMediaPrefetchPaths(
     ...(items || []).flatMap(item => [
       item.local_path || item.localPath,
+      item.thumb_path || item.thumbPath,
       item.video_url || item.videoUrl,
+      item.poster_path || item.posterPath,
       ...(item.reference_images || []).map(ref => ref.path),
     ]),
   )

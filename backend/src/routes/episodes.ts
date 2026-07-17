@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { eq, and, isNull } from 'drizzle-orm'
+import { eq, and, isNull, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 import { success, notFound, badRequest, now } from '../utils/response.js'
 import { toSnakeCaseArray, toSnakeCase } from '../utils/transform.js'
@@ -162,16 +162,20 @@ app.get('/:id/characters', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
-  repairEpisodeCharacterLinks(episodeId, access.drama!.id)
-  const allChars = db.select().from(schema.characters).all()
-  const dramaChars = allChars
-    .filter(ch => ch.dramaId === access.drama!.id && !ch.deletedAt)
+  const dramaId = access.drama!.id
+  repairEpisodeCharacterLinks(episodeId, dramaId)
+  const dramaChars = db.select().from(schema.characters)
+    .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt)))
+    .all()
     .sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'))
-  const referencedIds = new Set(getStoryboardCharacterIdsForEpisode(episodeId))
-  const referencedDeleted = [...referencedIds]
-    .map(id => allChars.find(ch => ch.id === id))
-    .filter((ch): ch is NonNullable<typeof ch> =>
-      !!ch && !!ch.deletedAt && !dramaChars.some(item => item.id === ch.id))
+  const referencedIds = [...new Set(getStoryboardCharacterIdsForEpisode(episodeId))]
+    .filter(id => !dramaChars.some(item => item.id === id))
+  const referencedDeleted = referencedIds.length
+    ? db.select().from(schema.characters)
+      .where(and(inArray(schema.characters.id, referencedIds)))
+      .all()
+      .filter(ch => !!ch.deletedAt)
+    : []
   return success(c, toSnakeCaseArray([...dramaChars, ...referencedDeleted]))
 })
 
@@ -199,20 +203,30 @@ app.get('/:episode_id/storyboards', async (c) => {
   const episodeId = Number(c.req.param('episode_id'))
   const access = assertEpisodeTeamAccess(c, episodeId)
   if (access.error) return access.error
-  repairEpisodeSceneLinks(episodeId, access.drama!.id)
-  repairEpisodeCharacterLinks(episodeId, access.drama!.id)
+  const dramaId = access.drama!.id
+  repairEpisodeSceneLinks(episodeId, dramaId)
+  repairEpisodeCharacterLinks(episodeId, dramaId)
   const rows = db.select().from(schema.storyboards)
     .where(eq(schema.storyboards.episodeId, episodeId))
     .orderBy(schema.storyboards.storyboardNumber)
     .all()
-  const links = db.select().from(schema.storyboardCharacters).all()
+  const sbIds = rows.map(row => row.id)
+  const links = sbIds.length
+    ? db.select().from(schema.storyboardCharacters)
+      .where(inArray(schema.storyboardCharacters.storyboardId, sbIds))
+      .all()
+    : []
   const charIdsByStoryboard = new Map<number, number[]>()
   for (const link of links) {
     const arr = charIdsByStoryboard.get(link.storyboardId) || []
     arr.push(link.characterId)
     charIdsByStoryboard.set(link.storyboardId, arr)
   }
-  const propLinks = db.select().from(schema.storyboardProps).all()
+  const propLinks = sbIds.length
+    ? db.select().from(schema.storyboardProps)
+      .where(inArray(schema.storyboardProps.storyboardId, sbIds))
+      .all()
+    : []
   const propIdsByStoryboard = new Map<number, number[]>()
   for (const link of propLinks) {
     const arr = propIdsByStoryboard.get(link.storyboardId) || []
@@ -223,20 +237,24 @@ app.get('/:episode_id/storyboards', async (c) => {
   const episodeCharIds = db.select().from(schema.episodeCharacters)
     .where(eq(schema.episodeCharacters.episodeId, episodeId)).all()
     .map(link => link.characterId)
-  const referencedCharIds = new Set([...episodeCharIds, ...getStoryboardCharacterIdsForEpisode(episodeId)])
-  const allCharsFull = db.select().from(schema.characters).all()
-  const charsForEpisode = [...referencedCharIds]
-    .map(id => allCharsFull.find(ch => ch.id === id))
-    .filter((ch): ch is NonNullable<typeof ch> => !!ch && (!ch.deletedAt || referencedCharIds.has(ch.id)))
+  const referencedCharIds = [...new Set([...episodeCharIds, ...getStoryboardCharacterIdsForEpisode(episodeId)])]
+  const charsForEpisode = referencedCharIds.length
+    ? db.select().from(schema.characters)
+      .where(inArray(schema.characters.id, referencedCharIds))
+      .all()
+      .filter(ch => !ch.deletedAt || referencedCharIds.includes(ch.id))
+    : []
+  const charById = new Map(charsForEpisode.map(ch => [ch.id, ch]))
 
   return success(c, rows.map((row) => {
-    const resolvedIds = resolveCharacterIdsForEpisode(access.drama!.id, charIdsByStoryboard.get(row.id) || [])
+    const resolvedIds = resolveCharacterIdsForEpisode(dramaId, charIdsByStoryboard.get(row.id) || [])
     return {
       ...toSnakeCase(row),
       character_ids: resolvedIds,
       prop_ids: propIdsByStoryboard.get(row.id) || [],
-      characters: charsForEpisode
-        .filter(ch => resolvedIds.includes(ch.id))
+      characters: resolvedIds
+        .map(id => charById.get(id))
+        .filter((ch): ch is NonNullable<typeof ch> => !!ch)
         .map(ch => toSnakeCase(ch)),
     }
   }))
@@ -256,7 +274,6 @@ app.get('/:id/pipeline-status', async (c) => {
 
   const charsWithVoice = chars.filter(ch => ch.voiceStyle)
   const charsWithSample = chars.filter(ch => ch.voiceSampleUrl)
-  const sbsWithImage = sbs.filter(s => s.composedImage)
   const sbsWithVideo = sbs.filter(s => s.videoUrl)
   const sbsComposed = sbs.filter(s => s.composedVideoUrl)
   const latestMerge = merges[merges.length - 1]
@@ -276,7 +293,7 @@ app.get('/:id/pipeline-status', async (c) => {
       assign_voices: { status: stepStatus(charsWithVoice.length === chars.length && chars.length > 0, charsWithVoice.length > 0), assigned: charsWithVoice.length, total: chars.length },
       generate_voice_samples: { status: stepStatus(charsWithSample.length === charsWithVoice.length && charsWithVoice.length > 0, charsWithSample.length > 0), completed: charsWithSample.length, total: charsWithVoice.length },
       extract_storyboards: { status: stepStatus(sbs.length > 0), count: sbs.length },
-      generate_images: { status: stepStatus(sbsWithImage.length === sbs.length && sbs.length > 0, sbsWithImage.length > 0), completed: sbsWithImage.length, total: sbs.length },
+      // 镜头图不再作为必经环节；可选参考仍可在生视频时按需生成
       generate_videos: { status: stepStatus(sbsWithVideo.length === sbs.length && sbs.length > 0, sbsWithVideo.length > 0), completed: sbsWithVideo.length, total: sbs.length },
       compose_shots: { status: stepStatus(sbsComposed.length === sbs.length && sbs.length > 0, sbsComposed.length > 0), completed: sbsComposed.length, total: sbs.length },
       merge_episode: { status: latestMerge?.status === 'completed' ? 'done' : (latestMerge ? latestMerge.status : 'pending'), merged_url: latestMerge?.mergedUrl },

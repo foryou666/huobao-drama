@@ -2,7 +2,7 @@
   <div v-if="open" class="seedance-spec-overlay" @click.self="close">
     <div class="seedance-spec-modal card" role="dialog" aria-labelledby="seedance-spec-title">
       <header class="seedance-spec-head">
-        <h2 id="seedance-spec-title" class="seedance-spec-title">Seedance2.0 · 官方素材输入规范</h2>
+        <h2 id="seedance-spec-title" class="seedance-spec-title">S 2.0 · 官方素材输入规范</h2>
         <p class="seedance-spec-lead dim">
           为减少生成失败或内容缺失，请在提交前确认提示词及参考素材符合以下要求。
         </p>

@@ -72,6 +72,52 @@ export function upsertPropViewImage(propId: number, viewId: string, url: string,
     .run()
 }
 
+export function clearPropPrimaryImage(propId: number) {
+  db.update(schema.props)
+    .set({ imageUrl: null, localPath: null, updatedAt: now() })
+    .where(eq(schema.props.id, propId))
+    .run()
+}
+
+export function removePropViewImage(propId: number, viewId: string): boolean {
+  const normalizedView = String(viewId || '').trim()
+  if (!normalizedView) return false
+  const [prop] = db.select().from(schema.props).where(eq(schema.props.id, propId)).all()
+  if (!prop) return false
+
+  if (normalizedView === 'hero') {
+    clearPropPrimaryImage(propId)
+    return true
+  }
+
+  const existing = parsePropViewImages(prop.referenceImages)
+  const next = existing.filter(item => item.view_id !== normalizedView)
+  if (next.length === existing.length) return false
+
+  db.update(schema.props)
+    .set({ referenceImages: serializePropViewImages(next), updatedAt: now() })
+    .where(eq(schema.props.id, propId))
+    .run()
+  return true
+}
+
+export function removePropImageByUrl(propId: number, rawUrl: string): boolean {
+  const url = normalizePath(rawUrl)
+  if (!url) return false
+  const [prop] = db.select().from(schema.props).where(eq(schema.props.id, propId)).all()
+  if (!prop) return false
+
+  const heroUrl = normalizePath(prop.imageUrl || prop.localPath || '')
+  if (heroUrl && heroUrl === url) {
+    clearPropPrimaryImage(propId)
+    return true
+  }
+
+  const match = parsePropViewImages(prop.referenceImages).find(item => normalizePath(item.url) === url)
+  if (!match) return false
+  return removePropViewImage(propId, match.view_id)
+}
+
 export interface EntityViewPreview {
   view_id: string
   label: string

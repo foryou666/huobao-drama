@@ -212,6 +212,83 @@ export async function validateJimengSession(session: JimengWebSession): Promise<
   }
 }
 
+export interface JimengUserCredit {
+  giftCredit: number
+  purchaseCredit: number
+  vipCredit: number
+  totalCredit: number
+  /** VIP/包月积分到期（Unix 秒）；连续包月账户为当月周期结束时间 */
+  creditExpireAt: number | null
+  creditExpireAtIso: string | null
+}
+
+function collectJimengCreditLifeEnds(detail: unknown): number[] {
+  if (!detail || typeof detail !== 'object') return []
+  const bags = detail as Record<string, unknown>
+  const ends: number[] = []
+  for (const key of ['vip_credits', 'gift_credits', 'purchase_credits']) {
+    const list = bags[key]
+    if (!Array.isArray(list)) continue
+    for (const item of list) {
+      const end = Number((item as Record<string, unknown>)?.credits_life_end ?? 0)
+      if (Number.isFinite(end) && end > 0) ends.push(Math.floor(end))
+    }
+  }
+  return ends
+}
+
+/** 优先取 VIP 明细中最晚的到期时间；无 VIP 明细时回退赠送/购买 */
+function resolveJimengCreditExpireAt(result: Record<string, unknown> | null | undefined): number | null {
+  const detail = (result?.credits_detail && typeof result.credits_detail === 'object')
+    ? result.credits_detail as Record<string, unknown>
+    : null
+  if (!detail) return null
+  const vipEnds: number[] = []
+  const vipList = detail.vip_credits
+  if (Array.isArray(vipList)) {
+    for (const item of vipList) {
+      const end = Number((item as Record<string, unknown>)?.credits_life_end ?? 0)
+      if (Number.isFinite(end) && end > 0) vipEnds.push(Math.floor(end))
+    }
+  }
+  if (vipEnds.length) return Math.max(...vipEnds)
+  const fallback = collectJimengCreditLifeEnds(detail)
+  return fallback.length ? Math.max(...fallback) : null
+}
+
+export async function getJimengUserCredit(session: JimengWebSession): Promise<JimengUserCredit | null> {
+  try {
+    const result = await jimengRequest<{ credit?: Record<string, unknown>; credits_detail?: Record<string, unknown> }>(
+      session,
+      'POST',
+      '/commerce/v1/benefits/user_credit',
+      {
+        data: {},
+        headers: {
+          Referer: `${JIMENG_BASE_URL}/ai-tool/image/generate`,
+        },
+        noDefaultParams: true,
+      },
+    )
+    const credit = result?.credit ?? result
+    const gift = Number((credit as Record<string, unknown>)?.gift_credit ?? 0)
+    const purchase = Number((credit as Record<string, unknown>)?.purchase_credit ?? 0)
+    const vip = Number((credit as Record<string, unknown>)?.vip_credit ?? 0)
+    if (!Number.isFinite(gift + purchase + vip)) return null
+    const expireAt = resolveJimengCreditExpireAt(result as Record<string, unknown>)
+    return {
+      giftCredit: gift,
+      purchaseCredit: purchase,
+      vipCredit: vip,
+      totalCredit: gift + purchase + vip,
+      creditExpireAt: expireAt,
+      creditExpireAtIso: expireAt ? new Date(expireAt * 1000).toISOString() : null,
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function getJimengUploadCredentials(session: JimengWebSession, scene: 1 | 2): Promise<JimengUploadCredentials & { space_name?: string }> {
   const auth = await jimengRequest<JimengUploadCredentials & { space_name?: string }>(session, 'POST', '/mweb/v1/get_upload_token', {
     data: { scene },

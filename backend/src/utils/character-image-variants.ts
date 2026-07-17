@@ -274,6 +274,8 @@ export interface CharacterMediaSummary {
   transform_count: number
   image_count: number
   primary_url: string | null
+  /** 列表封面：基准图优先，否则取造型定稿 */
+  cover_url?: string | null
   outfit_previews: CharacterOutfitPreview[]
   preview_images: Array<{
     url: string
@@ -285,6 +287,32 @@ export interface CharacterMediaSummary {
     outfit_id?: string
     variant?: string
   }>
+}
+
+export function resolveCharacterCoverUrl(media?: {
+  primary_url?: string | null
+  primaryUrl?: string | null
+  cover_url?: string | null
+  coverUrl?: string | null
+  preview_images?: Array<{ url?: string | null }>
+  previewImages?: Array<{ url?: string | null }>
+  outfit_previews?: Array<{ url?: string | null }>
+  outfitPreviews?: Array<{ url?: string | null }>
+} | null): string | null {
+  if (!media) return null
+  const explicit = normalizePath(media.cover_url || media.coverUrl || '')
+  if (explicit) return explicit
+  const primary = normalizePath(media.primary_url || media.primaryUrl || '')
+  if (primary) return primary
+  const previews = media.preview_images || media.previewImages || []
+  const previewUrl = normalizePath(previews[0]?.url || '')
+  if (previewUrl) return previewUrl
+  const outfits = media.outfit_previews || media.outfitPreviews || []
+  for (const outfit of outfits) {
+    const url = normalizePath(outfit?.url || '')
+    if (url) return url
+  }
+  return null
 }
 
 export function listCharacterOutfitPreviews(char: {
@@ -314,13 +342,14 @@ export function summarizeCharacterMedia(char: {
   const outfits = listCharacterOutfits(char.referenceImages)
   const images = listCharacterImages(char)
   const primaryUrl = normalizePath(char.imageUrl || char.localPath || '') || null
-  return {
+  const outfitPreviews = listCharacterOutfitPreviews(char)
+  const summary: CharacterMediaSummary = {
     outfit_count: outfits.length,
     candidate_count: outfits.reduce((sum, outfit) => sum + (outfit.candidates?.length || 0), 0),
     transform_count: images.filter(item => item.variant && item.variant !== 'primary').length,
     image_count: images.length,
     primary_url: primaryUrl,
-    outfit_previews: listCharacterOutfitPreviews(char),
+    outfit_previews: outfitPreviews,
     preview_images: images.map(item => ({
       url: item.url,
       label: item.label,
@@ -332,6 +361,48 @@ export function summarizeCharacterMedia(char: {
       variant: item.variant,
     })),
   }
+  summary.cover_url = resolveCharacterCoverUrl(summary)
+  return summary
+}
+
+/** 资产库列表：省略冗余 preview_images，降低 JSON 体积与序列化开销 */
+export function summarizeCharacterMediaForAssetList(char: {
+  imageUrl?: string | null
+  localPath?: string | null
+  referenceImages?: string | null
+}): CharacterMediaSummary {
+  const outfits = listCharacterOutfits(char.referenceImages)
+  const primaryUrl = normalizePath(char.imageUrl || char.localPath || '') || null
+  const outfitPreviews = listCharacterOutfitPreviews(char)
+  let candidateCount = 0
+  let transformCount = 0
+  for (const outfit of outfits) {
+    candidateCount += outfit.candidates?.length || 0
+    transformCount += Object.keys(outfit.variants || {}).length
+  }
+  const imageCount = (primaryUrl ? 1 : 0)
+    + outfitPreviews.reduce((sum, outfit) => sum + Math.max(1, outfit.candidate_count || 0), 0)
+    + transformCount
+
+  const summary: CharacterMediaSummary = {
+    outfit_count: outfits.length,
+    candidate_count: candidateCount,
+    transform_count: transformCount,
+    image_count: imageCount,
+    primary_url: primaryUrl,
+    outfit_previews: outfitPreviews,
+    preview_images: outfits.length === 0 && primaryUrl
+      ? [{
+          url: primaryUrl,
+          label: '原图',
+          tag: '原图',
+          tag_type: 'primary',
+          source: 'primary',
+        }]
+      : [],
+  }
+  summary.cover_url = resolveCharacterCoverUrl(summary)
+  return summary
 }
 
 function writeReferenceEntries(characterId: number, entries: ReferenceEntry[]) {
@@ -510,6 +581,78 @@ export function removeCharacterOutfitCandidate(
   outfits[idx] = nextOutfit
   writeReferenceEntries(characterId, [...loaded.styleVariants, ...outfits])
   return nextOutfit
+}
+
+export function clearCharacterPrimaryImage(characterId: number) {
+  db.update(schema.characters)
+    .set({ imageUrl: null, localPath: null, updatedAt: now() })
+    .where(eq(schema.characters.id, characterId))
+    .run()
+}
+
+export function removeCharacterStyleVariant(characterId: number, variantId: string): boolean {
+  const loaded = loadCharacterEntries(characterId)
+  if (!loaded) return false
+  const target = String(variantId || '').trim()
+  if (!target) return false
+  const nextStyles = loaded.styleVariants.filter(item => item.variant !== target)
+  if (nextStyles.length === loaded.styleVariants.length) return false
+  writeReferenceEntries(characterId, [...nextStyles, ...loaded.outfits])
+  return true
+}
+
+export function removeCharacterOutfitVariant(
+  characterId: number,
+  outfitId: string,
+  variantId: string,
+): boolean {
+  const loaded = loadCharacterEntries(characterId)
+  if (!loaded) return false
+  const outfits = [...loaded.outfits]
+  const idx = outfits.findIndex(item => item.outfit_id === outfitId)
+  if (idx < 0) return false
+  const outfit = outfits[idx]
+  const variants = { ...(outfit.variants || {}) }
+  const target = String(variantId || '').trim()
+  if (!target || !variants[target]) return false
+  delete variants[target]
+  outfits[idx] = { ...outfit, variants }
+  writeReferenceEntries(characterId, [...loaded.styleVariants, ...outfits])
+  return true
+}
+
+export function removeCharacterImageByUrl(characterId: number, rawUrl: string): boolean {
+  const url = normalizePath(rawUrl)
+  if (!url) return false
+  const loaded = loadCharacterEntries(characterId)
+  if (!loaded) return false
+
+  const primaryUrl = normalizePath(loaded.char.imageUrl || loaded.char.localPath || '')
+  if (primaryUrl && primaryUrl === url) {
+    clearCharacterPrimaryImage(characterId)
+    return true
+  }
+
+  for (const outfit of loaded.outfits) {
+    for (const candidate of outfit.candidates || []) {
+      if (normalizePath(candidate.url) !== url) continue
+      removeCharacterOutfitCandidate(characterId, outfit.outfit_id, candidate.id)
+      return true
+    }
+    for (const [variantId, variant] of Object.entries(outfit.variants || {})) {
+      if (normalizePath(variant?.url || '') === url) {
+        return removeCharacterOutfitVariant(characterId, outfit.outfit_id, variantId)
+      }
+    }
+  }
+
+  for (const style of loaded.styleVariants) {
+    if (normalizePath(style.url) === url && style.variant) {
+      return removeCharacterStyleVariant(characterId, style.variant)
+    }
+  }
+
+  return false
 }
 
 export function appendCharacterOutfitVariant(

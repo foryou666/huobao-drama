@@ -3,9 +3,10 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">通道4</h1>
-        <p class="studio-desc">
-          Seedance 2.0 通道4（全能参考）：参考素材上限 {{ refLimitsHint }}，提示词可用 @图片N @视频N @音频N 引用素材。
-        </p>
+        <StudioGuideButton
+          title="通道4 使用说明"
+          :text="`S 2.0 通道4（全能参考）：参考素材上限 ${refLimitsHint}，提示词可用 @图片N @视频N @音频N。同一用户同一项目会自动复用同一个即梦 Session；换用户或换项目时自动分配其他 Session（需管理员预先配置多个 Session），以实现创作隔离。`"
+        />
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -43,12 +44,12 @@
             {{ m.display_name || m.username }}
           </option>
         </select>
-        <select v-if="isAdmin && jimengSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="即梦 Session">
+        <select v-if="isAdmin && jimengSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="管理员可覆盖当前用户+项目绑定的 Session">
           <option v-for="s in jimengSessions" :key="s.id" :value="s.id">
             {{ sessionOptionLabel(s) }}
           </option>
         </select>
-        <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
+        <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
         </select>
@@ -73,7 +74,15 @@
     </div>
 
     <div ref="feedRef" class="studio-feed">
-      <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
+      <div v-if="loading && !items.length" class="studio-grid studio-grid-skeleton">
+        <article v-for="n in 8" :key="`sk-${n}`" class="studio-card studio-card-skeleton">
+          <div class="studio-card-media ratio-portrait studio-skeleton-block" />
+          <div class="studio-card-body">
+            <div class="studio-skeleton-line studio-skeleton-line-wide" />
+            <div class="studio-skeleton-line studio-skeleton-line-narrow" />
+          </div>
+        </article>
+      </div>
       <div v-else-if="!items.length" class="studio-empty card">
         <p>还没有视频，在底部输入描述并点击「通道4」</p>
       </div>
@@ -221,13 +230,22 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, videoAPI } from '~/composables/useApi'
+import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchLedgerMedia, seedMediaUrlCacheFromLedgerItems, videoPosterDisplayUrl } from '~/utils/media-url.js'
+import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
 import { formatRefLimitsHint, JIMENG_REF_LIMITS } from '~/constants/video-channels.js'
+import {
+  buildVideoLedgerCacheKey,
+  restoreVideoLedgerCache,
+  persistVideoLedgerCache,
+  loadVideoDramasLite,
+  finalizeVideoLedgerItems,
+} from '~/utils/video-studio-page.js'
+
+const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-jimeng-v1'
 
 const JIMENG_MODEL_IDS = [
   'jimeng-video-seedance-2.0-fast',
@@ -270,6 +288,19 @@ const composerRef = ref(null)
 const feedRef = ref(null)
 let pollTimer = null
 
+function videoLedgerCacheKey() {
+  return buildVideoLedgerCacheKey(VIDEO_LEDGER_CACHE_PREFIX, [
+    viewScope.value,
+    filterMemberUserId.value || 'all',
+    filterDramaId.value || 'all',
+    filterStatus.value,
+  ])
+}
+
+function ensureDramasLoaded() {
+  if (!dramas.value.length) void loadVideoDramasLite(dramas)
+}
+
 const statusTabs = [
   { id: 'all', label: '全部' },
   { id: 'completed', label: '已完成' },
@@ -307,8 +338,9 @@ const selectedCreditCostFlat = computed(() => {
 })
 
 function modelLabel(modelId) {
-  return displayModels.value.find(item => item.id === modelId)?.label
+  const label = displayModels.value.find(item => item.id === modelId)?.label
     || String(modelId || '').replace(/^jimeng-video-/, '即梦 ').replace(/-/g, ' ')
+  return toSeedanceDisplayLabel(label)
 }
 
 function statsForTab(id) {
@@ -337,6 +369,7 @@ function normalizeItem(row) {
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
     display_poster_url: row.display_poster_url || '',
+    poster_path: row.poster_path || row.posterPath || '',
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -529,8 +562,14 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  seedMediaUrlCacheFromLedgerItems(nextItems)
-  prefetchLedgerMedia(nextItems)
+  finalizeVideoLedgerItems(nextItems)
+  if (!append) {
+    persistVideoLedgerCache(videoLedgerCacheKey(), {
+      items: items.value,
+      stats: stats.value,
+      pagination: pagination.value,
+    })
+  }
 }
 
 async function refreshLedger() {
@@ -542,7 +581,7 @@ async function refreshLedger() {
 }
 
 async function reload() {
-  loading.value = true
+  if (!items.value.length) loading.value = true
   try {
     await loadLedger({ offset: 0 })
   } finally {
@@ -680,20 +719,25 @@ function stopPolling() {
   }
 }
 
-onMounted(async () => {
-  loading.value = true
-  try {
-    const [, dramaRes] = await Promise.all([
-      loadJimengOptions(),
-      dramaAPI.list(),
-      loadActiveTeamMembers(),
-    ])
-    dramas.value = dramaRes?.items || dramaRes || []
-    await loadLedger({ offset: 0 })
-  } finally {
-    loading.value = false
+onMounted(() => {
+  const cached = restoreVideoLedgerCache(videoLedgerCacheKey())
+  if (cached?.items?.length) {
+    items.value = cached.items.map(normalizeItem)
+    stats.value = cached.stats || stats.value
+    pagination.value = cached.pagination || pagination.value
+    finalizeVideoLedgerItems(items.value)
+  } else {
+    loading.value = true
   }
-  startPolling()
+  void Promise.all([
+    loadJimengOptions(),
+    loadActiveTeamMembers(),
+    loadVideoDramasLite(dramas),
+  ])
+  void loadLedger({ offset: 0 }).finally(() => {
+    loading.value = false
+    startPolling()
+  })
 })
 
 onUnmounted(() => {
@@ -721,32 +765,42 @@ onUnmounted(() => {
 
 .studio-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px 12px;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.studio-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
 .studio-title {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.studio-desc {
   margin: 0;
-  font-size: 13px;
-  color: var(--text-3);
-  max-width: 560px;
+  font-size: 20px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .studio-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  min-width: 0;
+  flex: 1;
+}
+
+.studio-header-actions .studio-filter-select {
+  min-width: 0;
+  max-width: 160px;
 }
 
 .studio-scope-toggle {
@@ -779,13 +833,15 @@ onUnmounted(() => {
 }
 
 .studio-filter-select {
-  min-width: 140px;
-  padding: 6px 10px;
+  min-width: 110px;
+  max-width: 160px;
+  padding: 5px 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--bg-1);
   color: var(--text-1);
   font-size: 12px;
+  text-overflow: ellipsis;
 }
 
 .studio-tabs {

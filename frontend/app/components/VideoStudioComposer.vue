@@ -17,11 +17,11 @@
               选择道具
               <span v-if="boundPropCount" class="composer-pick-count">{{ boundPropCount }}</span>
             </button>
-            <button v-if="showVoicePicker" type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
+            <button v-if="voicePickerEnabled" type="button" class="btn btn-sm composer-pick-btn" @click="openVoicePicker">
               选择音色
               <span v-if="boundVoiceCount" class="composer-pick-count">{{ boundVoiceCount }}</span>
             </button>
-            <button v-if="showVoicePicker" type="button" class="btn btn-sm composer-pick-btn" @click="voiceLibraryOpen = true">
+            <button v-if="voicePickerEnabled" type="button" class="btn btn-sm composer-pick-btn" @click="voiceLibraryOpen = true">
               音色库
             </button>
           </div>
@@ -64,7 +64,7 @@
             </button>
           </div>
         </div>
-        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方图片可左右拖动调整顺序，输入框会自动更新「图片1是…」「音频1是…的声音」；可用 <kbd>@</kbd> 关联</span>
+        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方可拖动调整顺序；在提示词里用 <kbd>@</kbd> 插入 <code>@图片N</code> / <code>@视频N</code> / <code>@音频N</code>（与即梦一致），上传素材不会再自动改写文案</span>
       </div>
 
       <div class="composer-main">
@@ -153,7 +153,7 @@
               <span class="composer-ref-add-icon">+</span>
               <span class="composer-ref-add-label">参考内容</span>
             </label>
-            <span v-if="jimengMode" class="composer-ref-hint dim">{{ jimengRefHint }}</span>
+            <span v-if="jimengLikeMode" class="composer-ref-hint dim">{{ jimengRefHint }}</span>
             <span v-if="trainingMode" class="composer-ref-hint dim">{{ trainingRefHint }}</span>
           </div>
 
@@ -194,7 +194,7 @@
             class="composer-input"
             :class="{ 'composer-input--with-refs': showRefStrip }"
             :rows="isPromptComposerExpanded ? 6 : 2"
-            :placeholder="mentionableRefItems.length ? '描述视频内容；输入 @ 可关联参考图…' : (dramaLinked ? '描述视频内容…' : '描述你想生成的视频画面、动作与镜头…')"
+            :placeholder="mentionableRefItems.length ? '描述视频内容；输入 @ 可关联参考图/视频/音频…' : (dramaLinked ? '描述视频内容…' : '描述你想生成的视频画面、动作与镜头…')"
             @focus="onPromptFocus"
             @blur="onPromptBlur"
             @input="onPromptInput"
@@ -217,8 +217,8 @@
               <img v-if="option.thumb" :src="gridUrl(option.thumb)" alt="" loading="lazy" decoding="async" />
               <div v-else class="composer-mention-thumb-empty">{{ option.sub.slice(0, 1) }}</div>
               <div class="composer-mention-copy">
-                <span class="composer-mention-label">@{{ option.label }}</span>
-                <span class="dim">{{ option.sub }}</span>
+                <span class="composer-mention-label">{{ mentionOptionTag(option) }}</span>
+                <span class="dim">{{ option.label }} · {{ option.sub }}</span>
               </div>
             </button>
           </div>
@@ -226,17 +226,31 @@
 
         <div class="composer-toolbar">
           <div class="composer-options">
-            <div v-if="jimengMode && jimengModels.length" class="composer-pills composer-pills-official">
-              <span class="composer-option-label">即梦模型</span>
+            <div v-if="trainingMode && trainingModels.length" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">模型</span>
               <button
-                v-for="model in jimengModels"
+                v-for="model in trainingModels"
                 :key="model.id"
                 type="button"
                 class="composer-pill composer-pill-model"
                 :class="{ active: fixedModel === model.id }"
                 @click="selectOfficialModel(model.id)"
               >
-                {{ model.label }}
+                {{ toSeedanceDisplayLabel(model.label) }}
+              </button>
+            </div>
+
+            <div v-if="jimengLikeMode && jimengLikeModels.length" class="composer-pills composer-pills-official">
+              <span v-if="jimengMode && !xyqMode" class="composer-option-label">即梦模型</span>
+              <button
+                v-for="model in jimengLikeModels"
+                :key="model.id"
+                type="button"
+                class="composer-pill composer-pill-model"
+                :class="{ active: fixedModel === model.id }"
+                @click="selectOfficialModel(model.id)"
+              >
+                {{ xyqMode ? model.label : toSeedanceDisplayLabel(model.label) }}
               </button>
             </div>
 
@@ -250,7 +264,7 @@
                 :class="{ active: fixedModel === model.id }"
                 @click="selectOfficialModel(model.id)"
               >
-                {{ model.label }}
+                {{ toSeedanceDisplayLabel(model.label) }}
               </button>
             </div>
 
@@ -264,7 +278,7 @@
                 :class="{ active: fixedModel === model.id }"
                 @click="selectOfficialModel(model.id)"
               >
-                {{ model.label }}
+                {{ toSeedanceDisplayLabel(model.label) }}
               </button>
             </div>
 
@@ -278,7 +292,7 @@
                 :class="{ active: fixedModel === model.id }"
                 @click="selectOfficialModel(model.id)"
               >
-                {{ model.label }}
+                {{ toSeedanceDisplayLabel(model.label) }}
               </button>
             </div>
 
@@ -290,7 +304,7 @@
               </select>
             </label>
 
-            <div v-if="showRefModeToggle && !grokMode && !jimengMode && !trainingMode" class="composer-pills">
+            <div v-if="showRefModeToggle && !grokMode && !jimengLikeMode && !trainingMode" class="composer-pills">
               <button
                 type="button"
                 class="composer-pill"
@@ -322,7 +336,7 @@
               </button>
             </div>
 
-            <div v-if="(grokMode && grokDurationRangeEnabled) || (jimengMode && jimengDurationRangeEnabled) || (trainingMode && trainingDurationRangeEnabled)" class="composer-duration-range">
+            <div v-if="(grokMode && grokDurationRangeEnabled) || (jimengLikeMode && jimengDurationRangeEnabled) || (trainingMode && trainingDurationRangeEnabled)" class="composer-duration-range">
               <select
                 class="composer-select composer-duration-select"
                 :value="duration"
@@ -398,10 +412,10 @@
           <button
             type="button"
             class="composer-submit"
-            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengMode || trainingMode || aistarslabMode) && !fixedModel)"
+            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengLikeMode || trainingMode || aistarslabMode) && !fixedModel)"
             @click="submit"
           >
-            <span>{{ generating ? '生成中…' : (trainingMode ? '通道5' : (jimengMode ? '通道4' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频'))))) }}</span>
+            <span>{{ generating ? '生成中…' : (trainingMode ? '培训' : (xyqMode ? 'S通道5' : (jimengMode ? '通道4' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频')))))) }}</span>
             <span v-if="displayCreditHint && !generating" class="composer-submit-cost">{{ displayCreditHint }}</span>
           </button>
         </div>
@@ -483,20 +497,19 @@ import {
   bindCharacter,
   bindScene,
   bindProp,
-  applyStudioPromptMediaHeader,
   applyRefStripOrderToBinding,
+  buildAudioMentionItems,
   buildMentionOptions,
   buildStudioContentRefs,
   buildStudioRefStripItems,
   buildVideoMentionItems,
   canUnlinkStudioRef,
-  collectPreservedMediaLabels,
   createStudioBindingState,
   ensureRefStripOrderKeys,
   formatPromptImageRefIssues,
   getBindingSceneIds,
   nextPromptImageIndex,
-  removePromptImageLabel,
+  replaceMentionWithAudioRef,
   replaceMentionWithImageLabel,
   replaceMentionWithVideoRef,
   restoreStudioBindingsFromVideoItem,
@@ -516,6 +529,7 @@ import {
 } from '~/utils/studio-video-draft.js'
 import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
+import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
 
 const props = defineProps({
   generating: { type: Boolean, default: false },
@@ -527,6 +541,8 @@ const props = defineProps({
   grokMode: { type: Boolean, default: false },
   /** 即梦视频页：走 jimeng.jianying.com Cookie API */
   jimengMode: { type: Boolean, default: false },
+  /** 小云雀视频页：xyq.jianying.com Access Key API */
+  xyqMode: { type: Boolean, default: false },
   /** 豆包培训页：走 doubao.com Cookie API（通道5） */
   trainingMode: { type: Boolean, default: false },
   /** AIStartLab 视频页：走 OpenAPI Seedance 2.0 */
@@ -537,6 +553,8 @@ const props = defineProps({
   grokModels: { type: Array, default: () => [] },
   /** 即梦页可选模型列表 */
   jimengModels: { type: Array, default: () => [] },
+  /** 小云雀页可选模型列表 */
+  xyqModels: { type: Array, default: () => [] },
   /** 培训页可选模型列表 */
   trainingModels: { type: Array, default: () => [] },
   /** 橙盟视频页可选模型列表 */
@@ -569,22 +587,29 @@ const props = defineProps({
   persistDraft: { type: Boolean, default: true },
   /** 是否显示参考图/首尾帧切换（橙盟通道不支持首尾帧） */
   showRefModeToggle: { type: Boolean, default: true },
-  /** 是否显示音色选择（Grok 不支持音色） */
+  /** 是否显示音色选择（Grok / S通道5 不支持音色） */
   showVoicePicker: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['generate', 'update:fixedModel'])
 
+const voicePickerEnabled = computed(() => props.showVoicePicker && !props.xyqMode && !props.grokMode && !props.trainingMode)
+
+const jimengLikeMode = computed(() => props.jimengMode || props.xyqMode)
+const jimengLikeModels = computed(() => (props.xyqMode ? props.xyqModels : props.jimengModels))
+const xyqRefLimits = { images: 6, audios: 0, videos: 1 }
+const activeJimengLikeRefLimits = computed(() => (props.xyqMode ? xyqRefLimits : JIMENG_REF_LIMITS))
+
 const maxImages = computed(() => {
   if (props.grokMode) return 6
   if (props.trainingMode) return TRAINING_REF_LIMITS.images
-  if (props.jimengMode) return JIMENG_REF_LIMITS.images
+  if (jimengLikeMode.value) return activeJimengLikeRefLimits.value.images
   if (isChengmengStudio.value) return CHENGMENT_REF_LIMITS.images
   return 9
 })
 const jimengRefHint = computed(() => (
-  props.jimengMode
-    ? `全能参考：最多 ${JIMENG_REF_LIMITS.images} 图 ${JIMENG_REF_LIMITS.audios} 音 ${JIMENG_REF_LIMITS.videos} 视频`
+  jimengLikeMode.value
+    ? `参考上限：最多 ${activeJimengLikeRefLimits.value.images} 图 ${activeJimengLikeRefLimits.value.audios} 音 ${activeJimengLikeRefLimits.value.videos} 视频`
     : ''
 ))
 const trainingRefHint = computed(() => (
@@ -597,11 +622,11 @@ const isChengmengStudio = computed(() =>
   props.chengmengModels.length > 0
   && !props.officialMode
   && !props.grokMode
-  && !props.jimengMode
+  && !jimengLikeMode.value
   && !props.trainingMode
   && !props.aistarslabMode,
 )
-const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value || props.jimengMode)
+const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value || jimengLikeMode.value)
 const videoRefLabelKind = computed(() => (isChengmengStudio.value ? 'material' : 'video'))
 const maxVideoRefs = computed(() => (videoRefUploadEnabled.value ? MAX_VIDEO_REFS : 0))
 const refContentAccept = computed(() => (
@@ -643,7 +668,7 @@ const duration = ref(15)
 const effectiveAspectRatios = computed(() => {
   if (props.grokMode) return grokAspectRatios
   if (props.trainingMode) return trainingAspectRatios
-  if (props.jimengMode) return jimengAspectRatios
+  if (jimengLikeMode.value) return jimengAspectRatios
   return defaultAspectRatios
 })
 
@@ -653,8 +678,8 @@ const selectedGrokModel = computed(() => {
 })
 
 const selectedJimengModel = computed(() => {
-  if (!props.jimengMode || !props.fixedModel) return null
-  return props.jimengModels.find(item => item.id === props.fixedModel) || null
+  if (!jimengLikeMode.value || !props.fixedModel) return null
+  return jimengLikeModels.value.find(item => item.id === props.fixedModel) || null
 })
 
 const selectedTrainingModel = computed(() => {
@@ -663,7 +688,7 @@ const selectedTrainingModel = computed(() => {
 })
 
 watch(
-  () => props.jimengMode,
+  () => jimengLikeMode.value,
   (enabled) => {
     if (!enabled) return
     if (!jimengAspectRatios.includes(aspectRatio.value)) aspectRatio.value = '9:16'
@@ -700,7 +725,7 @@ const effectiveDurationMin = computed(() => {
     if (model?.duration_min != null) return Number(model.duration_min)
     return 5
   }
-  if (props.jimengMode) {
+  if (jimengLikeMode.value) {
     if (props.durationMin != null) return props.durationMin
     const model = selectedJimengModel.value
     if (model?.duration_min != null) return Number(model.duration_min)
@@ -723,7 +748,7 @@ const effectiveDurationMax = computed(() => {
     if (model?.duration_max != null) return Number(model.duration_max)
     return 10
   }
-  if (props.jimengMode) {
+  if (jimengLikeMode.value) {
     if (props.durationMax != null) return props.durationMax
     const model = selectedJimengModel.value
     if (model?.duration_max != null) return Number(model.duration_max)
@@ -769,7 +794,7 @@ function clampDuration(value) {
 watch(
   () => [props.fixedModel, selectedJimengModel.value],
   () => {
-    if (!props.jimengMode) return
+    if (!jimengLikeMode.value) return
     const model = selectedJimengModel.value
     const defaultSec = Number(model?.duration_default) || 5
     duration.value = clampDuration(duration.value ?? defaultSec)
@@ -796,7 +821,7 @@ watch(
 )
 
 const grokDurationRangeEnabled = computed(() => props.grokMode && durationRangeEnabled.value)
-const jimengDurationRangeEnabled = computed(() => props.jimengMode && durationRangeEnabled.value)
+const jimengDurationRangeEnabled = computed(() => jimengLikeMode.value && durationRangeEnabled.value)
 const trainingDurationRangeEnabled = computed(() => props.trainingMode && durationRangeEnabled.value)
 
 function onDurationSelect(event) {
@@ -890,20 +915,37 @@ const canDragRefStrip = computed(() => visualRefItems.value.length > 1)
 
 const mentionableRefItems = computed(() => {
   const images = visualRefItems.value.filter(item => item.path && !item.missing)
-  if (!videoRefUploadEnabled.value) return images
-  return [
-    ...images,
-    ...buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value }),
-  ]
+  const videos = videoRefUploadEnabled.value
+    ? buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value })
+    : []
+  const audios = voicePickerEnabled.value
+    ? buildAudioMentionItems(boundVoices.value)
+    : []
+  return [...images, ...videos, ...audios]
+})
+
+const mentionExtraItems = computed(() => {
+  const videos = videoRefUploadEnabled.value
+    ? buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value })
+    : []
+  const audios = voicePickerEnabled.value
+    ? buildAudioMentionItems(boundVoices.value)
+    : []
+  return [...videos, ...audios]
 })
 
 const mentionOptions = computed(() => buildMentionOptions(
   visualRefItems.value.filter(item => item.path && !item.missing),
   mentionQuery.value,
-  videoRefUploadEnabled.value
-    ? buildVideoMentionItems(uploadedVideoRefs.value, { labelKind: videoRefLabelKind.value })
-    : [],
+  mentionExtraItems.value,
 ))
+
+function mentionOptionTag(option) {
+  if (option?.audioIndex) return `@音频${option.audioIndex}`
+  if (option?.videoIndex) return `@视频${option.videoIndex}`
+  if (option?.imageIndex) return `@图片${option.imageIndex}`
+  return `@${option?.label || ''}`
+}
 
 function persistDramaPreference(id = dramaId.value) {
   if (!props.rememberDramaId) return
@@ -1298,21 +1340,8 @@ function ensureRefStripOrder() {
 }
 
 function syncPromptMediaHeader() {
+  // 不再自动改写「图片1是…」；参考素材变更只更新条带，提示词由用户用 @ 维护
   ensureRefStripOrder()
-  const preserved = collectPreservedMediaLabels(prompt.value)
-  prompt.value = applyStudioPromptMediaHeader(
-    prompt.value,
-    binding,
-    projectChars.value,
-    projectScenes.value,
-    projectProps.value,
-    uploadedRefs.value,
-    {
-      ...preserved,
-      uploadedVideoRefs: uploadedVideoRefs.value,
-      videoRefLabel: videoRefLabelKind.value,
-    },
-  )
 }
 
 function syncPromptImageHeader() {
@@ -1679,7 +1708,7 @@ function onPromptKeydown(event) {
 
 function openMentionMenu() {
   if (!mentionableRefItems.value.length) {
-    toast.warning('请先在上方添加参考图或参考视频')
+    toast.warning('请先添加参考图、参考视频或音色')
     return
   }
   const el = promptEl.value
@@ -1694,13 +1723,19 @@ function openMentionMenu() {
 }
 
 function pickMention(option) {
-  if (!option.path && option.type !== 'video') return
+  if (!option?.path && option?.type !== 'video' && option?.type !== 'audio') return
   const el = promptEl.value
   const cursor = el?.selectionEnd ?? prompt.value.length
-  const label = option.promptLabel || option.label
 
   let result
-  if (option.type === 'video' && option.videoIndex) {
+  if (option.type === 'audio' && option.audioIndex) {
+    result = replaceMentionWithAudioRef(
+      prompt.value,
+      mentionStart.value,
+      cursor,
+      option.audioIndex,
+    )
+  } else if (option.type === 'video' && option.videoIndex) {
     result = replaceMentionWithVideoRef(
       prompt.value,
       mentionStart.value,
@@ -1708,13 +1743,13 @@ function pickMention(option) {
       option.videoIndex,
     )
   } else {
-    const index = nextPromptImageIndex(prompt.value)
+    const index = Number(option.imageIndex) || nextPromptImageIndex(prompt.value)
     result = replaceMentionWithImageLabel(
       prompt.value,
       mentionStart.value,
       cursor,
       index,
-      label,
+      option.promptLabel || option.label,
     )
   }
 
@@ -1727,11 +1762,9 @@ function pickMention(option) {
   })
 }
 
-function buildSimplePromptHeader(text, count) {
-  const body = String(text || '').trim()
-  if (!count || /图片\s*1/.test(body)) return body
-  const header = Array.from({ length: count }, (_, i) => `图片${i + 1}是参考图${i + 1}`).join('，')
-  return `${header}。${body}`
+function buildSimplePromptHeader(text, _count) {
+  // 保留给兼容路径调用；视频通道不再自动拼接「图片N是参考图N」
+  return String(text || '').trim()
 }
 
 function applyFixedOfficialPayload(payload) {
@@ -1740,6 +1773,16 @@ function applyFixedOfficialPayload(payload) {
     payload.training = true
     payload.provider = 'doubao_training'
     if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
+  if (props.xyqMode) {
+    payload.xyq = true
+    payload.provider = 'xyq_web'
+    if (props.fixedModel) payload.model = props.fixedModel
+    // S通道5 不支持音频：提交前剔除，避免误带音色
+    if (Array.isArray(payload.content_refs)) {
+      payload.content_refs = payload.content_refs.filter(ref => ref?.type !== 'audio')
+    }
     return payload
   }
   if (props.jimengMode) {
@@ -1792,17 +1835,17 @@ function submit() {
 
   const hasStudioRefs = uploadedRefs.value.length > 0
     || uploadedVideoRefs.value.length > 0
-    || (binding.voice_refs?.length > 0)
+    || (voicePickerEnabled.value && binding.voice_refs?.length > 0)
 
   if ((dramaLinked.value && refMode.value === 'reference') || (videoRefUploadEnabled.value && hasStudioRefs)) {
-    syncPromptImageHeader()
+    ensureRefStripOrder()
     const textForSubmit = prompt.value.trim()
     const issues = validateStudioPrompt(textForSubmit, binding, projectChars.value, projectScenes.value, projectProps.value, uploadedRefs.value)
     if (issues.length) {
       toast.error(formatPromptImageRefIssues(issues))
       return
     }
-    const { prompt: finalPrompt, contentRefs } = buildStudioContentRefs(
+    const built = buildStudioContentRefs(
       binding,
       textForSubmit,
       projectChars.value,
@@ -1812,7 +1855,11 @@ function submit() {
       uploadedVideoRefs.value,
       { videoRefLabel: videoRefLabelKind.value },
     )
-    payload.prompt = finalPrompt
+    let contentRefs = built.contentRefs
+    if (props.xyqMode) {
+      contentRefs = contentRefs.filter(ref => ref?.type !== 'audio')
+    }
+    payload.prompt = built.prompt
     if (contentRefs.length) {
       payload.content_refs = contentRefs
       const imageUrls = contentRefs
@@ -1831,8 +1878,7 @@ function submit() {
   }
 
   const images = uploadedRefs.value.map(item => item.path)
-  let finalPrompt = text
-  payload.prompt = finalPrompt
+  payload.prompt = text
 
   if (images.length === 1 && refMode.value === 'reference') {
     Object.assign(payload, {
@@ -1840,7 +1886,6 @@ function submit() {
       image_url: images[0],
       content_refs: [{ type: 'image', url: images[0], label: '参考图1' }],
     })
-    payload.prompt = buildSimplePromptHeader(text, 1)
   } else if (images.length >= 2 && refMode.value === 'first_last') {
     Object.assign(payload, {
       reference_mode: 'first_last',
@@ -1861,7 +1906,6 @@ function submit() {
         label: `参考图${idx + 1}`,
       })),
     })
-    payload.prompt = buildSimplePromptHeader(text, images.length)
   }
 
   emit('generate', applyFixedOfficialPayload(payload))
@@ -1875,7 +1919,7 @@ function normalizeLoadedAspectRatio(value) {
     if (ratio === '16:9' || ratio === 'landscape' || ratio === '3:2') return '16:9'
     return '9:16'
   }
-  if (props.jimengMode) {
+  if (jimengLikeMode.value) {
     if (jimengAspectRatios.includes(ratio)) return ratio
     if (ratio === '9:16' || ratio === 'portrait' || ratio === '2:3') return '9:16'
     if (ratio === '16:9' || ratio === 'landscape' || ratio === '3:2') return '16:9'
@@ -1901,7 +1945,7 @@ async function loadFromItem(item) {
   duration.value = clampDuration(Number(
     item?.duration
     || (props.trainingMode ? (selectedTrainingModel.value?.duration_default || 5)
-      : (props.jimengMode ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15))),
+      : (jimengLikeMode.value ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15))),
   ))
 
   const mode = item?.reference_mode || item?.referenceMode
@@ -1914,12 +1958,6 @@ async function loadFromItem(item) {
   }
 
   prompt.value = String(item?.prompt || '')
-
-  const {
-    preservedLabels,
-    preservedAudioLabels,
-    preservedVideoLabels,
-  } = collectPreservedMediaLabels(String(item?.prompt || ''))
 
   restoreStudioBindingsFromVideoItem(
     item,
@@ -1967,15 +2005,7 @@ async function loadFromItem(item) {
   }
 
   syncUploadPaths()
-  prompt.value = applyStudioPromptMediaHeader(
-    prompt.value,
-    binding,
-    projectChars.value,
-    projectScenes.value,
-    projectProps.value,
-    uploadedRefs.value,
-    { preservedLabels, preservedAudioLabels, preservedVideoLabels, uploadedVideoRefs: uploadedVideoRefs.value, videoRefLabel: videoRefLabelKind.value },
-  )
+  ensureRefStripOrder()
 }
 
 function clearPrompt() {

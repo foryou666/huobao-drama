@@ -1,9 +1,12 @@
 import { Hono } from 'hono'
+import fs from 'fs'
 import { success, badRequest } from '../utils/response.js'
 import { saveUploadedFile } from '../utils/storage.js'
+import { resolveMediaFilePath } from '../utils/media-path.js'
 import { thumbPathForSource } from '../utils/thumbnail.js'
 import { trySyncUploadImageToOss } from '../utils/oss-entity-sync.js'
 import { createReferenceUploadAsset } from '../services/asset-library.js'
+import { getAudioDurationSeconds, validateVoiceRefDuration } from '../utils/audio-duration.js'
 
 const app = new Hono()
 
@@ -94,6 +97,47 @@ app.post('/video', async (c) => {
     path,
     oss_url: ossUrl,
     name: file.name.replace(/\.[^.]+$/, '') || '参考视频',
+  })
+})
+
+function isVoiceRefAudioFile(mime: string, lowerName: string) {
+  if (mime.startsWith('audio/')) return true
+  return ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.webm'].some(ext => lowerName.endsWith(ext))
+}
+
+// POST /upload/audio — TTS 参考音色（临时上传，不入资产库）
+app.post('/audio', async (c) => {
+  const body = await c.req.parseBody()
+  const file = body['file']
+
+  if (!file || !(file instanceof File)) {
+    return badRequest(c, 'file is required')
+  }
+
+  const mime = String(file.type || '').toLowerCase()
+  const lowerName = String(file.name || '').toLowerCase()
+  if (!isVoiceRefAudioFile(mime, lowerName)) {
+    return badRequest(c, '仅支持 MP3 / WAV / M4A 等常见音频格式')
+  }
+
+  const buffer = await file.arrayBuffer()
+  const path = await saveUploadedFile(buffer, 'uploads/tts-voice-ref', file.name)
+
+  const duration = await getAudioDurationSeconds(path)
+  const durationError = validateVoiceRefDuration(duration)
+  if (durationError) {
+    const abs = resolveMediaFilePath(path)
+    if (abs && fs.existsSync(abs)) fs.unlinkSync(abs)
+    return badRequest(c, durationError)
+  }
+
+  const displayName = file.name.replace(/\.[^.]+$/, '') || '参考音色'
+
+  return success(c, {
+    url: `/${path}`,
+    path,
+    name: displayName,
+    duration_sec: duration,
   })
 })
 

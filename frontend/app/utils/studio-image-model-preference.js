@@ -1,6 +1,6 @@
 import { getStoredUser } from './auth-token.js'
 
-export const STUDIO_IMAGE_MODEL_OPTIONS = ['gpt-image-2', 'nano-banana-2']
+export const STUDIO_IMAGE_MODEL_OPTIONS = ['gpt-image-2']
 export const STUDIO_IMAGE_MODEL_DEFAULT = 'gpt-image-2'
 
 function storageKey() {

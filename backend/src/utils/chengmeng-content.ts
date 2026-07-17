@@ -7,6 +7,7 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_PROMPT_MAX_LENGTH,
+  CHENGMENG_CHANNEL1_RESOLUTION,
   CHENGMENG_VIDEO_MODELS,
   isChengmengVideoModelId,
 } from '../constants/chengmeng.js'
@@ -244,7 +245,7 @@ export function truncateChengmengPromptBody(text: string, maxLen: number): strin
 
 /**
  * 文档要求 prompt 内用 @图片1 / @素材1 / @音频1 关联资源；
- * 工作台仍用「图片1是…」「音色1是…」描述，发送前自动补 @ 标签并统一为「音频N」。
+ * 工作台提示词改为用户手写 @ 或纯描述；发送前统一剥标签后按数量补 @ 前缀，保证上游可识别。
  * 超过 CHENGMENT_PROMPT_MAX_LENGTH 时直接报错，禁止静默截断。
  */
 export function buildChengmengPrompt(
@@ -317,15 +318,12 @@ export function normalizeChengmengResolution(value?: string | null): string {
   return '720p'
 }
 
-/** 发给橙盟 API 的分辨率（模型 70 固定 480p，不在前台展示） */
+/** 发给橙盟 API 的分辨率：通道1 一律 480p（0.32 元/秒），不走配置里的 720p/1080p */
 export function resolveChengmengApiResolution(
-  modelId: string,
-  settingsResolution?: string | null,
+  _modelId: string,
+  _settingsResolution?: string | null,
 ): string {
-  if (String(modelId).trim() === CHENGMENG_VIDEO_MODELS.SEEDANCE_2_0_FAST) {
-    return '480p'
-  }
-  return normalizeChengmengResolution(settingsResolution)
+  return CHENGMENG_CHANNEL1_RESOLUTION
 }
 
 export type ChengmengVideoMode = 'references' | 'frames'
@@ -349,15 +347,21 @@ export function resolveChengmengModelIds(
 ) {
   const override = String(modelOverride || '').trim()
   if (isChengmengVideoModelId(override)) {
+    let modelId = override
+    // 通道1只接通 70；历史 77/49/32/53/31 一律回落到 70
+    if (override === '32' || override === '49' || override === '77'
+      || override === '53' || override === '31') {
+      modelId = CHENGMENT_DEFAULT_MODEL_ID
+    }
     return {
-      modelId: override,
+      modelId,
       groupId: CHENGMENT_DEFAULT_GROUP_ID,
     }
   }
   const parsed = parseChengmengModelIds(config)
-  if (['53', '32', '31'].includes(parsed.modelId)) {
+  if (['53', '32', '31', '49', '77'].includes(parsed.modelId)) {
     return {
-      modelId: parsed.modelId === '32' ? '49' : '70',
+      modelId: CHENGMENT_DEFAULT_MODEL_ID,
       groupId: CHENGMENT_DEFAULT_GROUP_ID,
     }
   }

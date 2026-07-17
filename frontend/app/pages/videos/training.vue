@@ -3,10 +3,10 @@
     <header class="studio-header">
       <div class="studio-header-copy">
         <h1 class="studio-title">视频通道5(培训)</h1>
-        <p class="studio-desc">
-          豆包免费额度练手 · Seedance 2.0 Fast · 可选 {{ refLimitsHint }} · 生成后自动叠加「{{ overlayText }}」标识 · 不扣积分
-          <span v-if="dailyQuota">（每账号每日 {{ dailyQuota }} 次）</span>
-        </p>
+        <StudioGuideButton
+          title="通道5 使用说明"
+          :text="trainingGuideText"
+        />
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -32,7 +32,7 @@
             {{ sessionOptionLabel(s) }}
           </option>
         </select>
-        <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
+        <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
         </select>
@@ -57,7 +57,15 @@
     </div>
 
     <div ref="feedRef" class="studio-feed">
-      <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
+      <div v-if="loading && !items.length" class="studio-grid studio-grid-skeleton">
+        <article v-for="n in 8" :key="`sk-${n}`" class="studio-card studio-card-skeleton">
+          <div class="studio-card-media ratio-portrait studio-skeleton-block" />
+          <div class="studio-card-body">
+            <div class="studio-skeleton-line studio-skeleton-line-wide" />
+            <div class="studio-skeleton-line studio-skeleton-line-narrow" />
+          </div>
+        </article>
+      </div>
       <div v-else-if="!items.length" class="studio-empty card">
         <p>还没有培训视频，在底部输入描述并点击「通道5」</p>
       </div>
@@ -207,22 +215,42 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, videoAPI } from '~/composables/useApi'
+import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchMediaUrlsInBackground, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
+import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
 import { formatRefLimitsHint, TRAINING_REF_LIMITS } from '~/constants/video-channels.js'
+import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
+import {
+  buildVideoLedgerCacheKey,
+  restoreVideoLedgerCache,
+  persistVideoLedgerCache,
+  loadVideoDramasLite,
+  finalizeVideoLedgerItems,
+} from '~/utils/video-studio-page.js'
 
-const TRAINING_MODEL = 'doubao-seedance-2.0-fast-training'
+const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-training-v1'
+
+const TRAINING_MODEL_FAST = 'doubao-seedance-2.0-fast-training'
+const TRAINING_MODEL_MINI = 'doubao-seedance-2.0-mini-training'
+const TRAINING_MODEL = TRAINING_MODEL_MINI
 
 const refLimitsHint = computed(() => formatRefLimitsHint(TRAINING_REF_LIMITS))
 
 const DEFAULT_TRAINING_MODELS = [
   {
-    id: TRAINING_MODEL,
-    label: 'Seedance 2.0 Fast（培训）',
+    id: TRAINING_MODEL_FAST,
+    label: 'Seedance 2.0 Fast',
+    credit_cost_flat: 0,
+    duration_min: 5,
+    duration_max: 10,
+    duration_default: 5,
+  },
+  {
+    id: TRAINING_MODEL_MINI,
+    label: 'Seedance 2.0 Mini',
     credit_cost_flat: 0,
     duration_min: 5,
     duration_max: 10,
@@ -244,6 +272,10 @@ const sessionValid = ref(false)
 const serviceAvailable = ref(false)
 const overlayText = ref('内部培训专用')
 const dailyQuota = ref(5)
+const trainingGuideText = computed(() => {
+  const quota = dailyQuota.value ? `（每账号每日 ${dailyQuota.value} 次）` : ''
+  return `豆包免费额度练手 · 可选 Seedance 2.0 Fast / Mini（与官网一致，不含标准 2.0）· 可选 ${refLimitsHint.value} · 生成后自动叠加「${overlayText.value}」标识 · 不扣积分${quota}`
+})
 const selectedModel = ref(TRAINING_MODEL)
 const items = ref([])
 const dramas = ref([])
@@ -257,6 +289,18 @@ const detailDownloading = ref(false)
 const composerRef = ref(null)
 const feedRef = ref(null)
 let pollTimer = null
+
+function videoLedgerCacheKey() {
+  return buildVideoLedgerCacheKey(VIDEO_LEDGER_CACHE_PREFIX, [
+    viewScope.value,
+    filterDramaId.value || 'all',
+    filterStatus.value,
+  ])
+}
+
+function ensureDramasLoaded() {
+  if (!dramas.value.length) void loadVideoDramasLite(dramas)
+}
 
 const statusTabs = [
   { id: 'all', label: '全部' },
@@ -284,8 +328,9 @@ function sessionOptionLabel(session) {
 }
 
 function modelLabel(modelId) {
-  return displayModels.value.find(item => item.id === modelId)?.label
+  const label = displayModels.value.find(item => item.id === modelId)?.label
     || String(modelId || '').replace(/^doubao-/, '豆包 ').replace(/-/g, ' ')
+  return toSeedanceDisplayLabel(label)
 }
 
 function statsForTab(id) {
@@ -314,6 +359,7 @@ function normalizeItem(row) {
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
     display_poster_url: row.display_poster_url || '',
+    poster_path: row.poster_path || row.posterPath || '',
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -412,8 +458,11 @@ function openDetail(item) {
 
 async function reuseDetail() {
   if (!detailItem.value) return
-  if (detailItem.value.model === TRAINING_MODEL) {
-    selectedModel.value = TRAINING_MODEL
+  if (
+    detailItem.value.model === TRAINING_MODEL_MINI
+    || detailItem.value.model === TRAINING_MODEL_FAST
+  ) {
+    selectedModel.value = detailItem.value.model
   }
   await composerRef.value?.loadFromItem(detailItem.value)
   detailItem.value = null
@@ -489,14 +538,14 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  const mediaPaths = collectMediaPrefetchPaths(
-    ...nextItems.flatMap(item => [
-      item.local_path,
-      item.video_url,
-      ...(item.reference_images || []).map(ref => ref.path),
-    ]),
-  )
-  if (mediaPaths.length) prefetchMediaUrlsInBackground(mediaPaths)
+  finalizeVideoLedgerItems(nextItems)
+  if (!append) {
+    persistVideoLedgerCache(videoLedgerCacheKey(), {
+      items: items.value,
+      stats: stats.value,
+      pagination: pagination.value,
+    })
+  }
 }
 
 async function refreshLedger() {
@@ -508,7 +557,7 @@ async function refreshLedger() {
 }
 
 async function reload() {
-  loading.value = true
+  if (!items.value.length) loading.value = true
   try {
     await loadLedger({ offset: 0 })
   } finally {
@@ -554,7 +603,9 @@ async function loadTrainingOptions() {
       selectedSessionId.value = activeId
     }
     if (trainingModels.value.length && !trainingModels.value.some(item => item.id === selectedModel.value)) {
-      selectedModel.value = trainingModels.value[0].id
+      selectedModel.value = trainingModels.value.find(item => item.default_option)?.id
+        || res?.default_model
+        || TRAINING_MODEL
     }
   } catch {
     trainingModels.value = []
@@ -650,12 +701,22 @@ function stopPolling() {
   }
 }
 
-onMounted(async () => {
-  await loadTrainingOptions()
-  const dramaRes = await dramaAPI.list()
-  dramas.value = dramaRes?.items || dramaRes || []
-  await reload()
-  startPolling()
+onMounted(() => {
+  const cached = restoreVideoLedgerCache(videoLedgerCacheKey())
+  if (cached?.items?.length) {
+    items.value = cached.items.map(normalizeItem)
+    stats.value = cached.stats || stats.value
+    pagination.value = cached.pagination || pagination.value
+    finalizeVideoLedgerItems(items.value)
+  } else {
+    loading.value = true
+  }
+  void loadTrainingOptions()
+  void loadVideoDramasLite(dramas)
+  void loadLedger({ offset: 0 }).finally(() => {
+    loading.value = false
+    startPolling()
+  })
 })
 
 onUnmounted(() => {
@@ -683,32 +744,42 @@ onUnmounted(() => {
 
 .studio-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px 12px;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.studio-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
 .studio-title {
-  margin: 0 0 4px;
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.studio-desc {
   margin: 0;
-  font-size: 13px;
-  color: var(--text-3);
-  max-width: 640px;
+  font-size: 20px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .studio-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  min-width: 0;
+  flex: 1;
+}
+
+.studio-header-actions .studio-filter-select {
+  min-width: 0;
+  max-width: 160px;
 }
 
 .studio-scope-toggle {

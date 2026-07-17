@@ -4,6 +4,7 @@
 import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { buildJimengVirtualConfig } from './jimeng-web-video.js'
+import { buildXyqVirtualConfig } from './xyq-web-video.js'
 import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
@@ -142,6 +143,9 @@ export function resolveVideoTaskConfig(record: {
   if (provider === 'jimeng_web') {
     return buildJimengVirtualConfig()
   }
+  if (provider === 'xyq_web') {
+    return buildXyqVirtualConfig()
+  }
   if (provider === 'doubao_training') {
     return buildDoubaoTrainingVirtualConfig()
   }
@@ -153,6 +157,51 @@ export function resolveVideoTaskConfig(record: {
     .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
   const match = rows.find(r => r.isActive) || rows[0]
   return match ? rowToAIConfig(match) : getActiveConfig('video')
+}
+
+/** 图片任务轮询/恢复时使用：按 provider 匹配配置（含已停用） */
+export function resolveImageTaskConfig(record: {
+  provider?: string | null
+}): AIConfig | null {
+  const provider = String(record.provider || '').trim()
+  if (!provider) return getActiveConfig('image')
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, 'image'))
+    .all()
+    .filter(r => r.provider === provider)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+  const match = rows.find(r => r.isActive) || rows[0]
+  return match ? rowToAIConfig(match) : getActiveConfig('image')
+}
+
+function listActiveImageConfigsByProvider(provider: string): AIConfig[] {
+  return db.select().from(schema.aiServiceConfigs)
+    .all()
+    .filter(r => r.serviceType === 'image' && r.provider === provider && r.isActive)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+    .map(rowToAIConfig)
+}
+
+/** 启灵泽图片通道（nano-banana-2 专用上游，成本低于 APIMart） */
+export function getQilingzeImageConfig(): AIConfig | null {
+  return listActiveImageConfigsByProvider('qilingze')[0] || null
+}
+
+/** APIMart 图片通道（gpt-image-2 等） */
+export function getApimartImageConfig(): AIConfig | null {
+  return listActiveImageConfigsByProvider('apimart')[0] || null
+}
+
+/** 图片主通道失败时，取 GeekNow 图片配置作为备用 */
+export function getGeeknowImageFallbackConfig(excludeProvider?: string | null): AIConfig | null {
+  const exclude = String(excludeProvider || '').toLowerCase()
+  if (exclude === 'geeknow') return null
+  const rows = db.select().from(schema.aiServiceConfigs)
+    .all()
+    .filter(r => r.serviceType === 'image' && r.provider === 'geeknow' && r.isActive)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+  const row = rows[0]
+  return row ? rowToAIConfig(row) : null
 }
 
 /** 橙盟余额不足时，取另一条视频配置作为备用 Key（通常为新账号） */

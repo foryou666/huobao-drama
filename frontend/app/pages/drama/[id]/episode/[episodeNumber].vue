@@ -7,21 +7,41 @@
     <span>{{ pageError }}</span>
     <div class="studio-loading-actions">
       <button type="button" class="btn" @click="refresh">重试</button>
-      <button type="button" class="btn btn-primary" @click="navigateTo(`/drama/${dramaId}`)">返回项目</button>
+      <button type="button" class="btn btn-primary" @click="navigateTo('/')">返回项目列表</button>
     </div>
   </div>
-  <div class="studio" v-else-if="drama">
+  <div v-else-if="drama && !episode" class="studio-loading">
+    <span>请先创建第一集，配置图片 / 视频 / 音频服务后即可开始制作。</span>
+    <div class="studio-loading-actions">
+      <button type="button" class="btn btn-primary" @click="episodeSetupOpen = true">创建第一集</button>
+      <button type="button" class="btn" @click="navigateTo('/')">返回项目列表</button>
+    </div>
+  </div>
+  <div class="studio" v-else-if="drama && episode">
     <header class="studio-topbar">
       <div class="studio-topbar-main">
-        <button class="back-btn topbar-back" @click="navigateTo(`/drama/${dramaId}`)">
+        <button class="back-btn topbar-back" @click="navigateTo('/')">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
             <line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>
           </svg>
-          返回项目
+          项目列表
         </button>
         <div class="studio-identity">
           <h1 class="studio-title">{{ drama.title }}</h1>
-          <span class="studio-episode-chip">第 {{ episodeNumber }} 集</span>
+          <div class="studio-episode-switcher">
+            <select
+              v-if="episodeOptions.length"
+              class="studio-episode-select input"
+              :value="episodeNumber"
+              @change="onEpisodeSelect"
+            >
+              <option v-for="opt in episodeOptions" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <span v-else class="studio-episode-chip">第 {{ episodeNumber }} 集</span>
+            <button type="button" class="btn btn-sm" @click="episodeSetupOpen = true">新建集</button>
+          </div>
           <div class="studio-meta-row">
             <span class="studio-meta-pill">{{ currentSubStageLabel }}</span>
             <span class="studio-meta-pill is-progress">{{ pipelineProgress }}/11</span>
@@ -79,15 +99,30 @@
     <!-- ========== LEFT SIDEBAR ========== -->
     <aside class="sidebar">
       <nav class="pipeline">
-        <div
-          v-for="section in sidebarSections"
-          :key="section.id"
-          class="pipe-section"
-        >
-          <div class="pipe-section-label">{{ section.label }}</div>
+        <div class="pipe-section">
+          <div class="pipe-section-label">制作流程</div>
           <button
             type="button"
-            v-for="item in section.items"
+            v-for="stage in mainStageDefs"
+            :key="stage.id"
+            :class="['pipe-item pipe-item-main', { active: activeMainStage === stage.id, done: mainStageDone(stage.id) }]"
+            @click="goMainStage(stage.id)"
+          >
+            <span class="pipe-icon" :class="mainStageDone(stage.id) ? 'icon-done' : activeMainStage === stage.id ? 'icon-active' : ''">
+              <svg v-if="mainStageDone(stage.id)" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <component v-else :is="stage.icon" :size="11" />
+            </span>
+            <span class="pipe-copy">
+              <span class="pipe-label">{{ stage.label }}</span>
+              <span class="pipe-sub">{{ stage.desc }}</span>
+            </span>
+          </button>
+        </div>
+        <div v-if="activeSubSteps.length" class="pipe-section pipe-section-sub">
+          <div class="pipe-section-label">{{ currentMainStageLabel }}</div>
+          <button
+            type="button"
+            v-for="item in activeSubSteps"
             :key="item.key"
             :class="['pipe-item pipe-item-sub', { active: activeSubStepKey === item.key, done: item.done }]"
             @click="goSubStep(item.key)"
@@ -98,7 +133,6 @@
             </span>
             <span class="pipe-copy">
               <span class="pipe-label">{{ item.label }}</span>
-              <span v-if="item.desc" class="pipe-sub">{{ item.desc }}</span>
             </span>
           </button>
         </div>
@@ -109,10 +143,10 @@
         <div class="progress-wrap">
           <div class="progress-head">
             <span class="progress-label">制作进度</span>
-            <span class="progress-val">{{ pipelineProgress }}/11</span>
+            <span class="progress-val">{{ pipelineProgress }}/{{ pipelineTotal }}</span>
           </div>
           <div class="progress-track">
-            <div class="progress-fill" :style="{ width: (pipelineProgress / 11 * 100) + '%' }"></div>
+            <div class="progress-fill" :style="{ width: (pipelineProgress / pipelineTotal * 100) + '%' }"></div>
           </div>
         </div>
         <div class="sidebar-jumper" v-if="sidebarJumpSteps.length">
@@ -133,19 +167,6 @@
 
     <!-- ========== MAIN CONTENT ========== -->
     <main class="main">
-      <div v-if="activeSubSteps.length" class="stage-subnav">
-        <button
-          type="button"
-          v-for="sub in activeSubSteps"
-          :key="sub.key"
-          :class="['stage-subnav-item', { active: activeSubStepKey === sub.key, done: sub.done }]"
-          @click="goSubStep(sub.key)"
-        >
-          <span>{{ sub.label }}</span>
-          <span v-if="sub.done" class="stage-subnav-dot"></span>
-        </button>
-      </div>
-
       <!-- ===== SCRIPT PANEL ===== -->
       <div v-if="panel === 'script'" class="content-panel">
         <!-- Step 0: Raw Content -->
@@ -154,7 +175,7 @@
             <div class="toolbar-left">
               <div class="step-indicator">
                 <span class="step-num">01</span>
-                <span class="step-name">原始内容</span>
+                <span class="step-name">本集原文</span>
               </div>
             </div>
             <div class="toolbar-right">
@@ -178,158 +199,151 @@
             <div class="toolbar-left">
               <div class="step-indicator">
                 <span class="step-num">02</span>
-                <span class="step-name">AI 改写</span>
+                <span class="step-name">整理剧本</span>
               </div>
             </div>
             <div class="toolbar-right">
               <span v-if="scriptLen" class="char-count">{{ scriptLen }} 字</span>
-              <button v-if="rawContent" class="btn btn-sm" @click="skipRewrite">
+              <button class="btn btn-sm" :disabled="!rawContent && !localRaw.trim()" @click="skipRewrite">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/><path d="M13 18l6-6-6-6"/></svg>
                 跳过改写
               </button>
-              <button v-if="scriptContent" class="btn btn-sm" @click="doRewrite" :disabled="assistantRunning">
+              <button class="btn btn-sm btn-primary" @click="doRewrite" :disabled="assistantRunning">
                 <Loader2 v-if="assistantRunning && assistantAgentType === 'script_rewriter'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                重新改写
+                {{ scriptContent || localScript.trim() ? '重新改写' : '开始改写' }}
               </button>
             </div>
           </div>
 
-          <div v-if="!scriptContent && !assistantRunning" class="step-empty">
-            <div class="empty-visual">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
-              </svg>
-            </div>
-            <div class="empty-title">AI 改写为格式化剧本</div>
-            <div class="empty-desc">你可以先用 AI 把原始内容整理成格式化剧本，也可以跳过这一步，直接使用原始内容继续提取角色与场景。</div>
-            <div class="step-empty-actions">
-              <button class="btn btn-primary" @click="doRewrite">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                开始改写
-              </button>
-              <button class="btn" @click="skipRewrite">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/><path d="M13 18l6-6-6-6"/></svg>
-                跳过改写
-              </button>
-            </div>
-          </div>
-          <div v-else-if="assistantRunning && assistantAgentType === 'script_rewriter'" class="step-loading">
+          <div v-if="assistantRunning && assistantAgentType === 'script_rewriter'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在改写剧本...</div>
           </div>
-          <textarea v-else class="fill-textarea" v-model="localScript" placeholder="格式化剧本内容..." />
+          <textarea
+            v-else
+            class="fill-textarea"
+            v-model="localScript"
+            placeholder="在此编辑本集剧本，或点右上角「开始改写 / 跳过改写」…"
+          />
         </div>
 
-        <!-- Step 2: Extract -->
-        <div v-else-if="scriptStep === 2" class="step-editor">
+        <!-- Step 2: 提取资产 -->
+        <div v-else-if="scriptStep === 2" class="step-editor extract-assets-editor">
           <div class="step-toolbar">
             <div class="toolbar-left">
               <div class="step-indicator">
                 <span class="step-num">03</span>
-                <span class="step-name">提取角色与场景</span>
+                <span class="step-name">提取资产</span>
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="chars.length" class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景</span>
-              <button class="btn btn-sm" @click="openManualEntity('character')">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                添加角色
-              </button>
-              <button class="btn btn-sm" @click="openManualEntity('scene')">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                添加场景
-              </button>
-              <button v-if="chars.length" class="btn btn-sm" @click="doExtract" :disabled="assistantRunning">
+              <span class="char-count">{{ chars.length }} 角色 · {{ scenes.length }} 场景 · {{ dramaProps.length }} 道具</span>
+              <button class="btn btn-sm" @click="openManualEntity('character')">添加角色</button>
+              <button class="btn btn-sm" @click="openManualEntity('scene')">添加场景</button>
+              <button
+                class="btn btn-sm btn-primary"
+                :disabled="assistantRunning"
+                @click="openExtractAssetsModal"
+              >
                 <Loader2 v-if="assistantRunning && assistantAgentType === 'extractor'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                重新提取
+                {{ chars.length || scenes.length || dramaProps.length ? '重新提取' : '提取资产' }}
               </button>
             </div>
           </div>
 
-          <div v-if="!chars.length && !assistantRunning" class="step-empty">
-            <div class="empty-visual">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            </div>
-            <div class="empty-title">从剧本提取角色与场景</div>
-            <div class="empty-desc">AI 自动分析剧本，提取角色信息和场景列表，与项目已有数据智能去重合并；也可手动添加</div>
-            <div class="step-empty-actions">
-              <button class="btn btn-primary" @click="doExtract">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                开始提取
-              </button>
-              <button class="btn btn-sm" @click="openManualEntity('character')">手动添加角色</button>
-              <button class="btn btn-sm" @click="openManualEntity('scene')">手动添加场景</button>
-            </div>
-          </div>
-          <div v-else-if="assistantRunning && assistantAgentType === 'extractor'" class="step-loading">
-            <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
-            <div class="loading-text">正在提取角色和场景...</div>
-          </div>
-          <div v-else class="extract-stage">
-            <aside class="card extract-summary">
-              <div class="extract-summary-kicker">Extraction Board</div>
-              <div class="extract-summary-title">角色与场景结果</div>
-              <div class="extract-summary-desc">从剧本里提取出的角色和场景已经入库。这里先确认命名、定位和描述是否可直接进入后续制作。</div>
-              <div class="extract-summary-stats">
-                <div class="extract-summary-stat">
-                  <span>角色</span>
-                  <strong>{{ chars.length }}</strong>
-                </div>
-                <div class="extract-summary-stat">
-                  <span>场景</span>
-                  <strong>{{ scenes.length }}</strong>
-                </div>
+          <div class="extract-assets-layout extract-assets-layout-results">
+            <section class="extract-results-panel">
+              <div v-if="assistantRunning && assistantAgentType === 'extractor'" class="step-loading extract-loading">
+                <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
+                <div class="loading-text">正在分析剧本，提取角色、场景、道具…</div>
               </div>
-              <div class="extract-summary-note">如果角色描述过于简短，后续分配音色和生成形象时建议先补充人物特征。</div>
-            </aside>
+              <template v-else>
+                <aside class="card extract-summary">
+                  <div class="extract-summary-title">提取结果</div>
+                  <div class="extract-summary-desc">确认文字描述是否可直接用于后续立绘、场景图与视频参考。各环节可随时进入，不强制顺序。</div>
+                  <div class="extract-summary-stats">
+                    <div class="extract-summary-stat"><span>角色</span><strong>{{ chars.length }}</strong></div>
+                    <div class="extract-summary-stat"><span>场景</span><strong>{{ scenes.length }}</strong></div>
+                    <div class="extract-summary-stat"><span>道具</span><strong>{{ dramaProps.length }}</strong></div>
+                  </div>
+                </aside>
 
-            <div class="card extract-card">
-              <div class="extract-card-head">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                <span>角色</span>
-                <span class="tag tag-accent">{{ charSearchKeyword.trim() ? `${filteredChars.length} / ${chars.length}` : chars.length }}</span>
-                <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
-              </div>
-              <div class="extract-list">
-                <div v-if="charSearchKeyword.trim() && !filteredChars.length" class="extract-search-empty dim">未找到匹配「{{ charSearchKeyword.trim() }}」的角色</div>
-                <div v-for="c in filteredChars" :key="c.id" class="extract-row">
-                  <div class="char-avatar">{{ c.name?.[0] || '?' }}</div>
-                  <div class="extract-info">
-                    <div class="extract-name-row">
-                      <div class="extract-name">{{ c.name }}</div>
-                      <span class="tag">{{ c.role || '角色' }}</span>
+                <div v-if="!chars.length && !scenes.length && !dramaProps.length" class="asset-grid" style="padding:0">
+                  <button type="button" class="card asset-card asset-empty-card" @click="openExtractAssetsModal">
+                    <div class="asset-empty-cover">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                     </div>
-                    <div class="extract-meta wrap">{{ c.description || c.appearance || c.personality || '暂无描述' }}</div>
-                  </div>
+                    <div class="asset-body">
+                      <div class="asset-name">暂无资产卡片</div>
+                      <div class="asset-meta dim">点此或右上角「提取资产」确认后再开始</div>
+                    </div>
+                  </button>
                 </div>
-              </div>
-            </div>
 
-            <div class="card extract-card" v-if="scenes.length">
-              <div class="extract-card-head">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                <span>场景</span>
-                <span class="tag tag-accent">{{ sceneSearchKeyword.trim() ? `${filteredScenes.length} / ${scenes.length}` : scenes.length }}</span>
-                <input v-model="sceneSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
-              </div>
-              <div class="extract-list">
-                <div v-if="sceneSearchKeyword.trim() && !filteredScenes.length" class="extract-search-empty dim">未找到匹配「{{ sceneSearchKeyword.trim() }}」的场景</div>
-                <div v-for="s in filteredScenes" :key="s.id" class="extract-row">
-                  <div class="scene-icon">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                <div v-if="chars.length" class="card extract-card">
+                  <div class="extract-card-head">
+                    <span>角色</span>
+                    <span class="tag tag-accent">{{ charSearchKeyword.trim() ? `${filteredChars.length} / ${chars.length}` : chars.length }}</span>
+                    <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
                   </div>
-                  <div class="extract-info">
-                    <div class="extract-name-row">
-                      <div class="extract-name">{{ s.location }}</div>
-                      <span v-if="s.time" class="tag">{{ s.time }}</span>
+                  <div class="extract-list">
+                    <div v-for="c in filteredChars" :key="c.id" class="extract-row">
+                      <div class="char-avatar">{{ c.name?.[0] || '?' }}</div>
+                      <div class="extract-info">
+                        <div class="extract-name-row">
+                          <div class="extract-name">{{ c.name }}</div>
+                          <span class="tag">{{ c.role || '角色' }}</span>
+                        </div>
+                        <div class="extract-meta wrap">{{ c.appearance || c.description || c.personality || '暂无描述' }}</div>
+                      </div>
                     </div>
-                    <div class="extract-meta wrap">{{ s.description || s.time || '等待补充场景描述' }}</div>
                   </div>
                 </div>
-              </div>
-            </div>
+
+                <div v-if="scenes.length" class="card extract-card">
+                  <div class="extract-card-head">
+                    <span>场景</span>
+                    <span class="tag tag-accent">{{ sceneSearchKeyword.trim() ? `${filteredScenes.length} / ${scenes.length}` : scenes.length }}</span>
+                    <input v-model="sceneSearchKeyword" class="input entity-search-input" placeholder="按名字搜索…" />
+                  </div>
+                  <div class="extract-list">
+                    <div v-for="s in filteredScenes" :key="s.id" class="extract-row">
+                      <div class="scene-icon">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                      </div>
+                      <div class="extract-info">
+                        <div class="extract-name-row">
+                          <div class="extract-name">{{ s.location }}</div>
+                          <span v-if="s.time" class="tag">{{ s.time }}</span>
+                        </div>
+                        <div class="extract-meta wrap">{{ s.prompt || s.description || '等待补充场景描述' }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="dramaProps.length" class="card extract-card">
+                  <div class="extract-card-head">
+                    <span>道具</span>
+                    <span class="tag tag-accent">{{ dramaProps.length }}</span>
+                  </div>
+                  <div class="extract-list">
+                    <div v-for="p in dramaProps" :key="p.id" class="extract-row">
+                      <div class="scene-icon">道具</div>
+                      <div class="extract-info">
+                        <div class="extract-name-row">
+                          <div class="extract-name">{{ p.name }}</div>
+                          <span v-if="p.type" class="tag">{{ p.type }}</span>
+                        </div>
+                        <div class="extract-meta wrap">{{ p.description || p.prompt || '暂无描述' }}</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </section>
           </div>
         </div>
 
@@ -343,34 +357,37 @@
               </div>
             </div>
             <div class="toolbar-right">
-              <span v-if="charsVoiced" class="char-count">{{ charsVoiced }}/{{ chars.length }} 已分配</span>
+              <span class="char-count">{{ charsVoiced }}/{{ chars.length }} 已分配</span>
               <span v-if="voiceSampleCount" class="char-count">{{ voiceSampleCount }}/{{ charsVoiced }} 试听文件</span>
-              <button v-if="charsVoiced" class="btn btn-sm" @click="doVoice" :disabled="assistantRunning">
+              <button class="btn btn-sm" @click="openManualEntity('character')">添加角色</button>
+              <button class="btn btn-sm btn-primary" @click="doVoice" :disabled="assistantRunning || !chars.length">
                 <Loader2 v-if="assistantRunning && assistantAgentType === 'voice_assigner'" :size="11" class="animate-spin" />
                 <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
-                重新分配
+                {{ charsVoiced ? '重新分配' : 'AI 自动分配' }}
               </button>
-              <button v-if="charsVoiced" class="btn btn-sm" :disabled="assistantRunning" @click="batchGenSamples">
+              <button class="btn btn-sm" :disabled="assistantRunning || !charsVoiced" @click="batchGenSamples">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19 5v14"/></svg>
                 生成试听文件
               </button>
             </div>
           </div>
 
-          <div v-if="!charsVoiced && !assistantRunning" class="step-empty">
-            <div class="empty-visual">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
-            </div>
-            <div class="empty-title">为角色分配合适的音色</div>
-            <div class="empty-desc">AI 根据角色特征自动分配最匹配的 TTS 音色</div>
-            <button class="btn btn-primary" @click="doVoice">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-              AI 自动分配
-            </button>
-          </div>
-          <div v-else-if="assistantRunning && assistantAgentType === 'voice_assigner'" class="step-loading">
+          <div v-if="assistantRunning && assistantAgentType === 'voice_assigner'" class="step-loading">
             <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
             <div class="loading-text">正在分配音色...</div>
+          </div>
+          <div v-else-if="!chars.length" class="storyboard-cards-scroll">
+            <div class="asset-grid">
+              <button type="button" class="card asset-card asset-empty-card" @click="openManualEntity('character')">
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">暂无角色可分配音色</div>
+                  <div class="asset-meta dim">先添加角色，或到「提取资产」后再回来分配</div>
+                </div>
+              </button>
+            </div>
           </div>
           <div v-else class="voice-stage">
             <aside class="card voice-stage-panel">
@@ -472,15 +489,15 @@
               <template v-if="useShotPlanWorkflow">
                 <span v-if="shotPlans.length" class="char-count">{{ shotPlans.length }} 镜头 · {{ planTotalDuration.toFixed(1) }}s</span>
                 <span v-if="newWorkflowClips.length" class="tag mono">{{ newWorkflowClips.length }} 片段</span>
-                <button class="btn btn-sm" @click="importModalOpen = true">粘贴导入</button>
+                <button class="btn btn-sm" @click="importModalOpen = true">粘贴工业脚本</button>
                 <button
                   class="btn btn-sm btn-primary"
                   :disabled="generateLoading || assistantRunning"
-                  @click="doGenerateShotPlansInternal"
+                  @click="openStoryboardPromptModal"
                 >
                   <Loader2 v-if="generateLoading || (assistantRunning && assistantAgentType === 'shot_plan_generator')" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                  {{ shotPlans.length ? '重新生成' : '内部分镜生成' }}
+                  {{ shotPlans.length ? '重新生成分镜提示词' : '生成分镜提示词' }}
                 </button>
                 <button class="btn btn-sm" :disabled="!shotPlans.length" @click="doConfirmPlans">确认列表</button>
                 <button class="btn btn-sm" :disabled="!shotPlans.length" @click="doAutoGroupClips">自动分组</button>
@@ -492,85 +509,89 @@
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   添加
                 </button>
-                <template v-if="!sbs.length">
-                  <span class="locked-config">视频模型 · {{ lockedVideoConfigLabel }}</span>
-                </template>
-                <button class="btn btn-sm" @click="importModalOpen = true">粘贴导入</button>
-                <button class="btn btn-sm" :disabled="assistantRunning" @click="doBreakdown">
+                <button class="btn btn-sm" @click="importModalOpen = true">粘贴工业脚本</button>
+                <button
+                  class="btn btn-sm btn-primary"
+                  :disabled="assistantRunning"
+                  @click="openStoryboardPromptModal"
+                >
                   <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="11" class="animate-spin" />
                   <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                  {{ sbs.length ? '重新拆解' : 'AI 拆解分镜' }}
+                  {{ sbs.length ? '重新生成分镜提示词' : '生成分镜提示词' }}
                 </button>
               </template>
             </div>
           </div>
 
-          <!-- New workflow: shot plans + clips -->
-          <div v-if="useShotPlanWorkflow && (generateLoading || (assistantRunning && assistantAgentType === 'shot_plan_generator'))" class="step-loading">
-            <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
-            <div class="loading-text">正在生成工业镜头列表...</div>
-          </div>
-
-          <div v-else-if="useShotPlanWorkflow && !shotPlans.length" class="step-empty">
-            <div class="empty-visual">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-                <rect x="2" y="2" width="20" height="20" rx="2.5"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="13" y1="8" x2="13" y2="16"/>
-              </svg>
+          <!-- New workflow: 卡片页（无居中拦截空页） -->
+          <div v-if="useShotPlanWorkflow" class="storyboard-workspace storyboard-cards-workspace">
+            <div
+              v-if="generateLoading || (assistantRunning && assistantAgentType === 'shot_plan_generator')"
+              class="storyboard-workspace-loading"
+            >
+              <Loader2 :size="22" class="animate-spin" style="color:var(--accent)" />
+              <span>正在生成分镜提示词…</span>
             </div>
-            <div class="empty-title">准备镜头列表</div>
-            <div class="empty-desc">使用 AI 内部分镜生成，或粘贴 DeepSeek 输出的工业分镜脚本</div>
-            <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
-            <div class="step-empty-actions">
-              <button class="btn btn-primary" :disabled="generateLoading" @click="doGenerateShotPlansInternal">
-                <Loader2 v-if="generateLoading" :size="13" class="animate-spin" />
-                内部分镜生成
-              </button>
-              <button class="btn" @click="importModalOpen = true">粘贴工业脚本</button>
-            </div>
-          </div>
 
-          <div v-else-if="useShotPlanWorkflow" class="split-layout">
-            <div class="shot-list">
-              <div class="shot-list-head">
+            <div class="storyboard-cards-scroll">
+              <div class="storyboard-cards-head">
                 <div>
-                  <div class="shot-list-title">镜头序列</div>
+                  <div class="shot-list-title">镜头卡片</div>
                   <div class="shot-list-sub">审阅微镜头，确认后自动分组为视频片段</div>
                 </div>
-                <span class="tag mono">{{ planTotalDuration.toFixed(1) }}s</span>
+                <span class="tag mono">{{ shotPlans.length }} 镜 · {{ planTotalDuration.toFixed(1) }}s</span>
               </div>
-              <div class="shot-list-body">
+
+              <div class="storyboard-card-grid">
+                <button
+                  v-if="!shotPlans.length"
+                  type="button"
+                  class="card storyboard-shot-card storyboard-empty-card"
+                  @click="openStoryboardPromptModal"
+                >
+                  <div class="storyboard-empty-card-cover">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                      <rect x="3" y="3" width="18" height="18" rx="3"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/>
+                    </svg>
+                  </div>
+                  <div class="prod-info">
+                    <div class="prod-desc">暂无镜头卡片</div>
+                    <div class="prod-meta-line">点此或右上角「生成分镜提示词」放入剧本后提取</div>
+                  </div>
+                </button>
+
                 <div
                   v-for="plan in shotPlans"
                   :key="plan.id"
-                  :class="['shot-item', { active: selectedPlan?.id === plan.id }]"
+                  :class="['card', 'storyboard-shot-card', 'prod-card', { active: selectedPlan?.id === plan.id }]"
                   @click="selectedPlan = plan"
                 >
-                  <div class="shot-item-header">
-                    <div class="shot-num">#{{ String(plan.shot_number || plan.shotNumber).padStart(3, '0') }}</div>
-                    <span class="tag" style="font-size:10px">{{ planStatusLabel(plan) }}</span>
-                    <span v-if="getPlanCharacterNames(plan).length" class="tag" style="font-size:10px">{{ getPlanCharacterNames(plan).join(' / ') }}</span>
+                  <div class="storyboard-shot-card-cover">
+                    <span class="prod-idx">#{{ String(plan.shot_number || plan.shotNumber).padStart(3, '0') }}</span>
+                    <span class="storyboard-shot-card-duration mono">{{ plan.duration || 2 }}s</span>
                   </div>
-                  <div class="shot-body">
-                    <div class="shot-desc">{{ plan.title || plan.description || '无描述' }}</div>
-                  </div>
-                  <div class="shot-meta">
-                    <span class="mono dim" style="font-size:10px">{{ plan.duration || 2 }}s</span>
-                    <span class="shot-location">{{ getPlanSceneName(plan) }}</span>
-                    <span v-if="plan.dialogue" class="shot-dialogue">{{ plan.dialogue }}</span>
+                  <div class="prod-info">
+                    <div class="prod-desc">{{ plan.title || plan.description || '无描述' }}</div>
+                    <div class="prod-meta-line">
+                      {{ planStatusLabel(plan) }}
+                      <template v-if="getPlanSceneName(plan)"> · {{ getPlanSceneName(plan) }}</template>
+                    </div>
+                    <div v-if="getPlanCharacterNames(plan).length" class="prod-meta-line">
+                      {{ getPlanCharacterNames(plan).join(' / ') }}
+                    </div>
+                    <div v-if="plan.dialogue" class="prod-meta-line storyboard-card-dialogue">{{ plan.dialogue }}</div>
                   </div>
                 </div>
               </div>
-            </div>
 
-            <div class="detail-panel">
-              <div v-if="selectedPlan" class="detail-body">
+              <div v-if="selectedPlan" class="card storyboard-selected-detail">
                 <div class="detail-head">
                   <div class="detail-head-copy">
                     <span class="detail-head-title">镜头 #{{ String(selectedPlan.shot_number || selectedPlan.shotNumber).padStart(3, '0') }}</span>
                     <span class="detail-head-sub">{{ selectedPlan.title || '未命名' }} · {{ selectedPlan.duration || 2 }}s</span>
                   </div>
                 </div>
-                <div class="detail-hero-text" style="margin-bottom:12px">{{ selectedPlan.description || selectedPlan.action || '暂无描述' }}</div>
+                <div class="detail-hero-text">{{ selectedPlan.description || selectedPlan.action || '暂无描述' }}</div>
                 <div class="detail-status-row">
                   <span class="tag">{{ getPlanSceneName(selectedPlan) }}</span>
                   <span v-for="name in getPlanCharacterNames(selectedPlan)" :key="name" class="tag">{{ name }}</span>
@@ -579,10 +600,9 @@
                   <div class="dim" style="font-size:11px;margin-bottom:4px">台词 / 音效</div>
                   <div style="font-size:13px;line-height:1.5">{{ selectedPlan.dialogue }}</div>
                 </div>
-
                 <div v-if="newWorkflowClips.length" class="plan-clip-move-panel">
                   <div class="dim" style="font-size:11px;margin-bottom:8px">
-                    当前片段：{{ getPlanClipLabel(selectedPlan) }} · 可移入其他片段（跨场景合并）
+                    当前片段：{{ getPlanClipLabel(selectedPlan) }} · 可移入其他片段
                   </div>
                   <div class="plan-clip-move-actions">
                     <button
@@ -599,38 +619,49 @@
                 </div>
               </div>
 
-              <div class="shot-clips-panel">
-                <div class="shot-list-head">
-                  <div>
-                    <div class="shot-list-title">视频片段</div>
-                    <div class="shot-list-sub">每个片段对应一次视频生成（12–15 秒）；选中镜头后可移入其他片段</div>
+              <div class="storyboard-cards-head" style="margin-top:18px">
+                <div>
+                  <div class="shot-list-title">视频片段</div>
+                  <div class="shot-list-sub">每个片段对应一次视频生成（12–15 秒）</div>
+                </div>
+              </div>
+              <div class="storyboard-card-grid storyboard-clip-grid">
+                <div v-if="!newWorkflowClips.length" class="card storyboard-shot-card storyboard-empty-card is-static">
+                  <div class="storyboard-empty-card-cover is-sm">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                      <rect x="2" y="6" width="20" height="12" rx="2"/><polygon points="10 9 16 12 10 15 10 9"/>
+                    </svg>
+                  </div>
+                  <div class="prod-info">
+                    <div class="prod-desc">暂无片段</div>
+                    <div class="prod-meta-line">生成镜头并确认后，点右上角「自动分组」</div>
                   </div>
                 </div>
-                <div v-if="newWorkflowClips.length" class="shot-clips-list">
-                  <div v-for="(clip, i) in newWorkflowClips" :key="clip.id" class="shot-clip-card card">
-                    <div class="shot-clip-head">
+                <div v-for="(clip, i) in newWorkflowClips" :key="clip.id" class="card storyboard-shot-card prod-card">
+                  <div class="prod-info" style="padding-top:14px">
+                    <div class="shot-clip-head" style="margin-bottom:8px">
                       <span class="mono">Clip {{ i + 1 }}</span>
                       <span class="tag">{{ clipDurationSum(clip).toFixed(1) }}s</span>
                       <span v-if="clipDurationSum(clip) > 15" class="tag tag-warn">超 15s</span>
                       <span class="tag" :class="(clip.prompt_status || clip.promptStatus) === 'expanded' ? 'tag-success' : ''">
                         {{ { expanded: '已展开', stale: '需更新', empty: '待展开' }[clip.prompt_status || clip.promptStatus] || '待展开' }}
                       </span>
-                      <button
-                        v-if="selectedPlan && !isPlanInClip(selectedPlan, clip)"
-                        class="btn btn-sm ml-auto"
-                        :disabled="clipMoveLoading"
-                        @click="movePlanToClip(selectedPlan, clip)"
-                      >
-                        移入选中镜头
-                      </button>
                     </div>
-                    <div class="shot-desc">{{ clip.title || clip.description || '未命名片段' }}</div>
-                    <div v-if="clip.shot_plans?.length" class="dim" style="font-size:11px;margin-top:6px">
+                    <div class="prod-desc">{{ clip.title || clip.description || '未命名片段' }}</div>
+                    <div v-if="clip.shot_plans?.length" class="prod-meta-line">
                       含镜头 {{ clip.shot_plans.map(p => String(p.shot_number || p.shotNumber).padStart(3, '0')).join('、') }}
                     </div>
+                    <button
+                      v-if="selectedPlan && !isPlanInClip(selectedPlan, clip)"
+                      class="btn btn-sm"
+                      style="margin-top:10px"
+                      :disabled="clipMoveLoading"
+                      @click="movePlanToClip(selectedPlan, clip)"
+                    >
+                      移入选中镜头
+                    </button>
                   </div>
                 </div>
-                <div v-else class="dim" style="padding:16px;font-size:12px">暂无片段，点击「自动分组」按场景切分</div>
               </div>
             </div>
           </div>
@@ -887,6 +918,7 @@
                   :initial-prompt="getBlockingPromptDraft(selectedSb)"
                   :image-reference-supported="imageReferenceSupported"
                   :character-name="getCharacterName"
+                  :director-href="directorDeskHref(selectedSb)"
                   @entry-change="(charId, patch) => onBlockingEntryChange(selectedSb, charId, patch)"
                   @notes-blur="onBlockingNotesBlur(selectedSb, $event)"
                   @generate="genBlocking(selectedSb, $event)"
@@ -929,30 +961,39 @@
             </div>
           </div>
 
-          <div v-else-if="assistantRunning && (assistantAgentType === 'storyboard_breaker' || assistantAgentType === 'shot_plan_generator')" class="step-loading">
-            <Loader2 :size="24" class="animate-spin" style="color:var(--accent)" />
-            <div class="loading-text">{{ assistantAgentType === 'shot_plan_generator' ? '正在生成工业镜头列表...' : '正在拆解分镜并生成提示词...' }}</div>
-          </div>
-
-          <div v-else class="step-empty">
-            <div class="empty-visual">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-                <rect x="2" y="2" width="20" height="20" rx="2.5"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="13" y1="8" x2="13" y2="16"/>
-              </svg>
+          <div v-else class="storyboard-workspace storyboard-cards-workspace">
+            <div
+              v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'"
+              class="storyboard-workspace-loading"
+            >
+              <Loader2 :size="22" class="animate-spin" style="color:var(--accent)" />
+              <span>正在拆解分镜并生成提示词…</span>
             </div>
-            <div class="empty-title">准备镜头列表</div>
-            <div class="empty-desc">粘贴外部工业分镜脚本，或使用 AI 生成镜头列表；确认后分组生成视频</div>
-            <div class="locked-config-banner">当前集视频模型：{{ lockedVideoConfigLabel }}</div>
-            <div class="step-empty-actions">
-              <button class="btn btn-primary" @click="importModalOpen = true">粘贴工业脚本</button>
-              <button class="btn" :disabled="generateLoading || assistantRunning" @click="doGenerateShotPlansInternal">
-                <Loader2 v-if="generateLoading" :size="13" class="animate-spin" />
-                内部分镜生成
-              </button>
-              <button v-if="hasLegacyStoryboards" class="btn" :disabled="assistantRunning" @click="doBreakdown">
-                <Loader2 v-if="assistantRunning && assistantAgentType === 'storyboard_breaker'" :size="13" class="animate-spin" />
-                AI 拆解分镜（旧流程）
-              </button>
+            <div class="storyboard-cards-scroll">
+              <div class="storyboard-cards-head">
+                <div>
+                  <div class="shot-list-title">镜头卡片</div>
+                  <div class="shot-list-sub">生成后按卡片审阅每个镜头的提示词</div>
+                </div>
+                <span class="tag mono">0 镜</span>
+              </div>
+              <div class="storyboard-card-grid">
+                <button
+                  type="button"
+                  class="card storyboard-shot-card storyboard-empty-card"
+                  @click="openStoryboardPromptModal"
+                >
+                  <div class="storyboard-empty-card-cover">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+                      <rect x="3" y="3" width="18" height="18" rx="3"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="14" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/>
+                    </svg>
+                  </div>
+                  <div class="prod-info">
+                    <div class="prod-desc">暂无镜头卡片</div>
+                    <div class="prod-meta-line">点此或右上角「生成分镜提示词」放入剧本后提取</div>
+                  </div>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -961,22 +1002,6 @@
 
       <!-- ===== PRODUCTION PANEL ===== -->
       <div v-else-if="panel === 'production'" class="content-panel">
-        <!-- Guard: storyboard-dependent production steps -->
-        <div v-if="productionPanelBlocked" class="step-empty" style="flex:1">
-          <div class="empty-visual">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-          </div>
-          <div class="empty-title">尚未准备就绪</div>
-          <div class="empty-desc">{{ !scriptContent ? '请先完成剧本编写' : '可先 AI 拆解分镜，或直接手动添加镜头开始制作视频' }}</div>
-          <div class="step-empty-actions">
-            <button v-if="scriptContent && !sbs.length" class="btn btn-primary" @click="addShot({ openVideos: true })">手动添加镜头</button>
-            <button class="btn" :class="{ 'btn-primary': !scriptContent }" @click="panel = 'script'">
-              {{ !scriptContent ? '前往剧本' : '前往分镜拆解' }}
-            </button>
-          </div>
-        </div>
-
-        <template v-else>
           <div class="step-toolbar prod-toolbar">
             <div class="toolbar-left">
               <div class="step-indicator">
@@ -984,9 +1009,9 @@
                 <span class="step-name">制作工作台</span>
               </div>
             </div>
-            <div class="prod-tabs">
+            <div v-if="visibleProdTabs.length" class="prod-tabs">
               <button
-                v-for="t in prodTabDefs"
+                v-for="t in visibleProdTabs"
                 :key="t.id"
                 :class="['prod-tab', { active: prodTab === t.id }]"
                 @click="prodTab = t.id"
@@ -1022,37 +1047,58 @@
               <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索角色…" />
               <span class="tag">{{ lockedImageConfigLabel }}</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
-              <span v-if="isSeedance2VideoActive" class="tag tag-warn">Seedance 2.0 勿用真人图</span>
+              <span v-if="isSeedance2VideoActive" class="tag tag-warn">S 2.0 勿用真人图</span>
               <span v-if="lockedImageConfigProvider && !imageReferenceSupported" class="tag tag-warn">当前图片模型不支持参考图生图</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="openExtractAssetsModal">提取资产</button>
                 <button class="btn btn-sm" @click="openManualEntity('character')">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   添加角色
                 </button>
-                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchCharImages">
+                <button class="btn btn-sm" :disabled="assistantRunning || !visualChars.length" @click="batchCharImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
               </div>
             </div>
-            <div v-if="!chars.length" class="step-empty" style="padding: 28px 16px">
-              <div class="empty-title">尚未提取角色</div>
-              <div class="empty-desc">可 AI 从剧本提取，或手动添加角色后再生成形象。</div>
-              <div class="step-empty-actions">
-                <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
-                <button type="button" class="btn btn-sm" @click="openManualEntity('character')">手动添加角色</button>
+            <div v-if="chars.length && !visualChars.length" class="asset-grid">
+              <div class="card asset-card asset-empty-card is-static">
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">无需生成形象</div>
+                  <div class="asset-meta dim">当前角色均为旁白/画外音，仅保留声音即可</div>
+                </div>
               </div>
             </div>
-            <div v-else-if="!visualChars.length" class="step-empty" style="padding: 28px 16px">
-              <div class="empty-title">无需生成形象</div>
-              <div class="empty-desc">当前角色均为旁白/画外音，仅保留声音即可。</div>
-            </div>
-            <div v-else-if="charSearchKeyword.trim() && !filteredVisualChars.length" class="step-empty" style="padding: 28px 16px">
-              <div class="empty-title">未找到匹配角色</div>
-              <div class="empty-desc">没有名字包含「{{ charSearchKeyword.trim() }}」的角色，请换个关键词试试。</div>
+            <div v-else-if="charSearchKeyword.trim() && !filteredVisualChars.length" class="asset-grid">
+              <div class="card asset-card asset-empty-card is-static">
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">未找到匹配角色</div>
+                  <div class="asset-meta dim">没有名字包含「{{ charSearchKeyword.trim() }}」的角色</div>
+                </div>
+              </div>
             </div>
             <div v-else class="asset-grid">
+              <button
+                v-if="!chars.length"
+                type="button"
+                class="card asset-card asset-empty-card"
+                @click="openManualEntity('character')"
+              >
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">暂无角色卡片</div>
+                  <div class="asset-meta dim">用上方「提取资产」或「添加角色」开始</div>
+                </div>
+              </button>
               <div v-for="c in filteredVisualChars" :key="c.id" class="card asset-card">
                 <div class="asset-cover">
                   <img
@@ -1248,29 +1294,43 @@
               <span class="tag">{{ lockedImageConfigLabel }}</span>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
               <div class="ml-auto flex gap-1">
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="openExtractAssetsModal">提取资产</button>
                 <button class="btn btn-sm" @click="openManualEntity('scene')">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   添加场景
                 </button>
-                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchSceneImages">
+                <button class="btn btn-sm" :disabled="assistantRunning || !scenes.length" @click="batchSceneImages">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   批量生成
                 </button>
               </div>
             </div>
-            <div v-if="!scenes.length" class="step-empty" style="padding: 28px 16px">
-              <div class="empty-title">尚未添加场景</div>
-              <div class="empty-desc">可 AI 从剧本提取，或手动添加场景后再生成场景图。</div>
-              <div class="step-empty-actions">
-                <button type="button" class="btn btn-primary" @click="goSubStep('script:extract')">前往提取</button>
-                <button type="button" class="btn btn-sm" @click="openManualEntity('scene')">手动添加场景</button>
+            <div v-if="sceneSearchKeyword.trim() && scenes.length && !filteredScenes.length" class="asset-grid">
+              <div class="card asset-card asset-empty-card is-static">
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">未找到匹配场景</div>
+                  <div class="asset-meta dim">没有名字包含「{{ sceneSearchKeyword.trim() }}」的场景</div>
+                </div>
               </div>
             </div>
-            <div v-else-if="sceneSearchKeyword.trim() && !filteredScenes.length" class="step-empty" style="padding: 28px 16px">
-              <div class="empty-title">未找到匹配场景</div>
-              <div class="empty-desc">没有名字包含「{{ sceneSearchKeyword.trim() }}」的场景，请换个关键词试试。</div>
-            </div>
             <div v-else class="asset-grid">
+              <button
+                v-if="!scenes.length"
+                type="button"
+                class="card asset-card asset-empty-card"
+                @click="openManualEntity('scene')"
+              >
+                <div class="asset-empty-cover wide">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">暂无场景卡片</div>
+                  <div class="asset-meta dim">用上方「提取资产」或「添加场景」开始</div>
+                </div>
+              </button>
               <div v-for="s in filteredScenes" :key="s.id" class="card asset-card">
                 <div class="asset-cover wide">
                   <img
@@ -1325,7 +1385,7 @@
                   <GenerationTimer v-if="isPendingSceneImage(s.id)" :task-key="sceneTimerKey(s.id)" />
                   <div v-if="s.image_url || s.imageUrl" class="char-transform-row">
                     <span class="char-transform-label">多角度</span>
-                    <span class="dim char-transform-size-hint">基于主视角 · 6积分/张</span>
+                    <span class="dim char-transform-size-hint">基于主视角 · 12积分/张</span>
                     <div class="char-transform-btns">
                       <button
                         v-for="preset in SCENE_ANGLE_PRESETS"
@@ -1414,12 +1474,16 @@
               </div>
             </div>
 
-            <div v-if="!ttsEligibleCount" class="step-empty" style="min-height:260px">
-              <div class="empty-visual">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+            <div v-if="!ttsEligibleCount" class="asset-grid" style="padding:4px 0">
+              <div class="card asset-card asset-empty-card is-static">
+                <div class="asset-empty-cover">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>
+                </div>
+                <div class="asset-body">
+                  <div class="asset-name">暂无配音卡片</div>
+                  <div class="asset-meta dim">在分镜里填写「角色名：台词」后，这里会出现待生成项</div>
+                </div>
               </div>
-              <div class="empty-title">当前没有可生成的配音</div>
-              <div class="empty-desc">先在分镜里填写“角色名：台词”或“旁白：文案”，这里就会出现待生成的语音镜头。</div>
             </div>
 
             <div v-else class="dub-grid">
@@ -1628,6 +1692,7 @@
                 :initial-prompt="getBlockingPromptDraft(selectedSb)"
                 :image-reference-supported="imageReferenceSupported"
                 :character-name="getCharacterName"
+                :director-href="directorDeskHref(selectedSb)"
                 @entry-change="(charId, patch) => onBlockingEntryChange(selectedSb, charId, patch)"
                 @notes-blur="onBlockingNotesBlur(selectedSb, $event)"
                 @generate="genBlocking(selectedSb, $event)"
@@ -1846,7 +1911,7 @@
                   :class="{ active: selectedChengmengVideoModel === model.id }"
                   @click="selectedChengmengVideoModel = model.id"
                 >
-                  {{ model.label }}
+                  {{ toSeedanceDisplayLabel(model.label) }}
                 </button>
               </div>
               <span class="tag">{{ dramaImageAspectLabel }}</span>
@@ -1862,6 +1927,20 @@
               </div>
             </div>
             <div class="prod-grid prod-grid-video-shots" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
+              <button
+                v-if="!sbs.length"
+                type="button"
+                class="card prod-card asset-empty-card"
+                @click="addShot"
+              >
+                <div class="asset-empty-cover wide">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                </div>
+                <div class="prod-info">
+                  <div class="prod-desc">暂无视频镜头卡片</div>
+                  <div class="prod-meta-line">点此或上方「添加镜头」，也可先去分镜生成</div>
+                </div>
+              </button>
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy prod-card-video">
                 <div class="prod-video-preview-shell">
                   <ProdVideoCover
@@ -2113,26 +2192,29 @@
                           <pre v-if="getBlockingVideoPromptSnippet(sb)" class="video-blocking-snippet">{{ getBlockingVideoPromptSnippet(sb) }}</pre>
                           <div class="video-blocking-actions">
                             <button
+                              v-if="storyboardSceneNeedsImage(sb)"
+                              type="button"
+                              class="btn btn-sm"
+                              :disabled="isPendingSceneImage(getStoryboardSceneId(sb))"
+                              @click="genSceneImg(getStoryboardSceneId(sb))"
+                            >
+                              {{ isPendingSceneImage(getStoryboardSceneId(sb)) ? '场景图生成中…' : '生成场景图' }}
+                            </button>
+                            <button
                               type="button"
                               class="btn btn-sm btn-primary"
                               :disabled="blockingGenerateDisabled(sb)"
                               @click="genBlocking(sb)"
                             >
-                              {{ isPendingBlocking(sb.id) ? '生成中…' : (getBlockingImage(sb) ? '重新生成' : '生成站位图') }}
+                              {{ isPendingBlocking(sb.id) ? '生成中…' : (getBlockingImage(sb) ? '重新生成站位图' : '生成站位图') }}
                             </button>
-                            <button
-                              v-if="getBlockingImage(sb)"
-                              type="button"
+                            <NuxtLink
                               class="btn btn-sm"
-                              :disabled="isPendingShotFrame(sb.id, 'first_frame') || !imageReferenceSupported"
-                              @click="genFirstFrameFromBlocking(sb, 'first_frame')"
+                              :to="directorDeskHref(sb)"
+                              target="_blank"
                             >
-                              从站位图生成首帧
-                            </button>
-                            <GenerationTimer
-                              v-if="isPendingShotFrame(sb.id, 'first_frame')"
-                              :task-key="frameTimerKey(sb.id, 'first_frame')"
-                            />
+                              3D 导演台
+                            </NuxtLink>
                             <button
                               v-if="getBlockingVideoPromptSnippet(sb)"
                               type="button"
@@ -2140,13 +2222,6 @@
                               @click="copyBlockingVideoSnippet(sb)"
                             >
                               复制到 video_prompt
-                            </button>
-                            <button
-                              type="button"
-                              class="btn btn-sm"
-                              @click="selectedSb = sb; prodTab = 'shots'"
-                            >
-                              去镜头页配置
                             </button>
                           </div>
                           <span v-if="blockingDisableReason(sb)" class="dim video-blocking-warn">{{ blockingDisableReason(sb) }}</span>
@@ -2178,7 +2253,7 @@
                       <div class="video-ref-head">
                         <span class="prod-prompt-label">
                           多模态参考
-                          <span v-if="isSeedance2VideoActive" class="video-ref-hint">（将传入 Seedance 2.0）</span>
+                          <span v-if="isSeedance2VideoActive" class="video-ref-hint">（将传入 S 2.0）</span>
                         </span>
                         <label class="btn btn-sm video-ref-upload">
                           上传参考图
@@ -2297,13 +2372,22 @@
               <span class="dim" style="font-size:12px">{{ sbs.length }} 个镜头</span>
               <span class="tag mono">{{ composedCount }}/{{ sbs.length }} 已合成</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="assistantRunning" @click="batchCompose">
+                <button class="btn btn-sm" :disabled="assistantRunning || !sbs.length" @click="batchCompose">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
                   批量合成
                 </button>
               </div>
             </div>
             <div class="prod-grid" :class="{ 'prod-grid-portrait': isPortraitDramaAspect }">
+              <div v-if="!sbs.length" class="card prod-card asset-empty-card is-static">
+                <div class="asset-empty-cover wide">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                </div>
+                <div class="prod-info">
+                  <div class="prod-desc">暂无合成卡片</div>
+                  <div class="prod-meta-line">先有镜头视频后再来合成；可从上方 Tab 或左侧任意跳转</div>
+                </div>
+              </div>
               <div v-for="(sb, i) in sbs" :key="sb.id" class="card prod-card prod-card-lazy">
                 <ProdVideoCover
                   v-if="hasComposed(sb) || hasVid(sb)"
@@ -2348,19 +2432,28 @@
             </div>
           </div>
 
-          <!-- Production Navigator -->
-        </template>
       </div>
 
       <!-- ===== EXPORT PANEL ===== -->
       <div v-else class="content-panel">
-        <div v-if="!sbs.length" class="step-empty" style="flex:1">
-          <div class="empty-visual">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div v-if="!sbs.length" class="storyboard-cards-scroll" style="flex:1">
+          <div class="storyboard-cards-head">
+            <div>
+              <div class="shot-list-title">导出</div>
+              <div class="shot-list-sub">有成片镜头后可在此拼接下载</div>
+            </div>
           </div>
-          <div class="empty-title">尚未准备就绪</div>
-          <div class="empty-desc">请先完成分镜和制作流程</div>
-          <button class="btn btn-primary" @click="panel = 'script'">前往剧本</button>
+          <div class="asset-grid">
+            <button type="button" class="card asset-card asset-empty-card" @click="goMainStage('storyboard')">
+              <div class="asset-empty-cover wide">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </div>
+              <div class="asset-body">
+                <div class="asset-name">暂无成片可导出</div>
+                <div class="asset-meta dim">点此前往分镜 / 视频，也可左侧任意环节继续制作</div>
+              </div>
+            </button>
+          </div>
         </div>
         <div v-else class="export-split">
           <div class="export-main">
@@ -2513,6 +2606,117 @@
       </div>
     </main>
 
+    <div v-if="extractAssetsModalOpen" class="overlay" @click.self="extractAssetsModalOpen = false">
+      <div class="card import-script-dialog storyboard-prompt-dialog">
+        <div class="image-viewer-head">
+          <div class="image-viewer-title">确认提取资产</div>
+          <button class="btn btn-ghost btn-icon" @click="extractAssetsModalOpen = false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <p class="dim" style="font-size:12px;margin:0 0 12px">
+          选用已有剧本或粘贴新剧本，确认后才会开始提取角色 / 场景 / 道具（只保存文字描述，不生成图片）。
+        </p>
+        <div class="storyboard-script-source">
+          <button
+            type="button"
+            class="source-chip"
+            :class="{ on: extractScriptSource === 'existing' }"
+            :disabled="!existingEpisodeScript"
+            @click="extractScriptSource = 'existing'"
+          >
+            选用已有剧本
+          </button>
+          <button
+            type="button"
+            class="source-chip"
+            :class="{ on: extractScriptSource === 'paste' }"
+            @click="extractScriptSource = 'paste'"
+          >
+            粘贴新剧本
+          </button>
+        </div>
+        <div v-if="extractScriptSource === 'existing'" class="storyboard-existing-script">
+          <div v-if="existingEpisodeScript" class="storyboard-existing-preview">{{ existingEpisodeScript }}</div>
+          <div v-else class="dim" style="padding:16px;font-size:13px">当前集还没有剧本，请改用「粘贴新剧本」，或先到「整理剧本」里保存。</div>
+        </div>
+        <textarea
+          v-else
+          v-model="extractScriptPaste"
+          class="import-script-textarea"
+          rows="14"
+          placeholder="在此粘贴本集剧本或故事内容…"
+        />
+        <div class="import-script-actions">
+          <button class="btn" @click="extractAssetsModalOpen = false">取消</button>
+          <button
+            class="btn btn-primary"
+            :disabled="assistantRunning || !resolvedExtractScript.trim()"
+            @click="confirmExtractAssets"
+          >
+            <Loader2 v-if="assistantRunning && assistantAgentType === 'extractor'" :size="13" class="animate-spin" />
+            确认提取
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="storyboardPromptModalOpen" class="overlay" @click.self="storyboardPromptModalOpen = false">
+      <div class="card import-script-dialog storyboard-prompt-dialog">
+        <div class="image-viewer-head">
+          <div class="image-viewer-title">生成分镜提示词</div>
+          <button class="btn btn-ghost btn-icon" @click="storyboardPromptModalOpen = false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <p class="dim" style="font-size:12px;margin:0 0 12px">
+          放入本集剧本，或选用资产阶段已保存的剧本，然后提取各镜头的场景/分镜提示词。
+        </p>
+        <div class="storyboard-script-source">
+          <button
+            type="button"
+            class="source-chip"
+            :class="{ on: storyboardScriptSource === 'existing' }"
+            :disabled="!existingEpisodeScript"
+            @click="storyboardScriptSource = 'existing'"
+          >
+            选用已有剧本
+          </button>
+          <button
+            type="button"
+            class="source-chip"
+            :class="{ on: storyboardScriptSource === 'paste' }"
+            @click="storyboardScriptSource = 'paste'"
+          >
+            粘贴新剧本
+          </button>
+        </div>
+        <div v-if="storyboardScriptSource === 'existing'" class="storyboard-existing-script">
+          <div v-if="existingEpisodeScript" class="storyboard-existing-preview">{{ existingEpisodeScript }}</div>
+          <div v-else class="dim" style="padding:16px;font-size:13px">当前集还没有剧本，请改用「粘贴新剧本」，或先到资产里整理剧本。</div>
+        </div>
+        <textarea
+          v-else
+          v-model="storyboardScriptDraft"
+          class="import-script-textarea"
+          rows="14"
+          placeholder="在此粘贴本集剧本或故事内容…"
+        />
+        <div class="import-script-actions">
+          <button class="btn" @click="importModalOpen = true; storyboardPromptModalOpen = false">改用工业脚本导入</button>
+          <button class="btn" @click="storyboardPromptModalOpen = false">取消</button>
+          <button
+            class="btn btn-primary"
+            :disabled="generateLoading || assistantRunning || !resolvedStoryboardScript.trim()"
+            @click="doExtractStoryboardPrompts"
+          >
+            <Loader2 v-if="generateLoading || assistantRunning" :size="13" class="animate-spin" />
+            提取场景提示词
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="importModalOpen" class="overlay" @click.self="importModalOpen = false">
       <div class="card import-script-dialog">
         <div class="image-viewer-head">
@@ -2634,6 +2838,14 @@
     />
     </div>
   </div>
+
+  <EpisodeSetupDialog
+    v-model:open="episodeSetupOpen"
+    :drama-id="dramaId"
+    :title="episodeSetupTitle"
+    :subtitle="episodeSetupSubtitle"
+    @created="onEpisodeCreated"
+  />
 </template>
 
 <script setup>
@@ -2652,6 +2864,8 @@ import VideoPromptEditorModal from '~/components/VideoPromptEditorModal.vue'
 import ProdVideoCover from '~/components/ProdVideoCover.vue'
 import ProdVideoEmptyPreview from '~/components/ProdVideoEmptyPreview.vue'
 import ManualEntityModal from '~/components/ManualEntityModal.vue'
+import EpisodeSetupDialog from '~/components/EpisodeSetupDialog.vue'
+import { dramaWorkbenchPath } from '~/utils/drama-entry.js'
 import StoryboardBlockingPanel from '~/components/StoryboardBlockingPanel.vue'
 import FusionImagePanel from '~/components/FusionImagePanel.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
@@ -2662,6 +2876,7 @@ import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
 import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceAudios, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
 import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, prefetchMediaUrlsInBackground, normalizeMediaPath } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
+import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
 import {
   listCharacterImages,
@@ -2711,8 +2926,6 @@ import {
 import { formatImageGenerationError } from '~/utils/image-generation-error.js'
 import { getCharacterImagePrompt, getSceneImagePrompt as resolveSceneImagePromptText } from '~/utils/image-prompt-templates.js'
 
-definePageMeta({ layout: 'studio' })
-
 const route = useRoute()
 const dramaId = Number(route.params.id)
 const episodeNumber = computed(() => Number(route.params.episodeNumber))
@@ -2722,6 +2935,56 @@ const shotPlans = ref([])
 const clips = ref([])
 const selectedPlan = ref(null)
 const importModalOpen = ref(false)
+const storyboardPromptModalOpen = ref(false)
+const storyboardScriptSource = ref('existing') // existing | paste
+const storyboardScriptDraft = ref('')
+
+const existingEpisodeScript = computed(() =>
+  String(scriptContent.value || rawContent.value || localScript.value || localRaw.value || '').trim(),
+)
+const resolvedStoryboardScript = computed(() =>
+  storyboardScriptSource.value === 'existing'
+    ? existingEpisodeScript.value
+    : String(storyboardScriptDraft.value || '').trim(),
+)
+
+function openStoryboardPromptModal() {
+  storyboardScriptSource.value = existingEpisodeScript.value ? 'existing' : 'paste'
+  if (!storyboardScriptDraft.value && existingEpisodeScript.value) {
+    storyboardScriptDraft.value = existingEpisodeScript.value
+  }
+  storyboardPromptModalOpen.value = true
+}
+
+async function doExtractStoryboardPrompts() {
+  const text = resolvedStoryboardScript.value
+  if (!text) {
+    toast.warning('请先选用或粘贴本集剧本')
+    return
+  }
+  localScript.value = text
+  if (!(localRaw.value || '').trim()) localRaw.value = text
+  episode.value = {
+    ...episode.value,
+    content: localRaw.value,
+    script_content: localScript.value,
+  }
+  try {
+    await episodeAPI.update(epId.value, {
+      content: localRaw.value,
+      script_content: localScript.value,
+    })
+  } catch (e) {
+    toast.error(e.message || '保存剧本失败')
+    return
+  }
+  storyboardPromptModalOpen.value = false
+  if (useShotPlanWorkflow.value || !hasLegacyStoryboards.value) {
+    await doGenerateShotPlansInternal()
+  } else {
+    doBreakdown()
+  }
+}
 const importText = ref('')
 const importLoading = ref(false)
 const generateLoading = ref(false)
@@ -2729,10 +2992,45 @@ const clipMoveLoading = ref(false)
 const panel = ref('script')
 const pageLoading = ref(true)
 const pageError = ref('')
+const episodeSetupOpen = ref(false)
+
+const episodeOptions = computed(() => {
+  const list = drama.value?.episodes || []
+  return list
+    .map((ep) => {
+      const num = Number(ep.episode_number ?? ep.episodeNumber)
+      if (!Number.isFinite(num) || num <= 0) return null
+      const title = String(ep.title || '').trim()
+      return {
+        value: num,
+        label: title ? `第 ${num} 集 · ${title}` : `第 ${num} 集`,
+      }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.value - b.value)
+})
+
+const episodeSetupTitle = computed(() => (
+  (drama.value?.episodes?.length ?? 0) > 0 ? '创建新集' : '创建第一集'
+))
+
+const episodeSetupSubtitle = computed(() => (
+  (drama.value?.episodes?.length ?? 0) > 0
+    ? '为这一集预先锁定图片、视频和音频生成服务。'
+    : '项目还没有集，先创建第一集即可开始制作。'
+))
 
 const localRaw = ref(''), localScript = ref('')
+const extractAssetsModalOpen = ref(false)
+const extractScriptSource = ref('existing') // existing | paste
+const extractScriptPaste = ref('')
 const rawContent = computed(() => episode.value?.content || '')
 const scriptContent = computed(() => episode.value?.script_content || episode.value?.scriptContent || '')
+const resolvedExtractScript = computed(() =>
+  extractScriptSource.value === 'existing'
+    ? existingEpisodeScript.value
+    : String(extractScriptPaste.value || '').trim(),
+)
 const epId = computed(() => episode.value?.id || 0)
 const rawLen = computed(() => localRaw.value.replace(/\s/g, '').length || 0)
 const scriptLen = computed(() => localScript.value.replace(/\s/g, '').length || 0)
@@ -2745,12 +3043,8 @@ const scriptStep = ref(0)
 const prodTab = ref('chars')
 const charSearchKeyword = ref('')
 const sceneSearchKeyword = ref('')
-const productionPanelBlocked = computed(() => {
-  if (['chars', 'scenes', 'fusion'].includes(prodTab.value)) return false
-  if (!scriptContent.value) return true
-  if (useShotPlanWorkflow.value) return !hasProductionClips.value
-  return !sbs.value.length
-})
+/** 不再按环节拦截整页；各 Tab 自行用空卡片占位，用户可任意跳转 */
+const productionPanelBlocked = computed(() => false)
 
 const hasLegacyStoryboards = computed(() =>
   sbs.value.some(sb => {
@@ -2846,6 +3140,36 @@ const genTimer = useGenerationTimer()
 const GRID_TIMER_KEY = 'grid:main'
 
 function blockingTimerKey(id) { return `blocking:${id}` }
+
+function getStoryboardSceneId(sb) {
+  return Number(sb?.scene_id || sb?.sceneId || 0) || 0
+}
+
+function storyboardSceneNeedsImage(sb) {
+  const sceneId = getStoryboardSceneId(sb)
+  if (!sceneId) return false
+  const scene = scenes.value.find(s => s.id === sceneId)
+  if (!scene) return false
+  return !resolveSceneImageForStoryboard(scene, sb)
+}
+
+function directorDeskHref(sb) {
+  if (!sb?.id) return '/director'
+  const params = new URLSearchParams({
+    drama_id: String(dramaId),
+    episode_id: String(epId.value || ''),
+    storyboard_id: String(sb.id),
+  })
+  const sceneId = getStoryboardSceneId(sb)
+  if (sceneId) {
+    const scene = scenes.value.find(s => s.id === sceneId)
+    const img = scene ? resolveSceneImageForStoryboard(scene, sb) : ''
+    if (img) params.set('scene_image', mediaDisplayUrl(img))
+  }
+  const blocking = sb.blocking_image || sb.blockingImage
+  if (blocking) params.set('blocking_image', mediaDisplayUrl(blocking))
+  return `/director?${params.toString()}`
+}
 function frameTimerKey(id, frameType) { return `frame:${id}:${frameType}` }
 function videoTimerKey(id) { return `video:${id}` }
 function charTimerKey(id) { return `char:${id}` }
@@ -3593,7 +3917,7 @@ const lockedVideoConfigLabel = computed(() => {
   if (isChengmengVideoActive.value && selectedChengmengVideoPricing.value?.label) {
     label += ` · ${selectedChengmengVideoPricing.value.label}`
   }
-  return label
+  return toSeedanceDisplayLabel(label)
 })
 const isChengmengVideoActive = computed(() => resolvedVideoConfig.value?.provider === 'chengmeng')
 
@@ -3822,26 +4146,29 @@ function goNextProd() {
 }
 
 // Script step navigation
-const stepLabels = ['原始内容', 'AI 改写', '提取', '音色', '分镜']
+const stepLabels = ['本集原文', '整理剧本', '提取资产', '分配音色', '分镜拆解']
 const prevStepLabel = computed(() => scriptStep.value > 0 ? stepLabels[scriptStep.value - 1] : '')
 const nextStepLabel = computed(() => {
-  if (scriptStep.value === 4) return '进入制作'
+  if (scriptStep.value === 3) return '角色形象'
+  if (scriptStep.value === 4) return '视频生成'
   return stepLabels[scriptStep.value + 1] || ''
 })
-const canGoNext = computed(() => {
-  if (scriptStep.value === 0) return !!localRaw.value.trim()
-  if (scriptStep.value === 1) return !!localScript.value.trim() || !!scriptContent.value
-  if (scriptStep.value === 2) return chars.value.length > 0
-  if (scriptStep.value === 3) return charsVoiced.value > 0
-  if (scriptStep.value === 4) return sbs.value.length > 0
-  return false
-})
+const canGoNext = computed(() => true)
 function goPrevStep() { if (scriptStep.value > 0) scriptStep.value-- }
 function goNextStep() {
   if (scriptStep.value === 0 && localRaw.value.trim()) { saveRaw() }
   if (scriptStep.value === 1 && localScript.value.trim()) { saveScr() }
-  if (scriptStep.value === 4) { panel.value = 'production'; return }
-  if (canGoNext.value) scriptStep.value++
+  if (scriptStep.value === 3) {
+    panel.value = 'production'
+    prodTab.value = 'chars'
+    return
+  }
+  if (scriptStep.value === 4) {
+    panel.value = 'production'
+    prodTab.value = 'videos'
+    return
+  }
+  scriptStep.value++
 }
 
 function gridSelectAll() {
@@ -4145,65 +4472,27 @@ const prodTabDefs = computed(() => [
   { id: 'scenes', label: '场景图片', icon: MapPin, badge: sceneImgCount.value ? `${sceneImgCount.value}/${scenes.value.length}` : '' },
   { id: 'fusion', label: '融合生图', icon: Sparkles, badge: '' },
   { id: 'dubbing', label: '配音生成', icon: Mic2, badge: '' },
-  { id: 'shots', label: '镜头图片', icon: ImageIcon, badge: shotImgCount.value ? `${shotImgCount.value}/${sbs.value.length}` : '' },
   { id: 'videos', label: '视频生成', icon: Video, badge: shotVidCount.value ? `${shotVidCount.value}/${sbs.value.length}` : '' },
   { id: 'compose', label: '视频合成', icon: Layers, badge: composedCount.value ? `${composedCount.value}/${sbs.value.length}` : '' },
 ])
 
 const mainStageDefs = [
-  { id: 'script', label: '剧本', desc: '内容改写与整理', icon: FileText },
-  { id: 'assets', label: '资产', desc: '角色、场景与音色', icon: FolderKanban },
-  { id: 'storyboard', label: '分镜', desc: '镜头制作与合成', icon: Clapperboard },
+  { id: 'assets', label: '资产', desc: '剧本提取 · 角色场景图', icon: FolderKanban },
+  { id: 'storyboard', label: '分镜', desc: '拆解镜头 · 生成视频', icon: Clapperboard },
   { id: 'export', label: '导出', desc: '拼接与成片输出', icon: Download },
 ]
-
-const sidebarSections = computed(() => ([
-  {
-    id: 'script',
-    label: '剧本',
-    items: [
-      { key: 'script:raw', label: '原始内容', desc: '', icon: FileText, done: !!rawContent.value },
-      { key: 'script:rewrite', label: 'AI 改写', desc: '', icon: FileText, done: !!scriptContent.value },
-      { key: 'script:extract', label: '提取', desc: '', icon: Users, done: !!chars.value.length },
-      { key: 'script:voice', label: '音色', desc: '', icon: Mic2, done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'script:storyboard', label: '分镜', desc: '', icon: Clapperboard, done: !!sbs.value.length },
-    ],
-  },
-  {
-    id: 'production',
-    label: '制作',
-    items: [
-      { key: 'prod:chars', label: '角色形象', desc: '', icon: Users, done: prodStepDone('chars') },
-      { key: 'prod:voices', label: '音色库', desc: '', icon: Music, done: voiceAssets.value.length > 0 },
-      { key: 'prod:scenes', label: '场景图片', desc: '', icon: MapPin, done: prodStepDone('scenes') },
-      { key: 'prod:fusion', label: '融合生图', desc: '', icon: Sparkles, done: false },
-      { key: 'prod:dubbing', label: '配音生成', desc: '', icon: Mic2, done: prodStepDone('dubbing') },
-      { key: 'prod:shots', label: '镜头图片', desc: '', icon: ImageIcon, done: prodStepDone('shots') },
-      { key: 'prod:videos', label: '视频生成', desc: '', icon: Video, done: prodStepDone('videos') },
-      { key: 'prod:compose', label: '视频合成', desc: '', icon: Layers, done: prodStepDone('compose') },
-    ],
-  },
-  {
-    id: 'export',
-    label: '导出',
-    items: [
-      { key: 'export:merge', label: '拼接导出', desc: '', icon: Download, done: !!mergeUrl.value },
-    ],
-  },
-]))
 
 const activeMainStage = computed(() => {
   if (panel.value === 'export') return 'export'
   if (panel.value === 'production') {
     return ['chars', 'scenes', 'fusion', 'voices'].includes(prodTab.value) ? 'assets' : 'storyboard'
   }
-  if (scriptStep.value <= 1) return 'script'
+  // 原文/整理/提取/音色 都归属「资产」；分镜拆解归属「分镜」
   if (scriptStep.value <= 3) return 'assets'
   return 'storyboard'
 })
 
 function mainStageDone(stageId) {
-  if (stageId === 'script') return !!scriptContent.value
   if (stageId === 'assets') {
     const charsReady = !!chars.value.length && charsVoiced.value === chars.value.length
     const charImagesReady = prodStepDone('chars')
@@ -4214,7 +4503,6 @@ function mainStageDone(stageId) {
     if (!sbs.value.length) return false
     const ttsReady = !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value
     return ttsReady
-      && shotImgCount.value === sbs.value.length
       && shotVidCount.value === sbs.value.length
       && composedCount.value === sbs.value.length
   }
@@ -4223,27 +4511,16 @@ function mainStageDone(stageId) {
 }
 
 function goMainStage(stageId) {
-  if (stageId === 'script') {
-    panel.value = 'script'
-    scriptStep.value = Math.min(scriptStep.value, 1)
-    return
-  }
+  // 兼容旧入口：原「剧本」主阶段并入资产。各环节可自由进入，不强制先后顺序。
+  if (stageId === 'script') stageId = 'assets'
   if (stageId === 'assets') {
-    const hasAssetWorkspace = !!visualCharTotal.value || !!scenes.value.length
-    const hasPendingAssetGeneration = (visualCharTotal.value && charImgCount.value < visualCharTotal.value)
-      || (scenes.value.length && sceneImgCount.value < scenes.value.length)
-    if (panel.value === 'production' || hasPendingAssetGeneration || hasAssetWorkspace) {
-      panel.value = 'production'
-      prodTab.value = ['chars', 'scenes', 'fusion'].includes(prodTab.value) ? prodTab.value : 'chars'
-      return
-    }
-    panel.value = 'script'
-    scriptStep.value = chars.value.length ? 3 : 2
+    panel.value = 'production'
+    prodTab.value = ['chars', 'scenes', 'fusion', 'voices'].includes(prodTab.value) ? prodTab.value : 'chars'
     return
   }
   if (stageId === 'storyboard') {
-    if (panel.value === 'production') {
-      prodTab.value = ['dubbing', 'shots', 'videos', 'compose'].includes(prodTab.value) ? prodTab.value : 'dubbing'
+    if (panel.value === 'production' && ['dubbing', 'videos', 'compose', 'shots'].includes(prodTab.value)) {
+      prodTab.value = prodTab.value === 'shots' ? 'videos' : prodTab.value
       return
     }
     panel.value = 'script'
@@ -4254,43 +4531,41 @@ function goMainStage(stageId) {
 }
 
 const activeSubSteps = computed(() => {
-  if (activeMainStage.value === 'script') {
-    return [
-      { key: 'script:raw', label: '原始内容', done: !!rawContent.value },
-      { key: 'script:rewrite', label: 'AI 改写', done: !!scriptContent.value },
-    ]
-  }
   if (activeMainStage.value === 'assets') {
     return [
-      { key: 'script:extract', label: '提取角色场景', done: !!chars.value.length },
-      { key: 'script:voice', label: '分配音色', done: !!chars.value.length && charsVoiced.value === chars.value.length },
-      { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
-      { key: 'prod:voices', label: '音色库', done: voiceAssets.value.length > 0 },
-      { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
-      { key: 'prod:fusion', label: '融合生图', done: false },
+      { key: 'script:raw', label: '本集原文', icon: FileText, done: !!rawContent.value },
+      { key: 'script:rewrite', label: '整理剧本', icon: FileText, done: !!scriptContent.value },
+      { key: 'script:extract', label: '提取资产', icon: Users, done: !!chars.value.length || !!scenes.value.length || !!dramaProps.value.length },
+      { key: 'script:voice', label: '分配音色', icon: Mic2, done: !!chars.value.length && charsVoiced.value === chars.value.length },
+      { key: 'prod:chars', label: '角色形象', icon: Users, done: prodStepDone('chars') },
+      { key: 'prod:voices', label: '音色库', icon: Music, done: voiceAssets.value.length > 0 },
+      { key: 'prod:scenes', label: '场景图片', icon: MapPin, done: prodStepDone('scenes') },
+      { key: 'prod:fusion', label: '融合生图', icon: Sparkles, done: false },
     ]
   }
   if (activeMainStage.value === 'storyboard') {
-    const assetSteps = chars.value.length
-      ? [
-          { key: 'prod:chars', label: '角色形象', done: prodStepDone('chars') },
-          { key: 'prod:voices', label: '音色库', done: voiceAssets.value.length > 0 },
-          { key: 'prod:scenes', label: '场景图片', done: prodStepDone('scenes') },
-          { key: 'prod:fusion', label: '融合生图', done: false },
-        ]
-      : []
     return [
-      { key: 'script:storyboard', label: '分镜拆解', done: !!sbs.value.length },
-      ...assetSteps,
-      { key: 'prod:dubbing', label: '配音生成', done: !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value },
-      { key: 'prod:shots', label: '镜头图片', done: !!sbs.value.length && shotImgCount.value === sbs.value.length },
-      { key: 'prod:videos', label: '视频生成', done: !!sbs.value.length && shotVidCount.value === sbs.value.length },
-      { key: 'prod:compose', label: '视频合成', done: !!sbs.value.length && composedCount.value === sbs.value.length },
+      { key: 'script:storyboard', label: '分镜拆解', icon: Clapperboard, done: !!sbs.value.length },
+      { key: 'prod:dubbing', label: '配音生成', icon: Mic2, done: !ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value },
+      { key: 'prod:videos', label: '视频生成', icon: Video, done: !!sbs.value.length && shotVidCount.value === sbs.value.length },
+      { key: 'prod:compose', label: '视频合成', icon: Layers, done: !!sbs.value.length && composedCount.value === sbs.value.length },
     ]
   }
   return [
-    { key: 'export:merge', label: '拼接导出', done: !!mergeUrl.value },
+    { key: 'export:merge', label: '拼接导出', icon: Download, done: !!mergeUrl.value },
   ]
+})
+
+const visibleProdTabs = computed(() => {
+  const assetIds = ['chars', 'voices', 'scenes', 'fusion']
+  const storyIds = ['dubbing', 'videos', 'compose']
+  if (activeMainStage.value === 'assets') {
+    return prodTabDefs.value.filter(tab => assetIds.includes(tab.id))
+  }
+  if (activeMainStage.value === 'storyboard') {
+    return prodTabDefs.value.filter(tab => storyIds.includes(tab.id))
+  }
+  return []
 })
 
 const activeSubStepKey = computed(() => {
@@ -4305,10 +4580,7 @@ const activeSubStepKey = computed(() => {
   return 'export:merge'
 })
 
-const sidebarJumpSteps = computed(() => {
-  const section = sidebarSections.value.find((item) => item.items.some(step => step.key === activeSubStepKey.value))
-  return section?.items || []
-})
+const sidebarJumpSteps = computed(() => activeSubSteps.value)
 
 const bubbleSteps = computed(() => {
   if (panel.value === 'script') {
@@ -4351,7 +4623,9 @@ function goSubStep(key) {
     scriptStep.value = stepMap[key] ?? 0
   } else if (key.startsWith('prod:')) {
     panel.value = 'production'
-    prodTab.value = key.replace('prod:', '')
+    const tab = key.replace('prod:', '')
+    // 镜头图不再作为独立环节；旧入口落到生视频
+    prodTab.value = tab === 'shots' ? 'videos' : tab
   } else {
     panel.value = 'export'
   }
@@ -4361,25 +4635,31 @@ function goSubStep(key) {
   })
 }
 
+const pipelineTotal = 9
 const pipelineProgress = computed(() => {
   let p = 0
-  if (rawContent.value) p++
-  if (scriptContent.value) p++
+  if (rawContent.value || scriptContent.value) p++
   if (chars.value.length) p++
   if (charsVoiced.value) p++
+  if (charImgCount.value && visualCharTotal.value && charImgCount.value === visualCharTotal.value) p++
+  if (sceneImgCount.value && scenes.value.length && sceneImgCount.value === scenes.value.length) p++
   if (sbs.value.length) p++
   if (sbs.value.length && (!ttsEligibleCount.value || ttsGeneratedCount.value === ttsEligibleCount.value)) p++
-  if (sbs.value.some(s => s.composed_image || s.composedImage)) p++
   if (sbs.value.some(s => s.video_url || s.videoUrl)) p++
-  if (sbs.value.length && composedCount.value === sbs.value.length) p++
-  if (mergeUrl.value) p++
+  if (mergeUrl.value || (sbs.value.length && composedCount.value === sbs.value.length)) p++
   return p
 })
 
 const currentStageLabel = computed(() => {
-  if (panel.value === 'script') return `剧本阶段 · ${stepLabels[scriptStep.value]}`
-  if (panel.value === 'production') return `制作阶段 · ${prodTabDefs.value[prodTabIdx.value]?.label || '制作'}`
-  return mergeUrl.value ? '导出阶段 · 成片已生成' : '导出阶段 · 等待拼接'
+  if (panel.value === 'script') {
+    const stage = scriptStep.value <= 3 ? '资产' : '分镜'
+    return `${stage} · ${stepLabels[scriptStep.value]}`
+  }
+  if (panel.value === 'production') {
+    const stage = ['chars', 'scenes', 'fusion', 'voices'].includes(prodTab.value) ? '资产' : '分镜'
+    return `${stage} · ${prodTabDefs.value[prodTabIdx.value]?.label || '制作'}`
+  }
+  return mergeUrl.value ? '导出 · 成片已生成' : '导出 · 等待拼接'
 })
 
 const currentMainStageLabel = computed(() => {
@@ -4476,7 +4756,7 @@ function onAssistantNavigate(att) {
   panel.value = 'production'
   if (att.kind === 'shot_video') prodTab.value = 'videos'
   else if (att.kind === 'shot_compose') prodTab.value = 'compose'
-  else prodTab.value = 'shots'
+  else prodTab.value = 'videos'
 }
 
 const assistantContext = computed(() => ({
@@ -4708,8 +4988,8 @@ const scriptSteps = computed(() => {
   const hasVoice = charsVoiced.value > 0 && hasChars
   const hasPlans = shotPlans.value.length > 0 || sbs.value.length > 0
   return [
-    { label: '原始内容', state: rawContent.value ? 'done' : 'active', spinning: false },
-    { label: 'AI 改写', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'script_rewriter' },
+    { label: '本集原文', state: rawContent.value ? 'done' : 'active', spinning: false },
+    { label: '整理剧本', state: hasScript ? 'done' : (rawContent.value ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'script_rewriter' },
     { label: '提取', state: hasChars ? 'done' : (hasScript ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'extractor' },
     { label: '音色', state: hasVoice ? 'done' : (hasChars ? 'active' : ''), spinning: assistantRunning.value && assistantAgentType.value === 'voice_assigner' },
     { label: '分镜', state: hasPlans ? 'done' : (hasVoice ? 'active' : ''), spinning: (assistantRunning.value && (assistantAgentType.value === 'storyboard_breaker' || assistantAgentType.value === 'shot_plan_generator')) || generateLoading.value },
@@ -4727,19 +5007,32 @@ async function refresh(options = {}) {
   const preservedProdTab = prodTab.value
   const preservedScriptStep = scriptStep.value
   try {
-    drama.value = await dramaAPI.get(dramaId)
+    drama.value = await dramaAPI.get(dramaId, { workbench: true })
     const ep = drama.value.episodes?.find(e => Number(e.episode_number ?? e.episodeNumber) === episodeNumber.value)
     if (!ep) {
-      pageError.value = `未找到第 ${episodeNumber.value} 集`
-      drama.value = null
+      episode.value = null
+      if (!(drama.value.episodes?.length)) {
+        pageError.value = ''
+        episodeSetupOpen.value = true
+      } else {
+        pageError.value = `未找到第 ${episodeNumber.value} 集`
+      }
       return
     }
+    pageError.value = ''
     episode.value = ep
-    try { chars.value = await episodeAPI.characters(ep.id) } catch { chars.value = [] }
-    try { scenes.value = await episodeAPI.scenes(ep.id) } catch { scenes.value = [] }
-    sbs.value = await episodeAPI.storyboards(ep.id)
-    try { shotPlans.value = await episodeAPI.shotPlans(ep.id) } catch { shotPlans.value = [] }
-    try { clips.value = await episodeAPI.clips(ep.id) } catch { clips.value = [] }
+    const [charsRes, scenesRes, sbsRes, plansRes, clipsRes] = await Promise.all([
+      episodeAPI.characters(ep.id).catch(() => []),
+      episodeAPI.scenes(ep.id).catch(() => []),
+      episodeAPI.storyboards(ep.id),
+      episodeAPI.shotPlans(ep.id).catch(() => []),
+      episodeAPI.clips(ep.id).catch(() => []),
+    ])
+    chars.value = charsRes || []
+    scenes.value = scenesRes || []
+    sbs.value = sbsRes || []
+    shotPlans.value = plansRes || []
+    clips.value = clipsRes || []
     if (shotPlans.value.length) {
       selectedPlan.value = selectedPlan.value?.id
         ? (shotPlans.value.find(p => p.id === selectedPlan.value.id) || shotPlans.value[0])
@@ -4764,7 +5057,7 @@ async function refresh(options = {}) {
 
     if (preservedPanel === 'production') {
       panel.value = preservedPanel
-      prodTab.value = preservedProdTab
+      prodTab.value = preservedProdTab === 'shots' ? 'videos' : preservedProdTab
     } else if (preservedPanel === 'export') {
       panel.value = 'export'
     } else {
@@ -4812,7 +5105,42 @@ function skipRewrite() {
   toast.success('已跳过 AI 改写，当前将直接使用原始内容')
   scriptStep.value = 2
 }
-function doExtract() { saveScr(); sendAssistant('请从当前集剧本中提取本集出现的角色和场景，提取时自动与项目已有数据进行去重合并', refresh) }
+function openExtractAssetsModal() {
+  extractScriptSource.value = existingEpisodeScript.value ? 'existing' : 'paste'
+  if (!extractScriptPaste.value && existingEpisodeScript.value) {
+    extractScriptPaste.value = existingEpisodeScript.value
+  }
+  extractAssetsModalOpen.value = true
+}
+
+async function confirmExtractAssets() {
+  const text = resolvedExtractScript.value
+  if (!text) {
+    toast.warning('请先选用或粘贴本集剧本')
+    return
+  }
+  localScript.value = text
+  if (!(localRaw.value || '').trim()) localRaw.value = text
+  episode.value = {
+    ...episode.value,
+    content: localRaw.value,
+    script_content: localScript.value,
+  }
+  try {
+    await episodeAPI.update(epId.value, {
+      content: localRaw.value,
+      script_content: localScript.value,
+    })
+  } catch (e) {
+    toast.error(e.message || '保存剧本失败')
+    return
+  }
+  extractAssetsModalOpen.value = false
+  sendAssistant(
+    '请从当前集剧本中提取本集需要的角色、场景、道具文字描述，与项目已有数据去重合并后保存。只保存文字描述，不要生成图片。',
+    refresh,
+  )
+}
 function doVoice() { sendAssistant('请为当前集关联的所有角色分配合适的音色', refresh) }
 async function batchGenSamples() {
   const pending = chars.value.filter(c => (c.voice_style || c.voiceStyle) && !(c.voice_sample_url || c.voiceSampleUrl))
@@ -4849,9 +5177,15 @@ function planStatusLabel(plan) {
 }
 
 async function doGenerateShotPlansInternal() {
-  if (!scriptContent.value) {
-    toast.warning('请先完成剧本编写')
+  const script = String(scriptContent.value || localScript.value || rawContent.value || localRaw.value || '').trim()
+  if (!script) {
+    toast.warning('请先放入本集剧本')
+    openStoryboardPromptModal()
     return
+  }
+  if (!(scriptContent.value || '').trim()) {
+    localScript.value = script
+    saveScr()
   }
   generateLoading.value = true
   try {
@@ -6419,6 +6753,29 @@ async function loadVoices() {
 }
 
 watch([lockedAudioConfigId, audioConfigs], () => { loadVoices() }, { deep: true })
+
+function onEpisodeSelect(event) {
+  const num = Number(event.target.value)
+  if (!Number.isFinite(num) || num <= 0 || num === episodeNumber.value) return
+  navigateTo(`/drama/${dramaId}/episode/${num}`)
+}
+
+async function onEpisodeCreated(created) {
+  drama.value = await dramaAPI.get(dramaId)
+  const num = Number(created?.episode_number ?? created?.episodeNumber)
+  if (Number.isFinite(num) && num > 0) {
+    await navigateTo(`/drama/${dramaId}/episode/${num}`, { replace: true })
+    return
+  }
+  const fallback = dramaWorkbenchPath(dramaId, drama.value?.episodes)
+  if (fallback) await navigateTo(fallback, { replace: true })
+  else await refresh()
+}
+
+watch([() => route.query.setup, () => drama.value?.episodes?.length], ([setup, count]) => {
+  if (setup === '1' && count === 0) episodeSetupOpen.value = true
+})
+
 onMounted(() => {
   if (typeof localStorage !== 'undefined') {
     const saved = localStorage.getItem(CHENGMENG_VIDEO_MODEL_STORAGE_KEY)
@@ -6442,7 +6799,9 @@ watch(() => route.params.episodeNumber, () => {
 
 <style scoped>
 .studio-loading {
-  min-height: 100vh;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -6462,7 +6821,9 @@ watch(() => route.params.episodeNumber, () => {
 .studio {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
   padding: 14px;
   gap: 12px;
@@ -6588,6 +6949,22 @@ watch(() => route.params.episodeNumber, () => {
   font-weight: 700;
 }
 
+.studio-episode-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.studio-episode-select {
+  min-width: 148px;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .studio-meta-row {
   display: flex;
   align-items: center;
@@ -6690,13 +7067,13 @@ watch(() => route.params.episodeNumber, () => {
 
 .studio-body {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) minmax(0, 320px);
+  grid-template-columns: 220px minmax(0, 1fr) minmax(0, 320px);
   gap: 10px;
   min-height: 0;
   flex: 1;
 }
 .studio-body.assistant-collapsed {
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
 }
 
 /* ===== Sidebar ===== */
@@ -6747,12 +7124,25 @@ watch(() => route.params.episodeNumber, () => {
   box-shadow: 0 8px 18px rgba(19, 33, 56, 0.045);
 }
 .pipe-item.done { color: var(--accent-text); }
+.pipe-item-main {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  padding: 10px 12px;
+  min-height: 48px;
+}
+.pipe-item-main .pipe-label {
+  font-size: 15px;
+}
+.pipe-section-sub {
+  padding-top: 4px;
+  border-top: 1px solid rgba(27, 41, 64, 0.06);
+}
 .pipe-item-sub {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  padding: 9px 12px;
+  padding: 8px 12px;
   position: relative;
-  min-height: 46px;
+  min-height: 40px;
 }
 
 .pipe-item-sub:not(:last-child)::after {
@@ -6978,12 +7368,37 @@ watch(() => route.params.episodeNumber, () => {
 .bubble-dot.current { background: var(--accent-dark); transform: scale(1.2); box-shadow: 0 0 0 2px rgba(76, 125, 255, 0.14); }
 
 /* Extract grid */
+.extract-assets-editor { display: flex; flex-direction: column; min-height: 0; }
+.extract-assets-layout {
+  flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px;
+  display: grid; grid-template-columns: minmax(320px, 1fr) minmax(360px, 1.1fr); gap: 12px;
+}
+.extract-assets-layout-results {
+  grid-template-columns: minmax(0, 1fr);
+}
+.extract-script-panel {
+  display: flex; flex-direction: column; gap: 10px; min-height: 0; padding: 14px;
+}
+.extract-script-head { display: flex; flex-direction: column; gap: 4px; }
+.extract-script-head strong { font-size: 0.95rem; }
+.extract-script-textarea {
+  flex: 1; min-height: 220px; resize: none; width: 100%;
+  border-radius: 10px; border: 1px solid rgba(255,255,255,.1);
+  background: rgba(0,0,0,.2); color: inherit; padding: 12px; font: inherit; line-height: 1.55;
+}
+.extract-script-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.extract-script-hint { font-size: 0.75rem; }
+.extract-results-panel {
+  min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px;
+}
+.extract-loading { flex: 1; display: grid; place-content: center; gap: 10px; }
+.extract-empty-card { padding: 28px 16px; text-align: center; }
 .extract-stage { flex: 1; min-height: 0; overflow: hidden; padding: 12px 16px; display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
-.extract-summary { padding: 16px; display: flex; flex-direction: column; gap: 14px; align-self: stretch; position: sticky; top: 0; max-height: 100%; }
+.extract-summary { padding: 16px; display: flex; flex-direction: column; gap: 14px; align-self: stretch; }
 .extract-summary-kicker { font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); }
 .extract-summary-title { font-size: 20px; line-height: 1.05; font-family: var(--font-display); color: var(--text-0); }
 .extract-summary-desc { font-size: 12px; color: var(--text-2); line-height: 1.7; }
-.extract-summary-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.extract-summary-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .extract-summary-stat { padding: 10px 12px; border-radius: 14px; background: rgba(19, 51, 121, 0.05); border: 1px solid rgba(19, 51, 121, 0.08); display: flex; flex-direction: column; gap: 4px; }
 .extract-summary-stat span { font-size: 10px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.08em; }
 .extract-summary-stat strong { font-size: 18px; color: var(--text-0); font-family: var(--font-display); }
@@ -7126,6 +7541,154 @@ watch(() => route.params.episodeNumber, () => {
   gap: 10px;
   padding: 16px;
 }
+.storyboard-prompt-dialog { width: min(760px, 94vw); }
+.storyboard-script-source { display: flex; gap: 8px; flex-wrap: wrap; }
+.source-chip {
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.source-chip.on {
+  border-color: var(--accent);
+  background: var(--accent-glow, rgba(59, 130, 246, 0.12));
+  color: var(--accent);
+  font-weight: 600;
+}
+.source-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+.storyboard-existing-script {
+  min-height: 280px;
+  max-height: 42vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-1);
+}
+.storyboard-existing-preview {
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--text-1);
+  font-family: var(--font-mono);
+}
+.storyboard-workspace { position: relative; }
+.storyboard-cards-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.storyboard-cards-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 24px;
+}
+.storyboard-cards-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.storyboard-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.storyboard-clip-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.storyboard-shot-card {
+  cursor: pointer;
+  border: 1px solid rgba(27, 41, 64, 0.08);
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,251,255,0.86));
+  text-align: left;
+  padding: 0;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.storyboard-shot-card:hover {
+  border-color: rgba(76, 125, 255, 0.28);
+  box-shadow: 0 12px 24px rgba(20, 32, 54, 0.07);
+}
+.storyboard-shot-card.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow, rgba(76, 125, 255, 0.18));
+}
+.storyboard-shot-card-cover {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background:
+    linear-gradient(145deg, rgba(219, 234, 254, 0.85), rgba(241, 245, 249, 0.95)),
+    var(--bg-2);
+}
+.storyboard-shot-card-duration {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: rgba(255,255,255,0.82);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.storyboard-empty-card {
+  min-height: 210px;
+  border-style: dashed;
+  background: rgba(248, 250, 252, 0.92);
+}
+.storyboard-empty-card.is-static { cursor: default; }
+.storyboard-empty-card.is-static:hover {
+  border-color: rgba(27, 41, 64, 0.08);
+  box-shadow: none;
+  transform: none;
+}
+.storyboard-empty-card-cover {
+  aspect-ratio: 16 / 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  background: rgba(226, 232, 240, 0.45);
+}
+.storyboard-empty-card-cover.is-sm { aspect-ratio: 16 / 7; }
+.storyboard-card-dialogue {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.storyboard-selected-detail {
+  margin-top: 14px;
+  padding: 14px 16px;
+}
+.storyboard-workspace-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--bg-0) 78%, transparent);
+  backdrop-filter: blur(4px);
+  font-size: 13px;
+  color: var(--text-1);
+}
+.shot-list-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+}
 .import-script-textarea {
   width: 100%;
   min-height: 320px;
@@ -7139,7 +7702,7 @@ watch(() => route.params.episodeNumber, () => {
   background: var(--bg-1);
   color: var(--text-0);
 }
-.import-script-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.import-script-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .shot-item {
   position: relative; padding: 10px 11px; cursor: pointer;
   border: 1px solid transparent; border-left: 3px solid transparent;
@@ -7399,6 +7962,25 @@ watch(() => route.params.episodeNumber, () => {
   transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), border-color 0.18s var(--ease-out);
 }
 .asset-card:hover { transform: translateY(-2px); box-shadow: 0 16px 30px rgba(20, 32, 54, 0.08); }
+.asset-empty-card {
+  text-align: left;
+  padding: 0;
+  border: 1px dashed rgba(27, 41, 64, 0.16);
+  background: rgba(248, 250, 252, 0.92);
+  cursor: pointer;
+  min-height: 200px;
+}
+.asset-empty-card.is-static { cursor: default; }
+.asset-empty-card.is-static:hover { transform: none; box-shadow: none; }
+.asset-empty-cover {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  background: rgba(226, 232, 240, 0.45);
+}
+.asset-empty-cover.wide { aspect-ratio: 16 / 9; }
 .asset-card .asset-body :deep(.char-media-strip-root) { margin-top: 6px; }
 .asset-cover { position: relative; aspect-ratio: 1; background: var(--bg-2); overflow: hidden; }
 .asset-cover.wide { aspect-ratio: 16/9; }
@@ -9094,6 +9676,11 @@ watch(() => route.params.episodeNumber, () => {
 
   .extract-stage {
     grid-template-columns: 1fr;
+  }
+
+  .extract-assets-layout {
+    grid-template-columns: 1fr;
+    overflow: auto;
   }
 
   .extract-summary {

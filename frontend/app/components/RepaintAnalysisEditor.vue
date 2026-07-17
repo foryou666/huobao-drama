@@ -4,6 +4,11 @@
       <p v-for="(warn, idx) in analysis.warnings" :key="idx">{{ warn }}</p>
     </div>
 
+    <div v-if="analysis.video_summary" class="repaint-video-summary card">
+      <strong>整片理解</strong>
+      <p>{{ analysis.video_summary }}</p>
+    </div>
+
     <div v-if="analysis.shots?.length" class="repaint-timeline-wrap">
       <div class="repaint-timeline-label">镜头时间轴（{{ analysis.shots.length }} 段）</div>
       <div class="repaint-timeline" role="list">
@@ -177,6 +182,17 @@ function addProp() {
 
 .repaint-warnings p {
   margin: 0 0 4px;
+}
+
+.repaint-video-summary {
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.repaint-video-summary p {
+  margin: 8px 0 0;
+  color: var(--text-1);
 }
 
 .repaint-timeline-label {

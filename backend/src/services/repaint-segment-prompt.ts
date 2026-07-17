@@ -167,10 +167,36 @@ Shot K (MM:SS - MM:SS)
 • Dialogue: 台词原文（ASR 为准，不改写）；无对白写 Silence.；画外音标注 (O.S.)
 
 3. 若输入含【视觉分析】，必须优先采用其景别/角度/运镜/调度描述，仅做润色整合，禁止推翻
-4. 风格：Western cinematic realistic，自然光/电影感；保持对白节奏，不做像素级复刻
-5. 台词必须与输入 ASR 一致，禁止编造新对白
-6. 角色名使用中文原名；可参考【参考图映射】中的图片编号约束外观
-7. 全段总字数控制在 1200 字以内（含英文术语）`
+4. 风格：Western cinematic realistic，自然光/电影感；尽可能匹配原镜头构图、站位、景别与运镜
+5. 若含原片关键帧参考（图片1），构图与人物站位必须与参考帧高度一致
+6. 台词必须与输入 ASR 一致，禁止编造新对白
+7. 角色名使用中文原名；可参考【参考图映射】中的图片编号约束外观
+8. 全段总字数控制在 1200 字以内（含英文术语）`
+
+export interface SegmentPromptOptions {
+  fidelityMode?: boolean
+  sourceShotDuration?: number
+  shotCount?: number
+}
+
+function fidelityStyleLine(options?: SegmentPromptOptions, genDurationSec?: number) {
+  if (!options?.fidelityMode) {
+    return 'Western cinematic realistic short drama. Maintain dialogue rhythm, not pixel-level match.'
+  }
+  const parts = [
+    'Western cinematic realistic short drama.',
+    '【精确还原】尽可能匹配原镜头构图、人物左右站位、前后景关系、景别、运镜与道具位置。',
+    '图片1为原片关键帧时，构图与站位必须高度一致；其余参考图约束角色/场景外观。',
+  ]
+  if ((options.shotCount || 1) > 1) {
+    parts.push(`本段包含 ${options.shotCount} 个镜头，按时间轴顺序依次还原，切镜点与原片对齐。`)
+  }
+  const src = options.sourceShotDuration
+  if (src && genDurationSec && genDurationSec > src + 0.05) {
+    parts.push(`原片段约 ${src}s，本段生成 ${genDurationSec}s，动作节奏按原镜收敛，避免多余运镜。`)
+  }
+  return parts.join(' ')
+}
 
 async function callTextCompletion(system: string, user: string): Promise<string> {
   const config = getTextConfig()
@@ -222,9 +248,11 @@ function buildPromptBodyFromVisuals(
   analysis: RepaintAnalysis,
   packed: PackedSegment,
   segmentIndex: number,
-): string | null {
+  options?: SegmentPromptOptions,
+) {
+  const genDur = roundSec(Math.max(0.1, packed.end_sec - packed.start_sec))
   const blocks: string[] = [segmentPartTitle(analysis, packed, segmentIndex)]
-  blocks.push('Western cinematic realistic short drama. Maintain dialogue rhythm, not pixel-level match.')
+  blocks.push(fidelityStyleLine(options, genDur))
   blocks.push('')
 
   for (let idx = 0; idx < packed.shot_ids.length; idx++) {
@@ -249,12 +277,14 @@ function buildFallbackSegmentPrompt(
   analysis: RepaintAnalysis,
   packed: PackedSegment,
   segmentIndex: number,
+  options?: SegmentPromptOptions,
 ) {
-  const fromVisuals = buildPromptBodyFromVisuals(analysis, packed, segmentIndex)
+  const genDur = roundSec(Math.max(0.1, packed.end_sec - packed.start_sec))
+  const fromVisuals = buildPromptBodyFromVisuals(analysis, packed, segmentIndex, options)
   if (fromVisuals) return fromVisuals
 
   const lines: string[] = [segmentPartTitle(analysis, packed, segmentIndex)]
-  lines.push('Western cinematic realistic short drama. Maintain dialogue rhythm, not pixel-level match.')
+  lines.push(fidelityStyleLine(options, genDur))
   lines.push('')
 
   packed.shot_ids.forEach((shotId, idx) => {
@@ -329,14 +359,16 @@ export async function generateDetailedSegmentPrompt(
   packed: PackedSegment,
   segmentIndex: number,
   imageHeader: string,
+  options?: SegmentPromptOptions,
 ): Promise<string> {
   logTaskProgress('RepaintSegmentPrompt', 'generate', {
     segment: segmentIndex,
     shots: packed.shot_ids.length,
+    fidelity: !!options?.fidelityMode,
   })
 
   try {
-    const direct = buildPromptBodyFromVisuals(analysis, packed, segmentIndex)
+    const direct = buildPromptBodyFromVisuals(analysis, packed, segmentIndex, options)
     if (direct) {
       const finalPrompt = composeFinalPrompt(imageHeader, direct)
       logTaskSuccess('RepaintSegmentPrompt', 'from-vision', { segment: segmentIndex, length: finalPrompt.length })
@@ -356,7 +388,7 @@ export async function generateDetailedSegmentPrompt(
       segment: segmentIndex,
       error: err.message,
     })
-    const fallback = buildFallbackSegmentPrompt(analysis, packed, segmentIndex)
+    const fallback = buildFallbackSegmentPrompt(analysis, packed, segmentIndex, options)
     return composeFinalPrompt(imageHeader, fallback)
   }
 }

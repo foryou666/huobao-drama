@@ -41,14 +41,21 @@
       </button>
     </div>
 
-    <div v-if="loading" class="dim library-empty">加载中…</div>
+    <div v-if="initialLoading && !assets.length" class="asset-grid asset-grid-skeleton">
+      <div v-for="n in 12" :key="`sk-${n}`" class="card asset-card skeleton-card">
+        <div class="skeleton-cover" />
+        <div class="skeleton-line" />
+        <div class="skeleton-line short" />
+      </div>
+    </div>
+    <div v-else-if="refreshing && !assets.length" class="dim library-empty">加载中…</div>
     <div v-else-if="!filteredAssets.length" class="library-empty card">
       <p class="dim">暂无{{ assetCategoryLabel(activeType) }}</p>
       <p class="dim" style="font-size:12px;margin-top:8px">{{ activeType === 'voice' ? '上传 MP3 音色参考（3~10 秒），绑定项目后可在视频生成中使用' : '各剧角色/场景会自动同步；也可手动添加或上传图片' }}</p>
     </div>
     <div v-else class="asset-grid">
       <div v-for="item in visibleAssets" :key="item.id" class="card asset-card">
-        <div class="asset-cover" :class="{ wide: activeType === 'scene', voice: activeType === 'voice' }">
+        <div class="asset-cover" :class="{ voice: activeType === 'voice' }">
           <template v-if="activeType === 'voice'">
             <div v-if="item.url || item.local_path || item.localPath" class="asset-voice-preview">
               <audio :src="'/' + normalizePath(item.url || item.local_path || item.localPath)" controls preload="none" />
@@ -58,20 +65,20 @@
           </template>
           <template v-else>
           <button
-            v-if="item.url || item.local_path || item.localPath"
+            v-if="resolveAssetCoverPath(item)"
             type="button"
             class="asset-cover-btn"
             @click="openAssetPreview(item)"
           >
             <GridMediaImage
-              :src="item.url || item.local_path || item.localPath"
+              :src="resolveAssetCoverPath(item)"
               :thumb="item.thumbnail_url || item.thumbnailUrl"
               :alt="item.name"
             />
           </button>
           <div v-else class="asset-cover-empty">待上传</div>
           </template>
-          <span class="asset-cover-badge" :class="(item.url || item.local_path) ? 'is-ready' : ''">
+          <span class="asset-cover-badge" :class="resolveAssetCoverPath(item) ? 'is-ready' : ''">
             {{ item.source_type === 'manual' ? '手动' : item.source_type === 'import' ? '导入' : '同步' }}
           </span>
         </div>
@@ -83,9 +90,10 @@
             :media="resolveCharacterMedia(item)"
             layout="outfits"
             compact
+            landscape
             expandable
             :max-visible="12"
-            :clickable="!!(item.url || item.local_path || item.localPath)"
+            :clickable="!!(resolveCharacterMedia(item)?.preview_images?.length || resolveCharacterMedia(item)?.outfit_previews?.length)"
             @preview="(img) => openCharacterMediaPreview(item, img)"
           />
           <div v-if="activeType === 'character' && resolveLinkedCharacterId(item)" class="asset-outfit-section">
@@ -173,8 +181,9 @@
             :media="resolveSceneMedia(item)"
             theme="scene"
             compact
+            landscape
             :max-visible="12"
-            :clickable="!!(item.url || item.local_path || item.localPath)"
+            :clickable="!!resolveSceneMedia(item)?.preview_images?.length"
             @preview="(img) => openEntityMediaPreview(item, img)"
           />
           <EntityViewMediaStrip
@@ -182,8 +191,9 @@
             :media="resolvePropMedia(item)"
             theme="prop"
             compact
+            landscape
             :max-visible="12"
-            :clickable="!!(item.url || item.local_path || item.localPath)"
+            :clickable="!!resolvePropMedia(item)?.preview_images?.length"
             @preview="(img) => openEntityMediaPreview(item, img)"
           />
           <div v-if="item.description" class="asset-meta dim truncate">{{ item.description }}</div>
@@ -196,15 +206,28 @@
       </div>
     </div>
 
-    <div v-if="!loading && hasMoreAssets" class="library-more">
+    <div v-if="!initialLoading && hasMoreAssets" class="library-more">
       <button type="button" class="btn btn-sm" @click="loadMoreAssets">
         加载更多（{{ visibleAssets.length }}/{{ filteredAssets.length }}）
       </button>
     </div>
 
     <div v-if="imageViewer.open" class="image-viewer-overlay" @click="closeImageViewer">
-      <img :src="imageViewer.src" :alt="imageViewer.title" @click.stop />
-      <div class="image-viewer-title">{{ imageViewer.title }}</div>
+      <div class="image-viewer-panel" @click.stop>
+        <img :src="imageViewer.src" :alt="imageViewer.title" />
+        <div class="image-viewer-bar">
+          <span class="image-viewer-title">{{ imageViewer.title }}</span>
+          <button
+            v-if="isAdmin && imageViewer.canDelete"
+            type="button"
+            class="btn btn-sm danger"
+            :disabled="deletingImage"
+            @click="deleteViewerImage"
+          >
+            {{ deletingImage ? '删除中…' : '删除图片' }}
+          </button>
+        </div>
+      </div>
     </div>
 
     <div v-if="openEditModal" class="modal-overlay" @click.self="closeEdit">
@@ -303,17 +326,24 @@ import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
 import CharacterOutfitImageModal from '~/components/CharacterOutfitImageModal.vue'
 import {
   characterImageTagLabel,
+  resolveCharacterCoverUrl,
   resolveOutfitPreviewsFromMedia,
   slugifyOutfitId,
 } from '~/utils/character-image-variants.js'
 import { resolveViewPreviewsFromMedia } from '~/utils/entity-view-media.js'
 import { toast } from 'vue-sonner'
 
+const { isAdmin } = useAuth()
+
 const GRID_PAGE_SIZE = 48
+const ASSETS_CACHE_PREFIX = 'assets-library-v1'
+const DRAMA_CACHE_KEY = 'assets-library-dramas-lite-v1'
 
 const dramas = ref([])
 const assets = ref([])
-const loading = ref(true)
+const assetTypeCounts = ref({})
+const initialLoading = ref(true)
+const refreshing = ref(false)
 const syncing = ref(false)
 const creating = ref(false)
 const savingEdit = ref(false)
@@ -337,7 +367,15 @@ const editForm = ref({
   description: '',
   file: null,
 })
-const imageViewer = ref({ open: false, src: '', title: '' })
+const imageViewer = ref({
+  open: false,
+  src: '',
+  title: '',
+  rawPath: '',
+  item: null,
+  canDelete: false,
+})
+const deletingImage = ref(false)
 const visibleCount = ref(GRID_PAGE_SIZE)
 const pendingCharOutfitUploadKeys = ref([])
 const pendingNewOutfitUploadIds = ref([])
@@ -353,6 +391,70 @@ const outfitImageModal = ref({
   initialMode: 'upload',
 })
 
+function assetsCacheKey() {
+  const dramaId = parseDramaFilter(selectedDramaId.value) || 'all'
+  const q = keyword.value.trim() || ''
+  return `${ASSETS_CACHE_PREFIX}:${activeType.value}:${dramaId}:${q}`
+}
+
+function restoreAssetsCache() {
+  try {
+    const raw = sessionStorage.getItem(assetsCacheKey())
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.items)) return false
+    assets.value = parsed.items
+    assetTypeCounts.value = parsed.counts || {}
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistAssetsCache() {
+  try {
+    sessionStorage.setItem(assetsCacheKey(), JSON.stringify({
+      items: assets.value,
+      counts: assetTypeCounts.value,
+      savedAt: Date.now(),
+    }))
+  } catch {
+    // ignore quota / private mode
+  }
+}
+
+function restoreDramaCache() {
+  try {
+    const raw = sessionStorage.getItem(DRAMA_CACHE_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed.items) || !parsed.items.length) return false
+    dramas.value = parsed.items
+    return true
+  } catch {
+    return false
+  }
+}
+
+function persistDramaCache() {
+  try {
+    sessionStorage.setItem(DRAMA_CACHE_KEY, JSON.stringify({
+      items: dramas.value,
+      savedAt: Date.now(),
+    }))
+  } catch {
+    // ignore
+  }
+}
+
+function prefetchVisibleAssetMedia() {
+  const paths = visibleAssets.value.flatMap(item => collectMediaPrefetchPaths(
+    resolveAssetCoverPath(item),
+    item.thumbnail_url,
+    item.thumbnailUrl,
+  ))
+  prefetchMediaUrlsInBackground(paths)
+}
 function parseDramaFilter(raw) {
   const id = Number(raw)
   return Number.isFinite(id) && id > 0 ? id : null
@@ -394,6 +496,7 @@ function dramaTitle(id) {
 }
 
 function countByType(type) {
+  if (assetTypeCounts.value[type] != null) return assetTypeCounts.value[type]
   const dramaId = parseDramaFilter(selectedDramaId.value)
   return assets.value.filter(item => {
     if (item.type !== type) return false
@@ -421,14 +524,27 @@ function resolveLinkedCharacterId(item) {
   return null
 }
 
-function assetHasPrimaryImage(item) {
-  return !!(item?.url || item?.local_path || item?.localPath)
-}
-
 function resolveCharacterPrimaryPath(item) {
   const media = item?.character_media || item?.characterMedia
-  const fromMedia = media?.primary_url || media?.preview_images?.[0]?.url
+  const fromMedia = resolveCharacterCoverUrl(media)
   return normalizeMediaPath(fromMedia || item?.url || item?.local_path || item?.localPath)
+}
+
+function resolveAssetCoverPath(item) {
+  if (item?.type === 'character') return resolveCharacterPrimaryPath(item)
+  if (item?.type === 'scene') {
+    const media = resolveSceneMedia(item)
+    return normalizeMediaPath(media?.primary_url || media?.preview_images?.[0]?.url || item?.url || item?.local_path || item?.localPath)
+  }
+  if (item?.type === 'prop' || item?.type === 'costume') {
+    const media = resolvePropMedia(item)
+    return normalizeMediaPath(media?.primary_url || media?.preview_images?.[0]?.url || item?.url || item?.local_path || item?.localPath)
+  }
+  return normalizeMediaPath(item?.url || item?.local_path || item?.localPath)
+}
+
+function assetHasPrimaryImage(item) {
+  return !!resolveAssetCoverPath(item)
 }
 
 function openOutfitImageModal(item, outfit, initialMode, isNewOutfit) {
@@ -552,9 +668,21 @@ async function uploadNewOutfit(item, event) {
 
 function resolveCharacterMedia(item) {
   const media = item?.character_media || item?.characterMedia
-  if (media?.preview_images?.length) {
+  if (media?.preview_images?.length || media?.outfit_previews?.length || media?.primary_url) {
+    const previewImages = media.preview_images?.length
+      ? media.preview_images
+      : (media.primary_url
+        ? [{
+            url: media.primary_url,
+            label: '角色图',
+            tag: '角色图',
+            tag_type: 'primary',
+            source: 'primary',
+          }]
+        : [])
     return {
       ...media,
+      preview_images: previewImages,
       outfit_previews: resolveOutfitPreviewsFromMedia(media),
     }
   }
@@ -606,60 +734,118 @@ function resolvePropMedia(item) {
 }
 
 function openAssetPreview(item) {
-  const raw = item?.url || item?.local_path || item?.localPath
+  const raw = resolveAssetCoverPath(item)
   if (!raw) return
-  openImageViewer(mediaDisplayUrl(raw), item.name)
+  openImageViewer({
+    src: mediaDisplayUrl(raw),
+    title: item.name,
+    rawPath: raw,
+    item,
+    canDelete: activeType.value !== 'voice',
+  })
 }
 
 function openCharacterMediaPreview(item, img) {
-  const raw = img?.url || item?.url || item?.local_path || item?.localPath
+  const raw = normalizeMediaPath(img?.url || item?.url || item?.local_path || item?.localPath)
   if (!raw) return
   const title = `${item.name} · ${img?.tag || characterImageTagLabel(img, { short: true }) || '角色图'}`
-  openImageViewer(mediaDisplayUrl(raw), title)
+  openImageViewer({
+    src: mediaDisplayUrl(raw),
+    title,
+    rawPath: raw,
+    item,
+    canDelete: true,
+  })
 }
 
 function openEntityMediaPreview(item, img) {
-  const raw = img?.url || item?.url || item?.local_path || item?.localPath
+  const raw = normalizeMediaPath(img?.url || item?.url || item?.local_path || item?.localPath)
   if (!raw) return
   const title = `${item.name} · ${img?.label || img?.tag || '图片'}`
-  openImageViewer(mediaDisplayUrl(raw), title)
+  openImageViewer({
+    src: mediaDisplayUrl(raw),
+    title,
+    rawPath: raw,
+    item,
+    canDelete: true,
+  })
 }
 
-function openImageViewer(src, title = '') {
-  if (!src) return
-  imageViewer.value = { open: true, src, title }
+function openImageViewer(payload) {
+  if (!payload?.src) return
+  imageViewer.value = {
+    open: true,
+    src: payload.src,
+    title: payload.title || '',
+    rawPath: payload.rawPath || '',
+    item: payload.item || null,
+    canDelete: !!payload.canDelete,
+  }
 }
 
 function closeImageViewer() {
-  imageViewer.value = { open: false, src: '', title: '' }
+  imageViewer.value = {
+    open: false,
+    src: '',
+    title: '',
+    rawPath: '',
+    item: null,
+    canDelete: false,
+  }
+}
+
+async function deleteViewerImage() {
+  if (!isAdmin.value) return
+  const ctx = imageViewer.value
+  const assetId = ctx.item?.id
+  const rawPath = ctx.rawPath
+  if (!assetId || !rawPath) return
+  if (!confirm(`确定删除这张图片？\n${ctx.title || ''}`)) return
+  deletingImage.value = true
+  try {
+    await assetAPI.deleteImage(assetId, rawPath)
+    toast.success('图片已删除')
+    closeImageViewer()
+    await loadAssets()
+  } catch (e) {
+    toast.error(e?.message || '删除失败')
+  } finally {
+    deletingImage.value = false
+  }
 }
 
 async function loadDramas() {
-  const res = await dramaAPI.list()
-  dramas.value = res?.items ?? (Array.isArray(res) ? res : [])
+  if (!dramas.value.length) restoreDramaCache()
+  try {
+    const dramaRes = await dramaAPI.listLite({ pageSize: 200 })
+    dramas.value = dramaRes?.items ?? (Array.isArray(dramaRes) ? dramaRes : [])
+    persistDramaCache()
+  } catch (e) {
+    if (!dramas.value.length) throw e
+  }
 }
 
-async function loadAssets() {
-  loading.value = true
+async function loadAssets({ silent = false } = {}) {
+  const hadCache = restoreAssetsCache()
+  if (!silent && !hadCache) initialLoading.value = true
+  refreshing.value = true
   try {
     const dramaId = parseDramaFilter(selectedDramaId.value)
-    assets.value = await assetAPI.list({
+    const { items, counts } = await assetAPI.listWithCounts({
       drama_id: dramaId || undefined,
+      type: activeType.value,
       q: keyword.value.trim() || undefined,
-    }) || []
+    })
+    assets.value = items || []
+    assetTypeCounts.value = counts || {}
     resetVisibleCount()
-    const mediaPaths = assets.value.flatMap(item => collectMediaPrefetchPaths(
-      item.url,
-      item.local_path,
-      item.localPath,
-      item.thumbnail_url,
-      item.thumbnailUrl,
-    ))
-    prefetchMediaUrlsInBackground(mediaPaths)
+    persistAssetsCache()
+    prefetchVisibleAssetMedia()
   } catch (e) {
-    toast.error(e?.message || '加载资产失败')
+    if (!assets.value.length) toast.error(e?.message || '加载资产失败')
   } finally {
-    loading.value = false
+    initialLoading.value = false
+    refreshing.value = false
   }
 }
 
@@ -798,23 +984,33 @@ watch([selectedDramaId, keyword], () => {
 
 watch(activeType, () => {
   resetVisibleCount()
+  loadAssets()
+})
+
+watch(visibleAssets, () => {
+  prefetchVisibleAssetMedia()
 })
 
 watch(() => route.path, (path) => {
   if (path === '/assets' || path.startsWith('/assets/')) {
-    loadAssets()
+    loadAssets({ silent: true })
   }
 })
 
-onMounted(async () => {
+onMounted(() => {
   const query = useRoute().query
   if (query.drama_id) selectedDramaId.value = String(query.drama_id)
   if (query.type && ASSET_CATEGORIES.some(item => item.id === query.type)) {
     activeType.value = String(query.type)
   }
   keyword.value = ''
-  await loadDramas()
-  await loadAssets()
+  restoreAssetsCache()
+  restoreDramaCache()
+  if (assets.value.length) initialLoading.value = false
+  void Promise.all([
+    loadDramas(),
+    loadAssets({ silent: assets.value.length > 0 }),
+  ])
 })
 </script>
 
@@ -861,20 +1057,43 @@ onMounted(async () => {
   justify-content: center;
   padding: 16px 0 8px;
 }
+.asset-grid-skeleton .skeleton-card {
+  overflow: hidden;
+  pointer-events: none;
+}
+.skeleton-cover {
+  aspect-ratio: 16 / 9;
+  background: linear-gradient(90deg, var(--bg-2) 25%, var(--bg-1) 50%, var(--bg-2) 75%);
+  background-size: 200% 100%;
+  animation: asset-skeleton-shimmer 1.2s ease-in-out infinite;
+}
+.skeleton-line {
+  height: 10px;
+  margin: 10px 12px 0;
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.skeleton-line.short {
+  width: 55%;
+  margin-bottom: 12px;
+}
+@keyframes asset-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .asset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
 }
 .asset-card { overflow: hidden; }
 .asset-body :deep(.char-media-strip-root) { margin-top: 6px; }
 .asset-cover {
   position: relative;
-  aspect-ratio: 3 / 4;
+  aspect-ratio: 16 / 9;
   background: var(--bg-2);
   overflow: hidden;
 }
-.asset-cover.wide { aspect-ratio: 16 / 9; }
 .asset-cover-btn {
   width: 100%;
   height: 100%;
@@ -982,13 +1201,31 @@ onMounted(async () => {
   z-index: 1100;
   background: rgba(0,0,0,0.85);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
 }
-.image-viewer-overlay img { max-width: min(92vw, 960px); max-height: 80vh; object-fit: contain; }
-.image-viewer-title { color: #fff; margin-top: 12px; font-size: 13px; }
+.image-viewer-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: min(92vw, 960px);
+  width: 100%;
+}
+.image-viewer-panel img {
+  max-width: 100%;
+  max-height: 80vh;
+  object-fit: contain;
+}
+.image-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  margin-top: 12px;
+}
+.image-viewer-title { color: #fff; font-size: 13px; flex: 1; min-width: 0; }
 .asset-voice-preview {
   display: flex;
   flex-direction: column;

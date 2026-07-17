@@ -11,7 +11,8 @@ import { saveUploadedFile } from '../utils/storage.js'
 import { syncScenePrimaryImage } from '../utils/oss-entity-sync.js'
 import { syncSceneAsset } from '../services/asset-library.js'
 import { findActiveSceneByLocationTime, findActiveSceneByLocation, redirectSceneReferences } from '../utils/scene-redirect.js'
-import { tryChargeUser, tryRefundCharge, tryPreflightBatchCharge, chargeBatchItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { tryChargeUser, tryChargeImageUser, tryRefundCharge, tryPreflightBatchImageCharge, chargeBatchImageItem, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { resolveBillingImageModel, resolveBillingImageProvider } from '../utils/image-billing.js'
 import { getUserBalance } from '../services/credits.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
 import { imageReferenceSupportHint, supportsImageReference } from '../utils/image-reference-support.js'
@@ -156,13 +157,15 @@ app.post('/:id/generate-angle', async (c) => {
   if ('error' in ctx) return badRequest(c, ctx.error)
 
   const prompt = buildSceneAnglePromptById(ctx.scene, angleId, body.prompt)
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.SCENE_IMAGE, {
+  const billingModel = resolveBillingImageModel({ imageConfigId: ctx.ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ctx.ep.imageConfigId })
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.SCENE_IMAGE, billingModel, {
     summary: `场景多角度：${ctx.scene.location} · ${preset.label}`,
     dramaId: ctx.scene.dramaId,
     episodeId: ctx.ep.id,
     resourceType: 'scene',
     resourceId: id,
-  })
+  }, billingProvider)
   if (billed.error) return billed.error
 
   try {
@@ -235,7 +238,9 @@ app.post('/:id/generate-all-angles', async (c) => {
     })
   }
 
-  const preflight = tryPreflightBatchCharge(c, CREDIT_ACTIONS.SCENE_IMAGE, angleIds.length)
+  const billingModel = resolveBillingImageModel({ imageConfigId: ctx.ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ctx.ep.imageConfigId })
+  const preflight = tryPreflightBatchImageCharge(c, CREDIT_ACTIONS.SCENE_IMAGE, angleIds.length, billingModel, billingProvider)
   if (preflight.error) return preflight.error
 
   logTaskStart('SceneImage', 'generate-all-angles', { sceneId: id, angleIds, episodeId: ctx.ep.id })
@@ -248,14 +253,14 @@ app.post('/:id/generate-all-angles', async (c) => {
   for (const angleId of angleIds) {
     const preset = getSceneAnglePreset(angleId)!
     const prompt = buildSceneAnglePromptById(ctx.scene, angleId, body.prompt)
-    const charge = chargeBatchItem(preflight.user.id, CREDIT_ACTIONS.SCENE_IMAGE, {
+    const charge = chargeBatchImageItem(preflight.user.id, CREDIT_ACTIONS.SCENE_IMAGE, billingModel, {
       summary: `场景多角度：${ctx.scene.location} · ${preset.label}`,
       dramaId: ctx.scene.dramaId,
       episodeId: ctx.ep.id,
       resourceType: 'scene',
       resourceId: id,
       metadata: { batch: 'scene_all_angles', angle_id: angleId },
-    })
+    }, billingProvider)
     if (!charge.ok) {
       failed.push({ angle_id: angleId, error: charge.message || '积分不足' })
       break
@@ -324,13 +329,15 @@ app.post('/:id/generate-angle-sheet', async (c) => {
   if ('error' in ctx) return badRequest(c, ctx.error)
 
   const prompt = buildSceneAngleSheetPrompt(ctx.scene, body.prompt)
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.SCENE_IMAGE, {
+  const billingModel = resolveBillingImageModel({ imageConfigId: ctx.ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ctx.ep.imageConfigId })
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.SCENE_IMAGE, billingModel, {
     summary: `场景多视角拼板：${ctx.scene.location}`,
     dramaId: ctx.scene.dramaId,
     episodeId: ctx.ep.id,
     resourceType: 'scene',
     resourceId: id,
-  })
+  }, billingProvider)
   if (billed.error) return billed.error
 
   try {
@@ -393,13 +400,15 @@ app.post('/:id/generate-image', async (c) => {
     db.update(schema.scenes).set({ prompt, updatedAt: now() }).where(eq(schema.scenes.id, id)).run()
   }
 
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.SCENE_IMAGE, {
+  const billingModel = resolveBillingImageModel({ imageConfigId: ep.imageConfigId })
+  const billingProvider = resolveBillingImageProvider({ imageConfigId: ep.imageConfigId })
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.SCENE_IMAGE, billingModel, {
     summary: `生成场景图：${scene.location}`,
     dramaId: scene.dramaId,
     episodeId: ep.id,
     resourceType: 'scene',
     resourceId: id,
-  })
+  }, billingProvider)
   if (billed.error) return billed.error
 
   try {

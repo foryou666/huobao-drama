@@ -2,11 +2,15 @@
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
-        <h1 class="studio-title">视频生成（Seedance VIP）</h1>
-        <p class="studio-desc">
-          Seedance 2.0 VIP 通道：支持参考图/视频/音频（@图片N @视频N @音频N），素材需公网 URL；含参考视频时积分 ×{{ referenceVideoMultiplier }}。
-          <button type="button" class="studio-spec-link" @click="materialSpecOpen = true">官方素材规范</button>
-        </p>
+        <h1 class="studio-title">视频生成（S VIP）</h1>
+        <StudioGuideButton title="S VIP 使用说明">
+          <p class="studio-guide-line">
+            S 2.0 VIP 通道：支持参考图/视频/音频（@图片N @视频N @音频N），素材需公网 URL；含参考视频时积分 ×{{ referenceVideoMultiplier }}。
+          </p>
+          <p class="studio-guide-line">
+            <button type="button" class="studio-spec-link" @click="materialSpecOpen = true">查看官方素材规范</button>
+          </p>
+        </StudioGuideButton>
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -27,7 +31,7 @@
             查看全部
           </button>
         </div>
-        <select v-model="filterDramaId" class="studio-filter-select" @change="reload">
+        <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
         </select>
@@ -45,7 +49,7 @@
         <span class="studio-select-label">线路</span>
         <select v-model="selectedChannel" class="studio-model-select" @change="onChannelChange">
           <option v-for="ch in channelOptions" :key="ch.channel" :value="String(ch.channel)">
-            {{ ch.title || `线路 ${ch.channel}` }}
+            {{ toAistarslabChannelDisplayTitle(ch.title) || `线路 ${ch.channel}` }}
           </option>
         </select>
       </label>
@@ -57,12 +61,12 @@
             :key="m.option_key || m.id"
             :value="m.model || m.id"
           >
-            {{ m.label }} · {{ m.credit_cost_flat ?? m.credit_cost }} 积分
+            {{ toSeedanceDisplayLabel(m.label) }} · {{ m.credit_cost_flat ?? m.credit_cost }} 积分
           </option>
         </select>
       </label>
       <span v-if="activeChannelMeta?.description" class="studio-channel-hint dim">
-        {{ activeChannelMeta.description }}
+        {{ toAistarslabChannelDisplayTitle(activeChannelMeta.description) }}
       </span>
     </div>
 
@@ -81,7 +85,15 @@
     </div>
 
     <div ref="feedRef" class="studio-feed">
-      <div v-if="loading && !items.length" class="studio-empty dim">加载中…</div>
+      <div v-if="loading && !items.length" class="studio-grid studio-grid-skeleton">
+        <article v-for="n in 8" :key="`sk-${n}`" class="studio-card studio-card-skeleton">
+          <div class="studio-card-media ratio-portrait studio-skeleton-block" />
+          <div class="studio-card-body">
+            <div class="studio-skeleton-line studio-skeleton-line-wide" />
+            <div class="studio-skeleton-line studio-skeleton-line-narrow" />
+          </div>
+        </article>
+      </div>
       <div v-else-if="!items.length" class="studio-empty card">
         <p>还没有视频，在底部输入描述并点击「生成视频」</p>
       </div>
@@ -231,18 +243,28 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, videoAPI } from '~/composables/useApi'
+import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
-import { mediaDisplayUrl, prefetchMediaUrlsInBackground, videoPosterDisplayUrl, collectMediaPrefetchPaths } from '~/utils/media-url.js'
+import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import VideoStudioComposer from '~/components/VideoStudioComposer.vue'
 import SeedanceMaterialSpecModal from '~/components/SeedanceMaterialSpecModal.vue'
+import { toAistarslabChannelDisplayTitle, toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
 import { formatVideoGenerationError } from '~/utils/image-generation-error.js'
 import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
 import {
   resolveAistarslabSelection,
   setSavedAistarslabSelection,
 } from '~/utils/studio-aistarslab-preference.js'
+import {
+  buildVideoLedgerCacheKey,
+  restoreVideoLedgerCache,
+  persistVideoLedgerCache,
+  loadVideoDramasLite,
+  finalizeVideoLedgerItems,
+} from '~/utils/video-studio-page.js'
+
+const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-aistarslab-v1'
 
 const DEFAULT_MODEL = 'seedance-2.0-720p-fast'
 const DEFAULT_CHANNEL = '12'
@@ -294,6 +316,19 @@ const composerRef = ref(null)
 const feedRef = ref(null)
 const materialSpecOpen = ref(false)
 let pollTimer = null
+
+function videoLedgerCacheKey() {
+  return buildVideoLedgerCacheKey(VIDEO_LEDGER_CACHE_PREFIX, [
+    viewScope.value,
+    filterDramaId.value || 'all',
+    filterStatus.value,
+    selectedChannel.value || 'all',
+  ])
+}
+
+function ensureDramasLoaded() {
+  if (!dramas.value.length) void loadVideoDramasLite(dramas)
+}
 let selectionReady = false
 
 const statusTabs = [
@@ -399,8 +434,9 @@ function applyAistarslabSelection(res) {
 }
 
 function modelLabel(modelId) {
-  return displayModels.value.find(item => item.model === modelId || item.id === modelId)?.label
+  const label = displayModels.value.find(item => item.model === modelId || item.id === modelId)?.label
     || String(modelId || '').replace(/^seedance-2\.0-/i, 'Seedance 2.0 ')
+  return toSeedanceDisplayLabel(label)
 }
 
 function statsForTab(id) {
@@ -430,6 +466,7 @@ function normalizeItem(row) {
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
     display_poster_url: row.display_poster_url || '',
+    poster_path: row.poster_path || row.posterPath || '',
     video_url: row.video_url || row.videoUrl || '',
     local_path: row.local_path || row.localPath || '',
     drama_title: row.drama_title || '',
@@ -628,14 +665,14 @@ async function loadLedger({ append = false, offset = 0, refreshVisible = false }
   stats.value = res?.stats || stats.value
   pagination.value = res?.pagination || pagination.value
 
-  const mediaPaths = collectMediaPrefetchPaths(
-    ...nextItems.flatMap(item => [
-      item.local_path,
-      item.video_url,
-      ...(item.reference_images || []).map(ref => ref.path),
-    ]),
-  )
-  if (mediaPaths.length) prefetchMediaUrlsInBackground(mediaPaths)
+  finalizeVideoLedgerItems(nextItems)
+  if (!append) {
+    persistVideoLedgerCache(videoLedgerCacheKey(), {
+      items: items.value,
+      stats: stats.value,
+      pagination: pagination.value,
+    })
+  }
 }
 
 async function refreshLedger() {
@@ -647,7 +684,7 @@ async function refreshLedger() {
 }
 
 async function reload() {
-  loading.value = true
+  if (!items.value.length) loading.value = true
   try {
     await loadLedger({ offset: 0 })
   } finally {
@@ -700,11 +737,11 @@ async function onGenerate(payload) {
     await loadAistarslabOptions()
   }
   if (!aistarslabConfigId.value) {
-    toast.error('未配置 Seedance VIP 视频服务，请联系管理员')
+    toast.error('未配置 S VIP 视频服务，请联系管理员')
     return
   }
   if (!aistarslabApiKeyConfigured.value) {
-    toast.error('视频 API Key 未配置，请管理员在「设置 → AI 配置」中填写 Seedance VIP 通道的 API Key')
+    toast.error('视频 API Key 未配置，请管理员在「设置 → AI 配置」中填写 S VIP 通道的 API Key')
     return
   }
   generating.value = true
@@ -778,12 +815,22 @@ function stopPolling() {
   }
 }
 
-onMounted(async () => {
-  await loadAistarslabOptions()
-  const dramaRes = await dramaAPI.list()
-  dramas.value = dramaRes?.items || dramaRes || []
-  await reload()
-  startPolling()
+onMounted(() => {
+  const cached = restoreVideoLedgerCache(videoLedgerCacheKey())
+  if (cached?.items?.length) {
+    items.value = cached.items.map(normalizeItem)
+    stats.value = cached.stats || stats.value
+    pagination.value = cached.pagination || pagination.value
+    finalizeVideoLedgerItems(items.value)
+  } else {
+    loading.value = true
+  }
+  void loadAistarslabOptions()
+  void loadVideoDramasLite(dramas)
+  void loadLedger({ offset: 0 }).finally(() => {
+    loading.value = false
+    startPolling()
+  })
 })
 
 onUnmounted(() => {
@@ -811,29 +858,37 @@ onUnmounted(() => {
 
 .studio-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 20px 24px 12px;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+.studio-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
   flex-shrink: 0;
 }
 
 .studio-title {
-  margin: 0 0 4px;
-  font-size: 22px;
+  margin: 0;
+  font-size: 20px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
-.studio-desc {
+.studio-guide-line {
   margin: 0;
   font-size: 13px;
-  line-height: 1.55;
-  color: var(--text-3);
-  max-width: 560px;
+  line-height: 1.65;
+  color: var(--text-1);
 }
 
 .studio-spec-link {
-  margin-left: 6px;
   padding: 0;
   border: none;
   background: none;
@@ -851,10 +906,17 @@ onUnmounted(() => {
 
 .studio-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  min-width: 0;
+  flex: 1;
+}
+
+.studio-header-actions .studio-filter-select {
+  min-width: 0;
+  max-width: 160px;
 }
 
 .studio-channel-bar {

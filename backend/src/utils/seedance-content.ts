@@ -47,7 +47,7 @@ export function parseVideoContentRefs(raw: string | null | undefined): VideoCont
 
 /**
  * Seedance 2.0 官方写法：content[] 里传 image_url 等，文本用「图片1是…」「图片2是…」自然语言关联。
- * 不要使用 @图片 / @Image1 这类标签语法（工作台内部旧稿可能带 @，发送前会剥掉）。
+ * 工作台改为用户手写 @图片N；发送前剥掉 @，若完全没有编号引用则按 content_refs 自动补说明头。
  */
 export function normalizeSeedance2PromptText(prompt: string): string {
   return String(prompt || '')
@@ -62,6 +62,7 @@ export function enrichPromptWithReferenceLabels(prompt: string, refs: VideoConte
   const text = normalizeVideoPromptFraming(normalizeSeedance2PromptText(String(prompt || '').trim()))
   if (!refs.length) return text
 
+  // 用户已手写 @图片N / 图片N是… 等编号引用时，保留原文（仅完成 @ → 自然语言）
   if (/图片\s*\d|图\s*\d|视频\s*\d|音频\s*\d/i.test(text)) {
     return text
   }

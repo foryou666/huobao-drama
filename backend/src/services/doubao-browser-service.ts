@@ -1,10 +1,11 @@
 import { createHash } from 'crypto'
 import type { Browser, BrowserContext, Page } from 'playwright-core'
-import { DOUBAO_TRAINING_BASE_URL } from '../constants/doubao-training.js'
+import { DOUBAO_TRAINING_CREATE_VIDEO_URL } from '../constants/doubao-training.js'
 import type { DoubaoTrainingSession } from './doubao-training-session.js'
 import { parseDoubaoCookiesForBrowser } from '../utils/doubao-cookie.js'
 
-const DOUBAO_HOME = `${DOUBAO_TRAINING_BASE_URL}/chat/`
+/** 与官网「创建视频」页一致，签名/风控上下文更贴近真实提交 */
+const DOUBAO_HOME = DOUBAO_TRAINING_CREATE_VIDEO_URL
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000
 const BDMS_READY_TIMEOUT_MS = 30_000
 

@@ -12,9 +12,6 @@ if (!existsSync(source)) {
   process.exit(1)
 }
 
-rmSync(target, { recursive: true, force: true })
-cpSync(source, target, { recursive: true })
-
 function listAssetDir(dir) {
   if (!existsSync(dir)) return []
   return readdirSync(dir)
@@ -87,6 +84,7 @@ ${nuxtData}</body></html>`
 function patchHtmlFiles(dir, assets) {
   let patched = 0
   for (const name of listAssetDir(dir)) {
+    if (name === 'director-3d') continue
     const full = path.join(dir, name)
     if (name.endsWith('.html')) {
       const html = readFileSync(full, 'utf8')
@@ -102,8 +100,38 @@ function patchHtmlFiles(dir, assets) {
   return patched
 }
 
+rmSync(target, { recursive: true, force: true })
+cpSync(source, target, { recursive: true })
+
 const assets = resolveSpaEntryAssets()
 const patched = patchHtmlFiles(target, assets)
 
+const directorDeskPublic = path.join(root, 'public', 'director-3d')
+const directorDeskTarget = path.join(target, 'director-3d')
+if (existsSync(directorDeskPublic)) {
+  cpSync(directorDeskPublic, directorDeskTarget, { recursive: true })
+  console.log(`Copied 3D director desk -> ${directorDeskTarget}`)
+}
+
 console.log(`Synced ${source} -> ${target}`)
 console.log(`Patched SPA HTML (${assets.js}) in ${patched} file(s)`)
+
+// 纯 SPA：只保留根 index.html，避免 /tts/index.html 等带 prerender 元数据导致客户端 500
+function removeNestedSpaHtml(dir) {
+  let removed = 0
+  for (const name of listAssetDir(dir)) {
+    if (name === 'director-3d' || name === '_nuxt') continue
+    const full = path.join(dir, name)
+    if (!statSync(full).isDirectory()) continue
+    const nested = path.join(full, 'index.html')
+    if (existsSync(nested)) {
+      rmSync(nested)
+      removed += 1
+    }
+    removed += removeNestedSpaHtml(full)
+  }
+  return removed
+}
+
+const removed = removeNestedSpaHtml(target)
+if (removed > 0) console.log(`Removed ${removed} nested route index.html (SPA fallback to /index.html)`)

@@ -74,7 +74,7 @@
         </div>
 
         <p v-if="analyzing" class="repaint-progress dim">
-          正在分析：切镜 → 提取音频 → ASR → 实体抽取 → 视觉理解（逐镜关键帧）。2 分钟视频通常需 2–5 分钟，请耐心等待。
+          正在分析：切镜 → 提取音频 → ASR → 整片视频理解 + 薄弱镜头补全。完成后将按 ~15 秒/段（场景切换分开）打包。
         </p>
 
         <p v-if="job.error_msg" class="repaint-error">{{ job.error_msg }}</p>
@@ -139,14 +139,22 @@
       <!-- 步骤 3：分段 Prompt -->
       <section v-show="activeStepIndex === 2" class="repaint-section">
         <h2>3. 分段 Prompt</h2>
-        <p class="dim">按 4–15 秒打包 Seedance 段，绑定 @图片N 到已定稿的角色 / 场景 / 道具。段级 prompt 可单独修改。</p>
+        <p class="dim">按 S 2.0 打包：每段约 4–15 秒、尽量贴近 15 秒；换场景时自动切段。每段含多镜 Prompt + 原片关键帧参考。</p>
 
         <div class="repaint-actions repaint-actions-inline">
           <button type="button" class="btn btn-sm" :disabled="busy" @click="loadSegments">
             刷新分段
           </button>
           <button type="button" class="btn btn-sm" :disabled="busy" @click="rebuildSegments">
-            {{ busy ? '生成 Prompt 中…' : '重新打包 Prompt' }}
+            {{ busy ? '打包中…' : '重新打包（~15s/段）' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            :disabled="busy || !segments.length || allSegmentsCompleted"
+            @click="generateAllSegments"
+          >
+            {{ busy ? '提交中…' : '生成全部分段' }}
           </button>
         </div>
 
@@ -156,7 +164,8 @@
           <article v-for="seg in segments" :key="seg.id" class="repaint-segment-card card">
             <div class="repaint-segment-head">
               <strong>段 {{ seg.segment_index + 1 }}</strong>
-              <span class="dim mono">{{ seg.start_sec }}s – {{ seg.end_sec }}s · {{ seg.duration_sec }}s</span>
+              <span v-if="seg.shot_ids?.length" class="tag">含 {{ seg.shot_ids.length }} 镜</span>
+              <span class="dim mono">{{ seg.start_sec }}s – {{ seg.end_sec }}s · 生成 {{ seg.duration_sec }}s</span>
               <span class="tag" :class="segmentStatusClass(seg)">{{ segmentStatusLabel(seg) }}</span>
             </div>
             <textarea
@@ -192,8 +201,21 @@
       <!-- 步骤 4：生成 -->
       <section v-show="activeStepIndex === 3" class="repaint-section">
         <h2>4. 分段视频生成</h2>
-        <p class="dim">使用 seedance通道1（橙盟）按段重画，单段可重跑，不影响其他段。</p>
-        <p class="dim repaint-soon">段级生成与进度列表开发中。</p>
+        <p class="dim">使用橙盟 S 按镜头重绘。可在上一步逐镜生成，或在此查看进度。</p>
+        <p v-if="segments.length" class="dim">
+          已完成 {{ completedSegmentCount }} / {{ segments.length }} 镜
+        </p>
+        <div class="repaint-actions repaint-actions-inline">
+          <button type="button" class="btn btn-sm" :disabled="busy" @click="loadSegments">刷新进度</button>
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            :disabled="busy || !segments.length || allSegmentsCompleted"
+            @click="generateAllSegments"
+          >
+            生成全部镜头
+          </button>
+        </div>
         <div class="repaint-actions">
           <button type="button" class="btn btn-primary" :disabled="busy" @click="confirmStage('generate')">
             全部段完成后，进入拼接
@@ -208,9 +230,17 @@
         <div v-if="job.merged_video_url" class="repaint-preview">
           <video :src="mediaDisplayUrl(job.merged_video_url)" controls playsinline class="repaint-video" />
         </div>
-        <p v-else class="dim repaint-soon">拼接功能开发中。</p>
+        <p v-else class="dim repaint-soon">完成全部镜头生成后，点击下方按钮拼接成片。</p>
         <div class="repaint-actions">
-          <button type="button" class="btn btn-primary" :disabled="busy" @click="confirmStage('merge')">
+          <button
+            type="button"
+            class="btn btn-primary"
+            :disabled="busy || !allSegmentsCompleted"
+            @click="mergeJob"
+          >
+            {{ busy ? '拼接中…' : '拼接成片' }}
+          </button>
+          <button type="button" class="btn" :disabled="busy" @click="confirmStage('merge')">
             标记任务完成
           </button>
         </div>
@@ -242,8 +272,15 @@ const segments = ref([])
 
 const hasAnalysis = computed(() => !!(job.value?.analysis?.shots?.length))
 const analyzing = computed(() => busy.value || job.value?.status === 'analyzing')
+const completedSegmentCount = computed(() =>
+  segments.value.filter(seg => seg.video_status === 'completed' || seg.status === 'completed').length,
+)
+const allSegmentsCompleted = computed(() =>
+  segments.value.length > 0 && completedSegmentCount.value === segments.value.length,
+)
 
 let analyzePollTimer = null
+let segmentPollTimer = null
 
 function stopAnalyzePoll() {
   if (analyzePollTimer) {
@@ -304,6 +341,8 @@ async function saveAnalysis() {
       scenes: draftAnalysis.value.scenes,
       props: draftAnalysis.value.props,
       shot_assignments: draftAnalysis.value.shot_assignments,
+      shot_visuals: draftAnalysis.value.shot_visuals,
+      video_summary: draftAnalysis.value.video_summary,
     })
     draftAnalysis.value = cloneAnalysis(job.value.analysis)
     analysisDirty.value = false
@@ -423,10 +462,10 @@ async function loadSegments() {
 async function rebuildSegments() {
   busy.value = true
   try {
-    toast.message('正在生成详细分镜 Prompt，每段约 10–20 秒…')
+    toast.message('正在按 ~15 秒/段打包（场景切换自动分段）…')
     const res = await repaintAPI.buildSegments(jobId.value)
     segments.value = res?.items || []
-    toast.success(`已生成 ${segments.value.length} 个分段（含景别/运镜/调度）`)
+    toast.success(`已生成 ${segments.value.length} 个分段（S 2.0 · 4–15s/段）`)
   } catch (err) {
     toast.error(err?.message || '打包失败')
   } finally {
@@ -442,6 +481,69 @@ async function saveSegmentPrompt(seg) {
   }
 }
 
+async function generateAllSegments() {
+  const pending = segments.value.filter(seg =>
+    seg.status !== 'generating'
+    && seg.video_status !== 'processing'
+    && seg.video_status !== 'completed'
+    && seg.status !== 'completed',
+  )
+  if (!pending.length) {
+    toast.message('没有待生成的镜头')
+    return
+  }
+  busy.value = true
+  try {
+    for (const seg of pending) {
+      await saveSegmentPrompt(seg)
+      const res = await repaintAPI.generateSegment(jobId.value, seg.id)
+      const idx = segments.value.findIndex(s => s.id === seg.id)
+      if (idx >= 0 && res?.segment) segments.value[idx] = res.segment
+    }
+    toast.success(`已提交 ${pending.length} 个镜头生成任务`)
+    startSegmentPoll()
+  } catch (err) {
+    toast.error(err?.message || '批量生成失败')
+    await loadSegments()
+  } finally {
+    busy.value = false
+  }
+}
+
+function stopSegmentPoll() {
+  if (segmentPollTimer) {
+    clearInterval(segmentPollTimer)
+    segmentPollTimer = null
+  }
+}
+
+function startSegmentPoll() {
+  stopSegmentPoll()
+  segmentPollTimer = setInterval(async () => {
+    if (!segments.value.some(seg => seg.status === 'generating' || seg.video_status === 'processing')) {
+      stopSegmentPoll()
+      return
+    }
+    try {
+      await loadSegments()
+    } catch {
+      // ignore
+    }
+  }, 6000)
+}
+
+async function mergeJob() {
+  busy.value = true
+  try {
+    const res = await repaintAPI.merge(jobId.value)
+    if (res?.job) job.value = res.job
+    toast.success(`拼接完成（${res?.clip_count || 0} 镜）`)
+  } catch (err) {
+    toast.error(err?.message || '拼接失败')
+  } finally {
+    busy.value = false
+  }
+}
 async function generateSegment(seg) {
   busy.value = true
   try {
@@ -452,7 +554,7 @@ async function generateSegment(seg) {
       const idx = segments.value.findIndex(s => s.id === seg.id)
       if (idx >= 0) segments.value[idx] = res.segment
     }
-    setTimeout(loadSegments, 8000)
+    startSegmentPoll()
   } catch (err) {
     toast.error(err?.message || '生成失败')
   } finally {
@@ -507,7 +609,10 @@ function goList() {
 
 watch(jobId, loadJob, { immediate: true })
 
-onBeforeUnmount(stopAnalyzePoll)
+onBeforeUnmount(() => {
+  stopAnalyzePoll()
+  stopSegmentPoll()
+})
 </script>
 
 <style scoped>

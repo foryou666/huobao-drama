@@ -1,38 +1,53 @@
 import { Hono } from 'hono'
-import { eq } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { success, created, badRequest } from '../utils/response.js'
+import { success, created, badRequest, notFound, forbidden, now } from '../utils/response.js'
 import { generateImage } from '../services/image-generation.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
-import { getAuthUser } from '../middleware/auth.js'
+import { denyUnlessAdmin, getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
-import { tryChargeUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { tryChargeUser, tryChargeImageUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import { getActionCost } from '../services/credits.js'
+import { resolveBillingImageModel } from '../utils/image-billing.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
+import { resolveImageGenerationConfig } from '../utils/image-config-routing.js'
+import { parseStudioImageResolution, STUDIO_IMAGE_RESOLUTIONS } from '../constants/apimart.js'
+import {
+  APIMART_IMAGE_1K_CREDIT_COST,
+  APIMART_IMAGE_2K_CREDIT_COST,
+} from '../constants/credit-actions.js'
 import { resolveActiveTeamId } from '../services/team-access.js'
+import { getTeamMemberUserIds } from '../services/team-audit.js'
 import { attachGeneratedImageToEntity } from '../services/image-entity-attach.js'
-import { listImageLedger } from '../services/image-ledger.js'
+import { listImageLedger, invalidateImageOwnerMapsCache } from '../services/image-ledger.js'
 import { toSnakeCase } from '../utils/transform.js'
 import { resolveDisplayMediaUrl } from '../utils/media-display-url.js'
 import { getImageSizeForAspectRatio } from '../utils/image-size.js'
 import { getMaxImageReferenceCount } from '../utils/image-reference-limits.js'
 import { supportsImageReference, imageReferenceSupportHint } from '../utils/image-reference-support.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
+import { canViewAllImageStudio } from '../utils/image-studio-access.js'
 
 const app = new Hono()
 
-function resolveImageConfig(body: Record<string, unknown>) {
+function resolveImageConfigId(body: Record<string, unknown>): number | undefined {
   let configId = body.config_id != null ? Number(body.config_id) : undefined
-  let dramaId: number | undefined = body.drama_id ? Number(body.drama_id) : undefined
   if (body.storyboard_id) {
     const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
     if (sb) {
       const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
       if (ep?.imageConfigId != null) configId = ep.imageConfigId
-      if (!dramaId && ep) dramaId = ep.dramaId
     }
   }
-  if (configId) return getConfigById(configId)
-  return getActiveConfig('image')
+  return configId
+}
+
+function resolveImageConfig(body: Record<string, unknown>, model?: string) {
+  const configId = resolveImageConfigId(body)
+  return resolveImageGenerationConfig({
+    configId,
+    model: model || String(body.model || '').trim() || undefined,
+  })
 }
 
 function formatImageRecord(row: typeof schema.imageGenerations.$inferSelect | null | undefined) {
@@ -51,23 +66,45 @@ app.post('/', async (c) => {
   if (!body.prompt) return badRequest(c, 'prompt is required')
 
   const isStudio = !body.storyboard_id
-  const billed = tryChargeUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, {
+
+  let imageConfig
+  try {
+    imageConfig = resolveImageConfig(body)
+  } catch (err: any) {
+    return badRequest(c, err?.message || '图片服务配置不可用')
+  }
+  if (!imageConfig) return badRequest(c, 'No active image AI config')
+
+  let model: string
+  try {
+    model = resolveImageModel(body, imageConfig)
+  } catch (err: any) {
+    return badRequest(c, err.message || '无效的图片模型')
+  }
+
+  imageConfig = resolveImageConfig(body, model) || imageConfig
+
+  const studioResolution = isStudio ? parseStudioImageResolution(String(body.resolution || '')) : null
+  if (isStudio && body.resolution != null && String(body.resolution).trim() && !studioResolution) {
+    return badRequest(c, '分辨率仅支持 1k 或 2k')
+  }
+  const resolution = studioResolution || parseStudioImageResolution(String(body.resolution || '')) || undefined
+
+  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, model, {
     summary: isStudio ? '工作台图片生成' : '生成镜头图',
     dramaId: body.drama_id ? Number(body.drama_id) : undefined,
     resourceType: isStudio ? 'image_studio' : 'storyboard',
     resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
-  })
+  }, imageConfig?.provider, resolution || (isStudio ? '1k' : undefined))
   if (billed.error) return billed.error
 
   try {
-    const imageConfig = resolveImageConfig(body)
-    let configId: number | undefined = body.config_id
+    let configId: number | undefined = resolveImageConfigId(body) ?? (body.config_id != null ? Number(body.config_id) : undefined)
     let dramaId: number | undefined = body.drama_id ? Number(body.drama_id) : undefined
     if (body.storyboard_id) {
       const [sb] = db.select().from(schema.storyboards).where(eq(schema.storyboards.id, Number(body.storyboard_id))).all()
       if (sb) {
         const [ep] = db.select().from(schema.episodes).where(eq(schema.episodes.id, sb.episodeId)).all()
-        if (ep?.imageConfigId != null) configId = ep.imageConfigId
         if (!dramaId && ep) dramaId = ep.dramaId
       }
     }
@@ -78,13 +115,6 @@ app.post('/', async (c) => {
     const referenceImages = Array.isArray(body.reference_images)
       ? body.reference_images.map(String).filter(Boolean)
       : undefined
-
-    let model: string | undefined
-    try {
-      model = resolveImageModel(body, imageConfig)
-    } catch (err: any) {
-      return badRequest(c, err.message || '无效的图片模型')
-    }
 
     if (referenceImages?.length) {
       const refConfig = imageConfig
@@ -119,6 +149,7 @@ app.post('/', async (c) => {
       prompt: body.prompt,
       model,
       size,
+      resolution: resolution || (isStudio ? '1k' : undefined),
       referenceImages,
       frameType: body.frame_type,
       imageType,
@@ -144,6 +175,7 @@ app.post('/', async (c) => {
         studio: isStudio,
       },
     })
+    invalidateImageOwnerMapsCache()
     return created(c, {
       ...formatImageRecord(record),
       credits_balance: billed.charge.balance,
@@ -161,14 +193,10 @@ app.post('/', async (c) => {
   }
 })
 
-const STUDIO_IMAGE_MODELS = ['gpt-image-2', 'nano-banana-2'] as const
+const STUDIO_IMAGE_MODELS = ['gpt-image-2'] as const
 
-function resolveStudioModels(config: ReturnType<typeof getActiveConfig>) {
-  const configured = config?.models?.length
-    ? config.models
-    : (config?.model ? [config.model] : [])
-  const allowed = STUDIO_IMAGE_MODELS.filter(m => configured.includes(m))
-  return allowed.length ? allowed : [...STUDIO_IMAGE_MODELS]
+function resolveStudioModels() {
+  return [...STUDIO_IMAGE_MODELS]
 }
 
 function resolveImageModel(body: Record<string, unknown>, config: ReturnType<typeof getActiveConfig>) {
@@ -177,7 +205,9 @@ function resolveImageModel(body: Record<string, unknown>, config: ReturnType<typ
   const configured = config?.models?.length
     ? config.models
     : (config?.model ? [config.model] : [...STUDIO_IMAGE_MODELS])
-  if (!configured.includes(requested)) {
+  const studioAllowed = resolveStudioModels()
+  const allowed = new Set([...configured, ...studioAllowed])
+  if (!allowed.has(requested)) {
     throw new Error(`模型 ${requested} 不在当前图片服务配置中`)
   }
   return requested
@@ -185,10 +215,37 @@ function resolveImageModel(body: Record<string, unknown>, config: ReturnType<typ
 
 // GET /images/studio/capabilities — 工作台能力（参考图上限等）
 app.get('/studio/capabilities', async (c) => {
-  const config = getActiveConfig('image')
-  const studioModels = resolveStudioModels(config)
+  const user = getAuthUser(c)
+  const studioModels = resolveStudioModels()
   const defaultModel = studioModels[0] || STUDIO_IMAGE_MODELS[0]
+  let config
+  try {
+    config = resolveImageGenerationConfig({ model: defaultModel })
+  } catch {
+    config = getActiveConfig('image')
+  }
   const maxReferenceImages = getMaxImageReferenceCount(config)
+  const canViewAll = canViewAllImageStudio(user)
+  let userFilterOptions: { id: number; username: string; display_name: string }[] = []
+  if (canViewAll) {
+    userFilterOptions = db.select({
+      id: schema.users.id,
+      username: schema.users.username,
+      displayName: schema.users.displayName,
+      isActive: schema.users.isActive,
+    })
+      .from(schema.users)
+      .orderBy(desc(schema.users.id))
+      .all()
+      .filter(row => row.isActive)
+      .map(row => ({
+        id: row.id,
+        username: row.username,
+        display_name: row.displayName || row.username,
+      }))
+  }
+  const credit1k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_1K) || APIMART_IMAGE_1K_CREDIT_COST
+  const credit2k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_2K) || APIMART_IMAGE_2K_CREDIT_COST
   return success(c, {
     max_reference_images: maxReferenceImages,
     supports_reference: config ? supportsImageReference(config.provider, defaultModel) : false,
@@ -196,7 +253,16 @@ app.get('/studio/capabilities', async (c) => {
     provider: config?.provider || null,
     model: defaultModel,
     models: studioModels,
-    aspect_ratios: ['9:16', '16:9'],
+    resolutions: STUDIO_IMAGE_RESOLUTIONS.map(id => ({
+      id,
+      label: id.toUpperCase(),
+      credit_cost: id === '2k' ? credit2k : credit1k,
+    })),
+    default_resolution: '1k',
+    aspect_ratios: ['16:9', '9:16'],
+    default_aspect_ratio: '16:9',
+    can_view_all_studio: true,
+    user_filter_options: canViewAll ? userFilterOptions : [],
   })
 })
 
@@ -211,9 +277,32 @@ app.get('/ledger', async (c) => {
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
   const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
   const mineOnlyRaw = c.req.query('mine_only')
-  const mineOnly = mineOnlyRaw == null || mineOnlyRaw === ''
-    ? true
-    : !['0', 'false', 'no'].includes(String(mineOnlyRaw).toLowerCase())
+  const userIdParam = c.req.query('user_id') ? Number(c.req.query('user_id')) : undefined
+  let filterUserId: number | undefined
+  if (userIdParam && Number.isFinite(userIdParam) && userIdParam > 0) {
+    if (userIdParam === user.id) {
+      filterUserId = userIdParam
+    } else if (canViewAllImageStudio(user)) {
+      filterUserId = userIdParam
+    } else {
+      const teamId = activeTeamId
+      if (!teamId) return forbidden(c, '需要选择团队后才能查看其他成员')
+      const memberIds = getTeamMemberUserIds(teamId)
+      if (!memberIds.includes(user.id)) {
+        return forbidden(c, '无权查看团队成员图片')
+      }
+      if (!memberIds.includes(userIdParam)) {
+        return forbidden(c, '该用户不在当前团队')
+      }
+      filterUserId = userIdParam
+    }
+  }
+
+  const mineOnly = filterUserId
+    ? false
+    : mineOnlyRaw == null || mineOnlyRaw === ''
+      ? true
+      : !['0', 'false', 'no'].includes(String(mineOnlyRaw).toLowerCase())
   const studioOnlyRaw = c.req.query('studio_only')
   const studioOnly = studioOnlyRaw != null
     && !['0', 'false', 'no'].includes(String(studioOnlyRaw).toLowerCase())
@@ -229,6 +318,7 @@ app.get('/ledger', async (c) => {
     offset,
     mineOnly,
     studioOnly,
+    userId: filterUserId,
   })
   return success(c, result)
 })
@@ -305,6 +395,52 @@ app.post('/:id/attach', async (c) => {
   } catch (err: any) {
     return badRequest(c, err.message || '添加失败')
   }
+})
+
+// POST /images/:id/pin — 管理员置顶
+app.post('/:id/pin', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return badRequest(c, 'invalid id')
+
+  const [row] = db.select().from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.id, id)).all()
+  if (!row) return notFound(c, '图片不存在')
+
+  const ts = now()
+  db.update(schema.imageGenerations)
+    .set({ isPinned: 1, pinnedAt: ts, updatedAt: ts })
+    .where(eq(schema.imageGenerations.id, id))
+    .run()
+
+  const [updated] = db.select().from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.id, id)).all()
+  return success(c, formatImageRecord(updated))
+})
+
+// DELETE /images/:id/pin — 管理员取消置顶
+app.delete('/:id/pin', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+
+  const id = Number(c.req.param('id'))
+  if (!Number.isFinite(id)) return badRequest(c, 'invalid id')
+
+  const [row] = db.select().from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.id, id)).all()
+  if (!row) return notFound(c, '图片不存在')
+
+  const ts = now()
+  db.update(schema.imageGenerations)
+    .set({ isPinned: 0, pinnedAt: null, updatedAt: ts })
+    .where(eq(schema.imageGenerations.id, id))
+    .run()
+
+  const [updated] = db.select().from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.id, id)).all()
+  return success(c, formatImageRecord(updated))
 })
 
 // GET /images/:id
