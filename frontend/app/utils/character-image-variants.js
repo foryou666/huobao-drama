@@ -51,6 +51,9 @@ function normalizeOutfitEntry(item) {
     costume_asset_id: item.costume_asset_id ?? null,
     candidates,
     variants: item.variants && typeof item.variants === 'object' ? item.variants : {},
+    seedance_asset_id: item.seedance_asset_id ?? item.seedanceAssetId ?? null,
+    seedance_asset_status: item.seedance_asset_status ?? item.seedanceAssetStatus ?? null,
+    seedance_certified_url: item.seedance_certified_url ?? item.seedanceCertifiedUrl ?? null,
     created_at: item.created_at,
   }
 }
@@ -257,11 +260,17 @@ export function listCharacterOutfitPreviews(char) {
     label: outfit.label,
     url: outfit.url,
     candidate_count: outfit.candidates?.length || 0,
+    seedance_asset_id: outfit.seedance_asset_id ?? null,
+    seedance_asset_status: outfit.seedance_asset_status ?? null,
+    seedance_certified_url: outfit.seedance_certified_url ?? null,
     candidates: (outfit.candidates || []).map(candidate => ({
       id: candidate.id,
       url: candidate.url,
       label: candidate.label || '备选',
       is_default: normalizePath(candidate.url) === normalizePath(outfit.url),
+      seedance_asset_id: candidate.seedance_asset_id ?? candidate.seedanceAssetId ?? null,
+      seedance_asset_status: candidate.seedance_asset_status ?? candidate.seedanceAssetStatus ?? null,
+      seedance_certified_url: candidate.seedance_certified_url ?? candidate.seedanceCertifiedUrl ?? null,
     })),
   }))
 }
@@ -328,35 +337,85 @@ export function isOutfitCandidateDefault(outfit, candidate) {
 export function parseStoryboardCharacterImageRefs(sb) {
   const raw = sb?.character_image_refs ?? sb?.characterImageRefs
   if (!raw) return {}
-  if (typeof raw === 'object' && !Array.isArray(raw)) {
-    const map = {}
-    for (const [key, value] of Object.entries(raw)) {
-      const id = Number(key)
-      const url = normalizePath(value)
-      if (Number.isFinite(id) && id > 0 && url) map[id] = url
+  let parsed = raw
+  if (typeof raw === 'string') {
+    if (!raw.trim()) return {}
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return {}
     }
-    return map
   }
-  if (typeof raw !== 'string' || !raw.trim()) return {}
-  try {
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    const map = {}
-    for (const [key, value] of Object.entries(parsed)) {
-      const id = Number(key)
-      const url = normalizePath(value)
-      if (Number.isFinite(id) && id > 0 && url) map[id] = url
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const map = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    const id = Number(key)
+    if (!Number.isFinite(id) || id <= 0) continue
+    const list = normalizeCharacterImageRefList(value)
+    if (!list.length) continue
+    map[id] = list.length === 1 ? list[0] : list
+  }
+  return map
+}
+
+/** 兼容 string / string[] 的角色参考图列表 */
+export function normalizeCharacterImageRefList(value) {
+  if (Array.isArray(value)) {
+    const out = []
+    const seen = new Set()
+    for (const item of value) {
+      const url = normalizePath(item)
+      if (!url || seen.has(url)) continue
+      seen.add(url)
+      out.push(url)
     }
-    return map
-  } catch {
-    return {}
+    return out
   }
+  const one = normalizePath(value)
+  return one ? [one] : []
+}
+
+export function resolveCharacterImageUrls(char, storyboardRefs) {
+  const fromRefs = normalizeCharacterImageRefList(storyboardRefs?.[char?.id])
+  if (fromRefs.length) return fromRefs
+  const primary = normalizePath(char?.image_url || char?.imageUrl || '')
+  return primary ? [primary] : []
 }
 
 export function resolveCharacterImageUrl(char, storyboardRefs) {
-  const selected = storyboardRefs?.[char?.id]
-  if (selected) return normalizePath(selected)
-  return normalizePath(char?.image_url || char?.imageUrl || '') || null
+  return resolveCharacterImageUrls(char, storyboardRefs)[0] || null
+}
+
+/** 合并两套角色参考图（同一角色多形态取并集） */
+export function mergeCharacterImageRefs(baseRefs = {}, nextRefs = {}) {
+  const out = { ...(baseRefs || {}) }
+  for (const [key, value] of Object.entries(nextRefs || {})) {
+    const id = Number(key)
+    if (!Number.isFinite(id)) continue
+    const merged = [
+      ...normalizeCharacterImageRefList(out[id] ?? out[key]),
+      ...normalizeCharacterImageRefList(value),
+    ]
+    const deduped = normalizeCharacterImageRefList(merged)
+    if (!deduped.length) {
+      delete out[id]
+      delete out[key]
+      continue
+    }
+    out[id] = deduped.length === 1 ? deduped[0] : deduped
+  }
+  return out
+}
+
+export function labelForCharacterImage(char, imageUrl) {
+  const path = normalizePath(imageUrl)
+  if (!path) return char?.name || '角色'
+  const images = listCharacterImages(char)
+  const hit = images.find(item => normalizePath(item?.url) === path)
+  const form = hit ? variantLabel(hit) : ''
+  const name = char?.name || '角色'
+  if (!form || form === '原图' || form === name) return name
+  return `${name}·${form}`
 }
 
 export function variantLabel(item) {

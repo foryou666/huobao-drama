@@ -30,8 +30,9 @@
           <div v-else class="poster-placeholder" aria-hidden="true" />
 
           <div class="poster-top">
-            <span class="episode-badge">{{ episodeCount(item) }} 集</span>
-            <span v-if="item.is_shared_project" class="share-badge">共享</span>
+            <span class="episode-badge">{{ isNarrationProject(item) ? '解说漫' : `${episodeCount(item)} 集` }}</span>
+            <span v-if="isNarrationProject(item)" class="share-badge">解说</span>
+            <span v-else-if="item.is_shared_project" class="share-badge">共享</span>
             <span
               v-else-if="item.shared_teams?.length"
               class="share-badge owned"
@@ -252,7 +253,15 @@ async function load() {
   }
 }
 
+function isNarrationProject(item) {
+  return !!(item?.is_narration || item?.project_kind === 'narration' || item?.narration_job_id)
+}
+
 function openBoard(item) {
+  if (isNarrationProject(item) && item.narration_job_id) {
+    router.push(`/narration/${item.narration_job_id}`)
+    return
+  }
   router.push(`/canvas/${item.id}`)
 }
 

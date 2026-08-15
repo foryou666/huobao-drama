@@ -2,6 +2,8 @@ import { ref } from 'vue'
 import { api } from '~/composables/useApi'
 
 const urlCache = ref(Object.create(null))
+/** 已解析但无可用展示地址（如早期未生成的 thumbs），避免反复请求 */
+const missingCache = ref(Object.create(null))
 export const cacheVersion = ref(0)
 let pending = new Set()
 let flushTimer = null
@@ -15,14 +17,16 @@ function bumpCache() {
 }
 
 function scheduleResolve(path) {
-  if (!path.startsWith('static/') || urlCache.value[path]) return
+  if (!path.startsWith('static/') || urlCache.value[path] || missingCache.value[path]) return
   pending.add(path)
   clearTimeout(flushTimer)
   flushTimer = setTimeout(() => { flushResolve().catch(() => {}) }, 30)
 }
 
 async function flushResolve() {
-  const batch = [...pending].filter(p => !urlCache.value[p]).slice(0, 48)
+  const batch = [...pending]
+    .filter(p => !urlCache.value[p] && !missingCache.value[p])
+    .slice(0, 48)
   for (const path of batch) pending.delete(path)
   if (!batch.length) {
     pending.clear()
@@ -32,9 +36,16 @@ async function flushResolve() {
     const data = await api.post('/media/resolve-urls', { paths: batch })
     const urls = data?.urls || {}
     let changed = false
-    for (const [path, url] of Object.entries(urls)) {
-      if (url && urlCache.value[path] !== url) {
-        urlCache.value[path] = url
+    for (const path of batch) {
+      const url = String(urls[path] || '').trim()
+      if (url) {
+        if (urlCache.value[path] !== url) {
+          urlCache.value[path] = url
+          delete missingCache.value[path]
+          changed = true
+        }
+      } else if (!missingCache.value[path]) {
+        missingCache.value[path] = 1
         changed = true
       }
     }
@@ -103,20 +114,26 @@ function localStaticUrl(path) {
   return path.startsWith('/') ? path : `/${path}`
 }
 
-function isOssOrCachedUrl(path, url) {
-  if (!url) return false
-  if (url.startsWith('http://') || url.startsWith('https://')) return true
-  return !!(path && urlCache.value[path])
+function isRemoteUrl(url) {
+  return !!url && (url.startsWith('http://') || url.startsWith('https://'))
 }
 
-/** 列表/网格缩略图：优先 thumbs（仅当 OSS 已解析）；否则原图；均未就绪则留空 */
+function isOssOrCachedUrl(path, url) {
+  if (!url) return false
+  if (isRemoteUrl(url)) return true
+  // 仅接受已缓存的同源 /static（本地热数据）；勿把「假 thumbs 回退」当可用
+  return !!(path && urlCache.value[path] && url.startsWith('/static/'))
+}
+
+/** 列表/网格缩略图：优先 thumbs（仅当 OSS 已解析为 http）；否则原图；均未就绪则留空 */
 export function mediaGridUrl(raw, explicitThumb) {
   void cacheVersion.value
   const full = normalizeMediaPath(raw)
   const thumb = normalizeMediaPath(explicitThumb) || thumbPathFromSource(raw)
   if (thumb) {
     const thumbUrl = mediaDisplayUrl(thumb)
-    if (isOssOrCachedUrl(thumb, thumbUrl)) return thumbUrl
+    // thumbs 只在真正签出 OSS 地址时使用；缺失 thumbs 会 resolve 成假 /static 路径并 404
+    if (isRemoteUrl(thumbUrl)) return thumbUrl
   }
   const fullUrl = mediaDisplayUrl(full)
   if (isOssOrCachedUrl(full, fullUrl)) return fullUrl
@@ -130,6 +147,7 @@ export function mediaDisplayUrl(raw) {
   if (!path) return ''
   if (path.startsWith('http://') || path.startsWith('https://')) return path
   if (urlCache.value[path]) return urlCache.value[path]
+  if (missingCache.value[path]) return ''
   if (path.startsWith('static/')) {
     scheduleResolve(path)
     return ''
@@ -142,7 +160,12 @@ export async function prefetchMediaUrls(paths, { force = false } = {}) {
   const normalized = [...new Set(
     (paths || []).map(normalizeMediaPath).filter(p => p.startsWith('static/')),
   )]
-  const toFetch = force ? normalized : normalized.filter(p => !urlCache.value[p])
+  if (force) {
+    for (const path of normalized) delete missingCache.value[path]
+  }
+  const toFetch = force
+    ? normalized
+    : normalized.filter(p => !urlCache.value[p] && !missingCache.value[p])
   if (!toFetch.length) return
   const chunkSize = 48
   try {
@@ -151,9 +174,16 @@ export async function prefetchMediaUrls(paths, { force = false } = {}) {
       const data = await api.post('/media/resolve-urls', { paths: batch })
       const urls = data?.urls || {}
       let changed = false
-      for (const [path, url] of Object.entries(urls)) {
-        if (url && urlCache.value[path] !== url) {
-          urlCache.value[path] = url
+      for (const path of batch) {
+        const url = String(urls[path] || '').trim()
+        if (url) {
+          if (urlCache.value[path] !== url) {
+            urlCache.value[path] = url
+            delete missingCache.value[path]
+            changed = true
+          }
+        } else if (!missingCache.value[path]) {
+          missingCache.value[path] = 1
           changed = true
         }
       }

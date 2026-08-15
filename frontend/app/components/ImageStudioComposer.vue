@@ -167,7 +167,18 @@
             </div>
 
             <div class="composer-pills composer-pills-models">
-              <span class="composer-pill active composer-pill-static">Image 2</span>
+              <button
+                v-for="modelId in modelOptions"
+                :key="modelId"
+                type="button"
+                class="composer-pill"
+                :class="{ active: selectedModel === modelId }"
+                :disabled="isModelDisabled(modelId)"
+                :title="modelDisabledHint(modelId)"
+                @click="selectModel(modelId)"
+              >
+                {{ studioImageModelLabel(modelId) }}
+              </button>
             </div>
 
             <div class="composer-pills">
@@ -180,6 +191,19 @@
                 @click="selectResolution(opt.id)"
               >
                 {{ resolutionLabel(opt) }}
+              </button>
+            </div>
+
+            <div v-if="quantityOptions.length > 1" class="composer-pills">
+              <button
+                v-for="n in quantityOptions"
+                :key="n"
+                type="button"
+                class="composer-pill"
+                :class="{ active: selectedQuantity === n }"
+                @click="selectQuantity(n)"
+              >
+                {{ n }}张
               </button>
             </div>
 
@@ -288,17 +312,22 @@ import {
   replaceMentionWithImageLabel,
   sceneDisplayLabel,
   unbindCharacter,
+  unbindCharacterImage,
   unbindProp,
   unbindScene,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
+import { mergeCharacterImageRefs } from '~/utils/character-image-variants.js'
 import {
   resolveStudioImageModel,
   setLastStudioImageModel,
   STUDIO_IMAGE_MODEL_DEFAULT,
   STUDIO_IMAGE_MODEL_OPTIONS,
+  studioImageModelLabel,
+  isDream50ProStudioModel,
 } from '~/utils/studio-image-model-preference.js'
 import {
+  aspectOptionsForModel,
   aspectRatioFromImageItem,
   resolveStudioImageAspectRatio,
   setLastStudioImageAspectRatio,
@@ -323,8 +352,9 @@ const emit = defineEmits(['generate', 'need-dramas'])
 
 const maxImages = ref(6)
 const supportsReference = ref(true)
-const aspectRatios = STUDIO_IMAGE_ASPECT_OPTIONS
+const aspectRatios = ref([...STUDIO_IMAGE_ASPECT_OPTIONS])
 const modelOptions = ref([...STUDIO_IMAGE_MODEL_OPTIONS])
+const modelMetaById = ref({})
 const selectedModel = ref(STUDIO_IMAGE_MODEL_DEFAULT)
 const resolutionOptions = ref(
   STUDIO_IMAGE_RESOLUTION_OPTIONS.map(id => ({
@@ -334,30 +364,103 @@ const resolutionOptions = ref(
   })),
 )
 const selectedResolution = ref(resolveStudioImageResolution())
+const quantityOptions = ref([1])
+const selectedQuantity = ref(1)
+const aspectRatio = ref(resolveStudioImageAspectRatio(STUDIO_IMAGE_MODEL_DEFAULT))
+
+function applyModelMeta(modelId) {
+  const meta = modelMetaById.value[modelId]
+  const nextAspects = Array.isArray(meta?.aspect_ratios) && meta.aspect_ratios.length
+    ? meta.aspect_ratios.map(String)
+    : aspectOptionsForModel(modelId)
+  aspectRatios.value = nextAspects
+  if (!nextAspects.includes(aspectRatio.value)) {
+    aspectRatio.value = resolveStudioImageAspectRatio(modelId, nextAspects)
+  }
+
+  if (meta?.resolutions?.length) {
+    resolutionOptions.value = meta.resolutions.map(item => ({
+      id: item.id,
+      label: item.label || String(item.id || '').toUpperCase(),
+      credit_cost: item.credit_cost,
+    }))
+  } else if (isDream50ProStudioModel(modelId)) {
+    resolutionOptions.value = ['1k', '2k', '4k'].map(id => ({
+      id,
+      label: id === '1k' ? '标清 1K' : id === '4k' ? '超清 4K' : '高清 2K',
+      credit_cost: id === '4k' ? 20 : id === '1k' ? 8 : 12,
+    }))
+  } else {
+    resolutionOptions.value = STUDIO_IMAGE_RESOLUTION_OPTIONS.map(id => ({
+      id,
+      label: id.toUpperCase(),
+      credit_cost: STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[id],
+    }))
+  }
+  const allowed = new Set(resolutionOptions.value.map(item => item.id))
+  const preferred = meta?.default_resolution
+    || (isDream50ProStudioModel(modelId) ? '2k' : selectedResolution.value)
+  if (!allowed.has(selectedResolution.value)) {
+    selectedResolution.value = allowed.has(preferred)
+      ? preferred
+      : (resolutionOptions.value[0]?.id || '1k')
+  }
+
+  const nextQuantities = Array.isArray(meta?.quantities) && meta.quantities.length
+    ? meta.quantities.map(n => Number(n)).filter(n => n >= 1)
+    : (isDream50ProStudioModel(modelId) ? [1, 2, 3, 4] : [1])
+  quantityOptions.value = nextQuantities
+  if (!nextQuantities.includes(selectedQuantity.value)) {
+    selectedQuantity.value = Number(meta?.default_quantity) || nextQuantities[0] || 1
+  }
+
+  if (meta?.max_reference_images) maxImages.value = Number(meta.max_reference_images)
+  if (meta && meta.supports_reference != null) supportsReference.value = !!meta.supports_reference
+}
 
 function selectModel(model) {
+  if (isModelDisabled(model)) return
   selectedModel.value = model
   setLastStudioImageModel(model)
+  applyModelMeta(model)
 }
 
 function selectResolution(resolution) {
   const value = String(resolution || '').trim().toLowerCase()
-  if (!STUDIO_IMAGE_RESOLUTION_OPTIONS.includes(value)) return
+  if (!resolutionOptions.value.some(item => item.id === value)) return
   selectedResolution.value = value
   setLastStudioImageResolution(value)
 }
 
 function resolutionLabel(opt) {
-  const id = String(opt?.id || '').toUpperCase()
+  const base = String(opt?.label || opt?.id || '').trim() || '1K'
   const cost = Number(opt?.credit_cost)
-  if (Number.isFinite(cost) && cost > 0) return `${id} · ${cost}积分`
+  if (Number.isFinite(cost) && cost > 0) return `${base} · ${cost}积分`
   const fallback = STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[opt?.id]
-  if (fallback) return `${id} · ${fallback}积分`
-  return id || '1K'
+  if (fallback) return `${base} · ${fallback}积分`
+  return base
+}
+
+function selectQuantity(n) {
+  const value = Math.floor(Number(n))
+  if (!quantityOptions.value.includes(value)) return
+  selectedQuantity.value = value
 }
 
 function modelSupportsReference(model) {
-  return /gpt-image|chatgpt-image|^image-2/i.test(String(model || ''))
+  return /gpt-image|chatgpt-image|^image-2|dream5\.0/i.test(String(model || ''))
+}
+
+function isModelDisabled(modelId) {
+  const meta = modelMetaById.value[modelId]
+  if (!meta) return false
+  return meta.available === false
+}
+
+function modelDisabledHint(modelId) {
+  if (!isModelDisabled(modelId)) return ''
+  if (isDream50ProStudioModel(modelId)) return '即梦通道4 Session 未配置'
+  return '当前不可用'
 }
 
 const prompt = ref('')
@@ -367,9 +470,8 @@ const binding = reactive(createStudioBindingState())
 const projectChars = ref([])
 const projectScenes = ref([])
 const projectProps = ref([])
-const aspectRatio = ref(resolveStudioImageAspectRatio())
-
 function selectAspectRatio(ratio) {
+  if (!aspectRatios.value.includes(ratio)) return
   aspectRatio.value = ratio
   setLastStudioImageAspectRatio(ratio)
 }
@@ -462,9 +564,19 @@ function resetBinding() {
   Object.assign(binding, createStudioBindingState())
 }
 
+function ingestModelOptions(caps) {
+  const map = {}
+  for (const item of caps?.model_options || []) {
+    if (!item?.id) continue
+    map[item.id] = item
+  }
+  modelMetaById.value = map
+}
+
 async function loadCapabilities() {
   try {
     const caps = await loadImageStudioCapabilities()
+    ingestModelOptions(caps)
     applyImageStudioCapabilitiesToComposer(caps, {
       maxImages,
       supportsReference,
@@ -482,17 +594,21 @@ async function loadCapabilities() {
         credit_cost: STUDIO_IMAGE_RESOLUTION_CREDIT_FALLBACK[id],
       })),
     })
+    // 默认始终 Image 2；用户可再手动切换到 dream5.0 pro
     selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
     setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
+    applyModelMeta(selectedModel.value)
   } catch {
-    selectedModel.value = resolveStudioImageModel(modelOptions.value)
+    selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
     selectedResolution.value = resolveStudioImageResolution()
+    applyModelMeta(selectedModel.value)
   }
 }
 
 function applyCachedCapabilities() {
   const caps = getCachedImageStudioCapabilities()
   if (!caps) return
+  ingestModelOptions(caps)
   applyImageStudioCapabilitiesToComposer(caps, {
     maxImages,
     supportsReference,
@@ -511,6 +627,7 @@ function applyCachedCapabilities() {
     })),
   })
   selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
+  applyModelMeta(selectedModel.value)
 }
 
 async function loadProjectAssets(id) {
@@ -605,10 +722,10 @@ function onEntityPickerConfirm(result) {
     for (const charId of result.characterIds || []) {
       bindCharacter(binding, charId, projectChars.value)
     }
-    binding.character_image_refs = {
-      ...(binding.character_image_refs || {}),
-      ...(result.characterImageRefs || {}),
-    }
+    binding.character_image_refs = mergeCharacterImageRefs(
+      binding.character_image_refs,
+      result.characterImageRefs || {},
+    )
     syncPromptImageHeader()
     return
   }
@@ -686,8 +803,11 @@ function removeVisualRef(item) {
 
 function unlinkRef(ref) {
   const label = ref.promptLabel || ref.label
-  if (ref.source === 'character' && ref.charId) unbindCharacter(binding, ref.charId)
-  else if (ref.source === 'scene' || ref.sceneId) unbindScene(binding, ref.sceneId)
+  if (ref.source === 'character' && ref.charId) {
+    const char = projectChars.value.find(item => item.id === ref.charId)
+    if (ref.url) unbindCharacterImage(binding, ref.charId, ref.url, char)
+    else unbindCharacter(binding, ref.charId)
+  } else if (ref.source === 'scene' || ref.sceneId) unbindScene(binding, ref.sceneId)
   else if (ref.source === 'prop' && ref.propId) unbindProp(binding, ref.propId)
   else if (ref.source === 'reference' && ref.url) {
     const path = normalizeMediaPath(ref.url)
@@ -888,11 +1008,15 @@ function submit() {
   const payload = {
     aspect_ratio: aspectRatio.value,
     image_type: 'studio',
-    model: STUDIO_IMAGE_MODEL_DEFAULT,
+    model: selectedModel.value || STUDIO_IMAGE_MODEL_DEFAULT,
     resolution: selectedResolution.value || STUDIO_IMAGE_RESOLUTION_DEFAULT,
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
+  if (isDream50ProStudioModel(payload.model) && selectedQuantity.value > 1) {
+    payload.quantity = selectedQuantity.value
+  }
   setLastStudioImageAspectRatio(aspectRatio.value)
+  setLastStudioImageModel(payload.model)
   setLastStudioImageResolution(payload.resolution)
 
   if (dramaLinked.value) {
@@ -931,11 +1055,13 @@ function submit() {
 
 function loadFromItem(item) {
   prompt.value = String(item?.prompt || '')
-  aspectRatio.value = aspectRatioFromImageItem(item)
   selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
   setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
+  applyModelMeta(selectedModel.value)
+  aspectRatio.value = aspectRatioFromImageItem(item, selectedModel.value)
   selectedResolution.value = resolutionFromImageItem(item)
   setLastStudioImageResolution(selectedResolution.value)
+  selectedQuantity.value = 1
   if (item?.drama_id) {
     dramaId.value = String(item.drama_id)
     loadProjectAssets(dramaId.value)
@@ -955,11 +1081,13 @@ function referenceModifyFromItem(item) {
   if (!path) return false
 
   prompt.value = ''
-  aspectRatio.value = aspectRatioFromImageItem(item)
   selectedModel.value = STUDIO_IMAGE_MODEL_DEFAULT
   setLastStudioImageModel(STUDIO_IMAGE_MODEL_DEFAULT)
+  applyModelMeta(selectedModel.value)
+  aspectRatio.value = aspectRatioFromImageItem(item, selectedModel.value)
   selectedResolution.value = resolutionFromImageItem(item)
   setLastStudioImageResolution(selectedResolution.value)
+  selectedQuantity.value = 1
   if (item?.drama_id) {
     dramaId.value = String(item.drama_id)
     loadProjectAssets(dramaId.value)

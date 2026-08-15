@@ -32,12 +32,12 @@
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <img v-if="showBrandImage" :src="brandLogo" alt="影光工场" class="settings-brand-logo" @error="showBrandImage = false" />
               <span v-else class="settings-brand-fallback">红</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Hongguo Shorts</div>
-              <div class="settings-brand-name">红果短剧</div>
+              <div class="settings-brand-kicker">Yingguang Studio</div>
+              <div class="settings-brand-name">影光工场</div>
             </div>
           </div>
           <h2 class="settings-title">AI 服务配置</h2>
@@ -47,11 +47,11 @@
           <div class="setup-panel-head">
             <div>
               <div class="setup-kicker">Quick Setup</div>
-              <div class="setup-title">红果推荐配置</div>
+              <div class="setup-title">影光工场推荐配置</div>
               <div class="setup-desc">一键写入文本、图片、视频、音频四类推荐配置，适合作为开箱默认方案。</div>
             </div>
             <button class="btn btn-primary" @click="presetDialog = true">
-              <Sparkles :size="14" /> 红果一键配置
+              <Sparkles :size="14" /> 影光工场一键配置
             </button>
           </div>
           <div class="preset-grid">
@@ -86,10 +86,662 @@
         <section class="setup-panel card jimeng-session-panel">
           <div class="setup-panel-head compact">
             <div>
+              <div class="setup-kicker">通道1</div>
+              <div class="setup-title">橙盟上游余额</div>
+              <div class="setup-desc">
+                读取橙盟 <code>/api/user/balance</code>；明细为上游任务列表中的实际扣费（元）。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span v-if="chengmengBalanceAccounts.length" class="mono dim">{{ chengmengBalanceAccounts.length }} 个账号</span>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="chengmengBalanceLoading"
+                @click="loadChengmengBalance"
+              >
+                {{ chengmengBalanceLoading ? '刷新中…' : '刷新余额' }}
+              </button>
+            </div>
+          </div>
+          <p v-if="chengmengBalanceError" class="aistarslab-remote-error">{{ chengmengBalanceError }}</p>
+          <p v-else-if="chengmengBalanceLoading" class="dim setup-desc">正在拉取橙盟余额与任务明细…</p>
+          <div v-if="chengmengBalanceAccounts.length" class="jimeng-session-list">
+            <div
+              v-for="item in chengmengBalanceAccounts"
+              :key="item.config_id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.name || `配置 #${item.config_id}` }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+                <span
+                  v-if="item.balance"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="`累计充值 ${item.balance.total_recharge} · 累计消耗 ${item.balance.total_spent} · 冻结 ${item.balance.frozen_balance}`"
+                >
+                  可用 {{ formatUpstreamMoney(item.balance.available_balance) }} 元
+                </span>
+                <span v-else-if="item.error" class="tag">{{ item.error }}</span>
+                <span v-else class="dim mono jimeng-credit-tag">余额 —</span>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="!chengmengBalanceLoading" class="dim setup-desc">暂无橙盟视频配置</p>
+          <div v-if="chengmengBalanceTasks.length" class="upstream-task-panel">
+            <div class="upstream-task-head">上游任务扣费明细</div>
+            <p class="dim setup-desc">
+              「变动后余额」由当前可用余额按明细从新到旧回推；期间若有充值/其他消费，更早条目可能偏离。
+            </p>
+            <table class="user-table upstream-task-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>任务</th>
+                  <th>模型</th>
+                  <th>状态</th>
+                  <th>实扣</th>
+                  <th>变动后余额</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="task in chengmengBalanceTasks" :key="task.task_id">
+                  <td class="mono dim">{{ formatUpstreamTime(task.created_at) }}</td>
+                  <td>
+                    <div class="mono">{{ shortTaskId(task.task_id) }}</div>
+                    <div v-if="task.prompt_head" class="dim upstream-task-prompt">{{ task.prompt_head }}</div>
+                  </td>
+                  <td class="mono">{{ task.model || '—' }}</td>
+                  <td>{{ task.status || '—' }}</td>
+                  <td class="mono">{{ formatUpstreamDelta(task.balance_delta, task.cost_unit || '元') }}</td>
+                  <td class="mono">{{ formatUpstreamBalanceAfter(task, '元') }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="chengmengBalanceTasksTotal > chengmengBalanceTasks.length" class="dim setup-desc">
+              显示最近 {{ chengmengBalanceTasks.length }} 条 / 上游共 {{ chengmengBalanceTasksTotal }} 条
+            </p>
+          </div>
+          <p v-else-if="chengmengBalanceTasksError" class="aistarslab-remote-error">{{ chengmengBalanceTasksError }}</p>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道2</div>
+              <div class="setup-title">火山方舟 API Key</div>
+              <div class="setup-desc">
+                可添加多个方舟 API Key 并一键切换；当前启用于通道2 全部视频生成。
+                现金余额与<strong>虚拟人像认证入库</strong>需同账号
+                <strong>Access Key / Secret Key</strong>（管控面，非 ark- API Key）；
+                仅有 API Key 时可生视频、探测可用性。
+                也可把 <code>huoshankey_备注=ark-...</code> 与
+                <code>huoshanak_备注</code> / <code>huoshansk_备注</code>（账单 AK/SK）写入服务器
+                <code>backend/.env</code> 后点「同步环境变量」；或在下方填写
+                <strong>账单账号标识</strong> 与 Access Key / Secret Key 建立对应关系。
+                费用中心：
+                <a href="https://console.volcengine.com/finance/account-overview/" target="_blank" rel="noopener">火山控制台</a>
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span v-if="officialBalanceAccounts.length" class="mono dim">{{ officialBalanceAccounts.length }} 个 Key</span>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="officialBalanceLoading || officialKeySaving"
+                @click="syncOfficialKeysFromEnv"
+              >
+                同步环境变量
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="officialBalanceLoading"
+                @click="loadOfficialBalance"
+              >
+                {{ officialBalanceLoading ? '刷新中…' : '刷新余额' }}
+              </button>
+            </div>
+          </div>
+          <p v-if="officialBalanceError" class="aistarslab-remote-error">{{ officialBalanceError }}</p>
+          <p v-else-if="officialBalanceLoading" class="dim setup-desc">正在拉取方舟任务列表与余额（轻量模式，约需数秒）…</p>
+          <div v-if="officialBalanceAccounts.length" class="jimeng-session-list">
+            <div
+              v-for="item in officialBalanceAccounts"
+              :key="item.config_id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.name || `配置 #${item.config_id}` }}</span>
+                <span v-if="item.api_key_masked" class="mono dim">{{ item.api_key_masked }}</span>
+                <span v-if="item.billing_label" class="dim mono" title="账单账号标识">bill:{{ item.billing_label }}</span>
+                <span v-if="item.access_key_masked" class="mono dim" title="账单 Access Key">AK {{ item.access_key_masked }}</span>
+                <span v-if="item.env_name" class="dim mono">env:{{ item.env_name }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+                <span v-if="item.probe_ok" class="tag tag-success">可用</span>
+                <span v-else-if="item.error" class="tag" :title="item.error">异常</span>
+                <span
+                  v-if="item.balance && item.balance.available_balance != null"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="officialBalanceTitle(item)"
+                >
+                  可用 {{ formatUpstreamMoney(item.balance.available_balance) }} 元
+                </span>
+                <span
+                  v-else-if="item.has_billing_credentials"
+                  class="dim mono jimeng-credit-tag"
+                  :title="item.note || item.error || ''"
+                >余额查询失败</span>
+                <span
+                  v-else
+                  class="dim mono jimeng-credit-tag"
+                  :title="item.note || ''"
+                >余额 —（需 AK/SK）</span>
+                <span
+                  v-if="item.estimated_spend_yuan != null"
+                  class="tag jimeng-credit-tag"
+                  title="本页近期成功任务按官方价估算合计"
+                >
+                  近期估算 {{ formatUpstreamMoney(item.estimated_spend_yuan) }} 元
+                </span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="officialKeySaving"
+                  @click="startEditOfficialKey(item)"
+                >
+                  编辑
+                </button>
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="officialKeySaving"
+                  @click="activateOfficialKey(item.config_id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="officialKeySaving"
+                  @click="removeOfficialKey(item)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="!officialBalanceLoading" class="dim setup-desc">暂无通道2火山方舟配置</p>
+          <div class="jimeng-session-actions" style="margin-top: 12px; flex-wrap: wrap; gap: 8px;">
+            <div v-if="officialKeyForm.editing_id" class="dim" style="width: 100%; font-size: 12px;">
+              正在编辑 #{{ officialKeyForm.editing_id }}「{{ officialKeyForm.name || '未命名' }}」——
+              API Key / Secret 留空表示不改；可只补填 Access Key / Secret Key。
+              <button type="button" class="btn btn-sm btn-ghost" style="margin-left: 6px;" @click="resetOfficialKeyForm">取消编辑</button>
+            </div>
+            <input
+              v-model="officialKeyForm.name"
+              class="jimeng-session-label"
+              type="text"
+              placeholder="备注（如：韩桥远）"
+            />
+            <input
+              v-model="officialKeyForm.billing_label"
+              class="jimeng-session-label"
+              type="text"
+              placeholder="账单账号标识（如 lingjingkeji，对应 env huoshanak_标识）"
+            />
+            <input
+              v-model="officialKeyForm.api_key"
+              class="jimeng-session-input"
+              style="min-width: 220px; flex: 1;"
+              type="password"
+              :placeholder="officialKeyForm.editing_id ? '方舟 API Key（留空不改）' : '方舟 API Key（ark-...）'"
+              autocomplete="new-password"
+            />
+            <input
+              v-model="officialKeyForm.access_key"
+              class="jimeng-session-label"
+              type="text"
+              :placeholder="officialKeyForm.editing_id && officialKeyForm.has_ak ? 'Access Key（已配置，留空不改）' : 'Access Key（火山账单 / 余额查询）'"
+            />
+            <input
+              v-model="officialKeyForm.secret_key"
+              class="jimeng-session-label"
+              type="password"
+              :placeholder="officialKeyForm.editing_id && officialKeyForm.has_sk ? 'Secret Key（已配置，留空不改）' : 'Secret Key（火山账单 / 余额查询）'"
+              autocomplete="new-password"
+            />
+            <label v-if="!officialKeyForm.editing_id" class="jimeng-access-toggle">
+              <input v-model="officialKeyForm.activate" type="checkbox" />
+              添加后设为当前
+            </label>
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="officialKeySaving || (!officialKeyForm.editing_id && !officialKeyForm.api_key.trim())"
+              @click="saveOfficialKey"
+            >
+              {{ officialKeySaving ? '保存中…' : (officialKeyForm.editing_id ? '保存修改' : '添加 API Key') }}
+            </button>
+          </div>
+          <div v-if="officialBalanceTasks.length" class="upstream-task-panel">
+            <div class="upstream-task-head">上游任务扣费明细（当前启用 Key）</div>
+            <p class="dim setup-desc">
+              直接读取方舟任务列表（含探测直连）；估算费用为 tokens × 官方刊例价。实际成本来自费用中心 ListBillDetail 实付并写入本站库；本站扣费来自提交时的积分流水。
+            </p>
+            <table class="user-table upstream-task-table">
+              <thead>
+                <tr>
+                  <th>创建时间</th>
+                  <th>完成时间</th>
+                  <th>任务时长</th>
+                  <th>操作人</th>
+                  <th>任务</th>
+                  <th>模型</th>
+                  <th>状态</th>
+                  <th>Tokens</th>
+                  <th>估算费用</th>
+                  <th>实际成本</th>
+                  <th>本站扣费</th>
+                  <th>视频</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="task in officialBalanceTasks" :key="`${task.local_id || ''}-${task.task_id}`">
+                  <td class="mono dim">{{ formatUpstreamTime(task.created_at) }}</td>
+                  <td class="mono dim">{{ formatUpstreamTime(task.completed_at) }}</td>
+                  <td class="mono dim">{{ formatOfficialTaskDuration(task) }}</td>
+                  <td>{{ task.username || task.operator || '—' }}</td>
+                  <td>
+                    <div class="mono">{{ shortTaskId(task.task_id) }}</div>
+                    <div v-if="task.local_id" class="dim">本站 #{{ task.local_id }}</div>
+                    <div v-if="task.prompt_head" class="dim upstream-task-prompt">{{ task.prompt_head }}</div>
+                    <div v-if="task.error_message" class="aistarslab-remote-error">{{ task.error_message }}</div>
+                  </td>
+                  <td class="mono">
+                    <div>{{ task.model || '—' }}</div>
+                    <div v-if="task.resolution" class="dim">{{ task.resolution }}</div>
+                  </td>
+                  <td>{{ task.status || '—' }}</td>
+                  <td class="mono">{{ formatOfficialTokens(task) }}</td>
+                  <td class="mono" :title="task.cost_note || ''">{{ formatOfficialTaskCost(task) }}</td>
+                  <td class="mono" :title="task.actual_cost_note || ''">{{ formatOfficialActualCost(task) }}</td>
+                  <td class="mono" :title="task.site_credits_note || ''">{{ formatOfficialSiteCredits(task) }}</td>
+                  <td>
+                    <div v-if="officialTaskPlayUrl(task)" class="upstream-task-video">
+                      <video
+                        :src="officialTaskPlayUrl(task)"
+                        controls
+                        playsinline
+                        preload="metadata"
+                        class="upstream-task-video-player"
+                      />
+                      <a
+                        class="dim mono"
+                        :href="officialTaskPlayUrl(task)"
+                        target="_blank"
+                        rel="noopener"
+                      >新窗口打开</a>
+                    </div>
+                    <span v-else class="dim">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="upstream-task-pager">
+              <span class="dim mono">
+                第 {{ officialBalancePage }} 页
+                <template v-if="officialBalanceTasksTotal">
+                  · 共 {{ officialBalanceTasksTotal }} 条
+                </template>
+                · 本页 {{ officialBalanceTasks.length }} 条
+              </span>
+              <div class="upstream-task-pager-actions">
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="officialBalanceLoading || officialBalancePage <= 1"
+                  @click="loadOfficialBalancePage(officialBalancePage - 1)"
+                >
+                  上一页
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="officialBalanceLoading || !officialBalanceHasMore"
+                  @click="loadOfficialBalancePage(officialBalancePage + 1)"
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="officialBalanceTasksError" class="aistarslab-remote-error">{{ officialBalanceTasksError }}</p>
+
+          <div class="upstream-task-panel official-pnl-panel">
+            <div class="official-pnl-head-row">
+              <div>
+                <div class="upstream-task-head">通道2 盈亏统计</div>
+                <p class="dim setup-desc">
+                  本站实收（积分÷100）对比控制台实付；仅统计已入库实付的成功任务。后台每 1 分钟自动补拉 5 条实付（从新到旧翻页）。
+                </p>
+              </div>
+              <div class="official-pnl-actions">
+                <select v-model="officialPnlDays" class="input input-sm official-pnl-filter" @change="loadOfficialPnl(false)">
+                  <option :value="0">全部时间</option>
+                  <option :value="7">近 7 天</option>
+                  <option :value="30">近 30 天</option>
+                  <option :value="90">近 90 天</option>
+                </select>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="officialPnlLoading"
+                  @click="loadOfficialPnl(false)"
+                >
+                  {{ officialPnlLoading ? '统计中…' : '刷新统计' }}
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="officialPnlLoading"
+                  @click="loadOfficialPnl(true)"
+                >
+                  补拉实付并统计
+                </button>
+              </div>
+            </div>
+            <p v-if="officialPnlError" class="aistarslab-remote-error">{{ officialPnlError }}</p>
+            <p v-if="officialBillSync" class="dim setup-desc official-bill-sync-status">
+              自动补拉：
+              <template v-if="officialBillSync.enabled">每 {{ Math.round((officialBillSync.interval_ms || 60000) / 1000) }} 秒 {{ officialBillSync.batch_size || 5 }} 条</template>
+              <template v-else>已禁用</template>
+              · 缺实付 {{ officialBillSync.remaining_missing ?? '—' }}
+              · 游标 #{{ officialBillSync.cursor_before_id || '最新' }}
+              · 累计匹配 {{ officialBillSync.total_matched ?? 0 }}
+              <template v-if="officialBillSync.last_run_at"> · 上次 {{ formatUpstreamTime(officialBillSync.last_run_at) }}</template>
+              <template v-if="officialBillSync.last_matched != null"> · 上次 +{{ officialBillSync.last_matched }}</template>
+              <template v-if="officialBillSync.running"> · 运行中</template>
+            </p>
+            <p v-if="officialBillSync?.last_error" class="aistarslab-remote-error">{{ officialBillSync.last_error }}</p>
+            <template v-else-if="officialPnlSummary">
+              <div class="official-pnl-summary" :class="{ 'is-loss': officialPnlSummary.is_loss, 'is-profit': officialPnlSummary.is_profit }">
+                <div class="official-pnl-stat">
+                  <div class="dim">本站实收</div>
+                  <div class="mono">{{ formatUpstreamMoney(officialPnlSummary.total_revenue_yuan) }} 元</div>
+                </div>
+                <div class="official-pnl-stat">
+                  <div class="dim">上游实付</div>
+                  <div class="mono">{{ formatUpstreamMoney(officialPnlSummary.total_actual_cost_yuan) }} 元</div>
+                </div>
+                <div class="official-pnl-stat">
+                  <div class="dim">净利润</div>
+                  <div class="mono official-pnl-net">{{ formatOfficialPnlSigned(officialPnlSummary.net_profit_yuan) }} 元</div>
+                </div>
+                <div class="official-pnl-stat">
+                  <div class="dim">毛利率</div>
+                  <div class="mono">{{ formatOfficialPnlMargin(officialPnlSummary.margin_pct_vs_cost) }}</div>
+                </div>
+                <div class="official-pnl-stat">
+                  <div class="dim">盈利 / 亏损</div>
+                  <div class="mono">{{ officialPnlSummary.profit_tasks }} / {{ officialPnlSummary.loss_tasks }}</div>
+                </div>
+                <div class="official-pnl-stat">
+                  <div class="dim">缺实付</div>
+                  <div class="mono">{{ officialPnlSummary.missing_actual_cost }}</div>
+                </div>
+              </div>
+              <p v-if="officialPnlSummary.note" class="aistarslab-remote-error">{{ officialPnlSummary.note }}</p>
+              <p v-if="officialPnlBackfill?.matched" class="dim setup-desc">
+                本次补拉账单实付 {{ officialPnlBackfill.matched }} 条
+                <template v-if="officialPnlBackfill.attempted">（尝试 {{ officialPnlBackfill.attempted }} 条）</template>
+                <template v-if="officialPnlBackfill.remaining"> · 仍缺约 {{ officialPnlBackfill.remaining }} 条</template>
+              </p>
+              <p v-if="officialPnlBackfill?.error" class="aistarslab-remote-error">{{ officialPnlBackfill.error }}</p>
+
+              <div v-if="officialPnlByModel.length" class="official-pnl-subtable-wrap">
+                <div class="upstream-task-head">按模型</div>
+                <table class="user-table upstream-task-table">
+                  <thead>
+                    <tr>
+                      <th>模型</th>
+                      <th>任务数</th>
+                      <th>实收</th>
+                      <th>实付</th>
+                      <th>利润</th>
+                      <th>盈/亏</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in officialPnlByModel" :key="row.model">
+                      <td class="mono">{{ row.model }}</td>
+                      <td class="mono">{{ row.count }}</td>
+                      <td class="mono">{{ formatUpstreamMoney(row.revenue_yuan) }}</td>
+                      <td class="mono">{{ formatUpstreamMoney(row.actual_cost_yuan) }}</td>
+                      <td class="mono" :class="officialPnlProfitClass(row.profit_yuan)">{{ formatOfficialPnlSigned(row.profit_yuan) }}</td>
+                      <td class="mono">{{ row.profit_count }} / {{ row.loss_count }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div v-if="officialPnlLines.length" class="official-pnl-subtable-wrap">
+                <div class="upstream-task-head">任务明细（按利润从低到高）</div>
+                <table class="user-table upstream-task-table">
+                  <thead>
+                    <tr>
+                      <th>完成时间</th>
+                      <th>用户</th>
+                      <th>任务</th>
+                      <th>模型</th>
+                      <th>实收</th>
+                      <th>实付</th>
+                      <th>利润</th>
+                      <th>结果</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in officialPnlLines" :key="`${row.video_id}-${row.task_id || ''}`">
+                      <td class="mono dim">{{ formatUpstreamTime(row.completed_at || row.created_at) }}</td>
+                      <td>{{ row.username || '—' }}</td>
+                      <td>
+                        <div v-if="row.video_id" class="dim">#{{ row.video_id }}</div>
+                        <div class="mono">{{ shortTaskId(row.task_id) }}</div>
+                      </td>
+                      <td class="mono">{{ row.model || '—' }}</td>
+                      <td class="mono">{{ formatUpstreamMoney(row.revenue_yuan) }}</td>
+                      <td class="mono">{{ row.actual_cost_yuan != null ? formatUpstreamMoney(row.actual_cost_yuan) : '—' }}</td>
+                      <td class="mono" :class="officialPnlProfitClass(row.profit_yuan)">{{ formatOfficialPnlSigned(row.profit_yuan) }}</td>
+                      <td>{{ formatOfficialPnlOutcome(row.outcome) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="upstream-task-pager">
+                  <span class="dim mono">
+                    共 {{ officialPnlPagination.total || 0 }} 条 · 本页 {{ officialPnlLines.length }} 条
+                  </span>
+                  <div class="upstream-task-pager-actions">
+                    <button type="button" class="btn btn-sm" :disabled="officialPnlLoading || officialPnlPage <= 1" @click="loadOfficialPnlPage(officialPnlPage - 1)">上一页</button>
+                    <button type="button" class="btn btn-sm" :disabled="officialPnlLoading || !officialPnlPagination.has_more" @click="loadOfficialPnlPage(officialPnlPage + 1)">下一页</button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道3</div>
+              <div class="setup-title">Seedance VIP 上游余额</div>
+              <div class="setup-desc">
+                读取 aistarslab <code>/openapi/account/credits</code>；明细按本站近期任务回查上游
+                <code>costCredits</code>（上游未开放任务列表接口）。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span v-if="aistarslabBalanceAccounts.length" class="mono dim">{{ aistarslabBalanceAccounts.length }} 个账号</span>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="aistarslabBalanceLoading"
+                @click="loadAistarslabBalance"
+              >
+                {{ aistarslabBalanceLoading ? '刷新中…' : '刷新余额' }}
+              </button>
+            </div>
+          </div>
+          <p v-if="aistarslabBalanceError" class="aistarslab-remote-error">{{ aistarslabBalanceError }}</p>
+          <p v-else-if="aistarslabBalanceLoading" class="dim setup-desc">正在拉取 Seedance VIP 余额与任务明细…</p>
+          <div v-if="aistarslabBalanceAccounts.length" class="jimeng-session-list">
+            <div
+              v-for="item in aistarslabBalanceAccounts"
+              :key="item.config_id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.name || `配置 #${item.config_id}` }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+                <span
+                  v-if="item.balance"
+                  class="tag tag-success jimeng-credit-tag"
+                >
+                  剩余 {{ item.balance.credits }} 积分
+                </span>
+                <span v-else-if="item.error" class="tag">{{ item.error }}</span>
+                <span v-else class="dim mono jimeng-credit-tag">余额 —</span>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="!aistarslabBalanceLoading" class="dim setup-desc">暂无通道3视频配置</p>
+          <div v-if="aistarslabBalanceTasks.length" class="upstream-task-panel">
+            <div class="upstream-task-head">上游任务扣费明细</div>
+            <p class="dim setup-desc">
+              失败任务上游仍返回标价 <code>costCredits</code>；实扣列按状态展示。变动后余额由当前积分从新到旧回推——若相邻条目实扣与余额差对不上，可能是上游扣费异常。
+            </p>
+            <table class="user-table upstream-task-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>任务</th>
+                  <th>线路/模型</th>
+                  <th>状态</th>
+                  <th>实扣</th>
+                  <th>变动后余额</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="task in aistarslabBalanceTasks" :key="`${task.local_id || ''}-${task.task_id}`">
+                  <td class="mono dim">{{ formatUpstreamTime(task.created_at) }}</td>
+                  <td>
+                    <div class="mono">{{ shortTaskId(task.task_id) }}</div>
+                    <div v-if="task.prompt_head" class="dim upstream-task-prompt">{{ task.prompt_head }}</div>
+                    <div v-if="task.error_message" class="aistarslab-remote-error">{{ task.error_message }}</div>
+                  </td>
+                  <td class="mono">线路{{ task.channel || '—' }} · {{ task.model || '—' }}</td>
+                  <td>{{ task.status || '—' }}</td>
+                  <td class="mono" :title="task.cost_note || ''">{{ formatAistarslabTaskCost(task) }}</td>
+                  <td class="mono">{{ formatUpstreamBalanceAfter(task, '积分') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else-if="aistarslabBalanceTasksError" class="aistarslab-remote-error">{{ aistarslabBalanceTasksError }}</p>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道6</div>
+              <div class="setup-title">AIGC Seedance 上游余额</div>
+              <div class="setup-desc">
+                上游无独立余额接口；读取任务状态中的 <code>remaining_credits</code>；
+                明细按本站近期任务回查 <code>used_credits</code>。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span v-if="aigcccBalanceAccounts.length" class="mono dim">{{ aigcccBalanceAccounts.length }} 个账号</span>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="aigcccBalanceLoading"
+                @click="loadAigcccBalance"
+              >
+                {{ aigcccBalanceLoading ? '刷新中…' : '刷新余额' }}
+              </button>
+            </div>
+          </div>
+          <p v-if="aigcccBalanceError" class="aistarslab-remote-error">{{ aigcccBalanceError }}</p>
+          <p v-else-if="aigcccBalanceLoading" class="dim setup-desc">正在拉取 AIGC 余额与任务明细…</p>
+          <div v-if="aigcccBalanceAccounts.length" class="jimeng-session-list">
+            <div
+              v-for="item in aigcccBalanceAccounts"
+              :key="item.config_id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.name || `配置 #${item.config_id}` }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+                <span
+                  v-if="item.balance"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="item.via_task_id ? `经由任务 ${item.via_task_id}` : ''"
+                >
+                  剩余 {{ item.balance.credits }} 积分
+                </span>
+                <span v-else-if="item.error" class="tag">{{ item.error }}</span>
+                <span v-else class="dim mono jimeng-credit-tag">余额 —</span>
+              </div>
+            </div>
+          </div>
+          <p v-else-if="!aigcccBalanceLoading" class="dim setup-desc">暂无通道6视频配置</p>
+          <div v-if="aigcccBalanceTasks.length" class="upstream-task-panel">
+            <div class="upstream-task-head">上游任务扣费明细</div>
+            <p class="dim setup-desc">
+              实扣取上游 <code>used_credits</code>；生成中可能尚未返回。变动后余额由当前积分从新到旧回推。
+            </p>
+            <table class="user-table upstream-task-table">
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>任务</th>
+                  <th>模型</th>
+                  <th>状态</th>
+                  <th>实扣</th>
+                  <th>变动后余额</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="task in aigcccBalanceTasks" :key="`${task.local_id || ''}-${task.task_id}`">
+                  <td class="mono dim">{{ formatUpstreamTime(task.created_at) }}</td>
+                  <td>
+                    <div class="mono">{{ shortTaskId(task.task_id) }}</div>
+                    <div v-if="task.prompt_head" class="dim upstream-task-prompt">{{ task.prompt_head }}</div>
+                    <div v-if="task.error_message" class="aistarslab-remote-error">{{ task.error_message }}</div>
+                  </td>
+                  <td class="mono">{{ task.model || '—' }}</td>
+                  <td>{{ task.status || '—' }}</td>
+                  <td class="mono" :title="task.cost_note || ''">{{ formatAigcccTaskCost(task) }}</td>
+                  <td class="mono">{{ formatUpstreamBalanceAfter(task, '积分') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else-if="aigcccBalanceTasksError" class="aistarslab-remote-error">{{ aigcccBalanceTasksError }}</p>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
               <div class="setup-kicker">通道4</div>
               <div class="setup-title">即梦 Session</div>
               <div class="setup-desc">
                 jimeng.jianying.com Cookie 鉴权，仅管理员在此配置。用户视频页不会展示 Session 内容。
+                默认按「用户 + 项目」分配 Session；可对某个号开启「强制全员」，之后所有用户发布视频都走该号。
                 <a href="https://jimeng.jianying.com" target="_blank" rel="noopener">打开即梦</a>
               </div>
               <div class="setup-desc jimeng-cookie-hint">
@@ -101,6 +753,7 @@
             </div>
             <div class="jimeng-session-status">
               <span class="tag" :class="jimengHasValidSession ? 'tag-accent' : ''">{{ jimengSessionStatusLabel }}</span>
+              <span v-if="jimengForceSessionId" class="tag tag-accent">强制全员中</span>
               <span v-if="jimengSessions.length" class="mono dim">{{ jimengSessions.length }} 个 Session</span>
               <button
                 v-if="jimengSessions.length"
@@ -113,12 +766,23 @@
               </button>
             </div>
           </div>
+          <div v-if="jimengForceSessionLabel" class="setup-desc jimeng-force-banner">
+            当前强制全员使用：<strong>{{ jimengForceSessionLabel }}</strong>。取消后恢复按用户分配。
+            <button
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="jimengSessionSaving"
+              @click="clearJimengForceSession"
+            >
+              取消强制
+            </button>
+          </div>
           <div v-if="jimengSessions.length" class="jimeng-session-list">
             <div
               v-for="item in jimengSessions"
               :key="item.id"
               class="jimeng-session-row"
-              :class="{ active: item.is_active }"
+              :class="{ active: item.is_active, forced: item.is_force }"
             >
               <div class="jimeng-session-row-main">
                 <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
@@ -133,8 +797,27 @@
                 </span>
                 <span v-else-if="item.valid" class="dim mono jimeng-credit-tag">积分 —</span>
                 <span v-if="item.is_active" class="tag">当前启用</span>
+                <span v-if="item.is_force" class="tag tag-accent">强制全员</span>
               </div>
               <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_force"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="jimengSessionSaving"
+                  @click="forceJimengSession(item.id)"
+                >
+                  强制全员
+                </button>
+                <button
+                  v-else
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="jimengSessionSaving"
+                  @click="clearJimengForceSession"
+                >
+                  取消强制
+                </button>
                 <button
                   v-if="!item.is_active"
                   type="button"
@@ -186,6 +869,93 @@
             </button>
           </div>
         </section>
+
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道4 · 提交控制</div>
+              <div class="setup-title">团队提交成功率</div>
+              <div class="setup-desc">
+                用于限制非指定团队占用即梦通道。未命中下列团队规则的用户按「默认成功率」随机放行；失败时用户仅看到「上游通道繁忙，提交失败」，不会扣积分。
+                管理员账号始终放行。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <label class="jimeng-access-toggle">
+                <input v-model="jimengAccessEnabled" type="checkbox" />
+                启用概率门控
+              </label>
+              <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                :disabled="jimengAccessSaving"
+                @click="saveJimengAccessSettings"
+              >
+                {{ jimengAccessSaving ? '保存中…' : '保存规则' }}
+              </button>
+            </div>
+          </div>
+          <div class="jimeng-access-grid">
+            <label class="field">
+              <span>默认成功率（%）</span>
+              <input
+                v-model.number="jimengAccessDefaultRate"
+                class="input"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+              />
+              <span class="field-hint">非下列团队成员 / 无团队用户使用此值，建议 20</span>
+            </label>
+          </div>
+          <div class="jimeng-access-teams">
+            <div class="jimeng-access-teams-head">
+              <strong>团队规则</strong>
+              <button type="button" class="btn btn-sm" :disabled="!jimengAccessAddTeamId" @click="addJimengAccessTeamRule">
+                添加团队
+              </button>
+            </div>
+            <div class="jimeng-access-add-row">
+              <select v-model="jimengAccessAddTeamId" class="input">
+                <option value="">选择团队…</option>
+                <option
+                  v-for="t in jimengAccessAvailableTeams"
+                  :key="t.id"
+                  :value="String(t.id)"
+                  :disabled="jimengAccessTeams.some(r => Number(r.team_id) === Number(t.id))"
+                >
+                  {{ t.name }} (#{{ t.id }})
+                </option>
+              </select>
+            </div>
+            <div v-if="!jimengAccessTeams.length" class="setup-desc dim">尚未配置团队规则。可添加 lingjing 等团队并设为 100%。</div>
+            <div v-else class="jimeng-access-team-list">
+              <div v-for="(rule, idx) in jimengAccessTeams" :key="rule.team_id" class="jimeng-session-row">
+                <div class="jimeng-session-row-main">
+                  <span class="jimeng-session-row-label">{{ rule.team_name || `团队 #${rule.team_id}` }}</span>
+                  <span class="mono dim">#{{ rule.team_id }}</span>
+                </div>
+                <div class="jimeng-session-row-actions jimeng-access-rate-actions">
+                  <label class="jimeng-access-rate-field">
+                    成功率
+                    <input
+                      v-model.number="rule.success_rate"
+                      class="input jimeng-access-rate-input"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                    />
+                    %
+                  </label>
+                  <button type="button" class="btn btn-sm btn-ghost" @click="jimengAccessTeams.splice(idx, 1)">移除</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="setup-panel card jimeng-session-panel">
           <div class="setup-panel-head compact">
             <div>
@@ -228,9 +998,9 @@
                 <span
                   v-if="item.valid && item.total_credit != null"
                   class="tag tag-success jimeng-credit-tag"
-                  :title="jimengCreditTitle(item)"
+                  :title="xyqCreditTitle(item)"
                 >
-                  剩余 {{ item.total_credit }} 积分<span v-if="formatJimengCreditExpire(item)"> · 到期 {{ formatJimengCreditExpire(item) }}</span>
+                  剩余 {{ item.total_credit }} 积分<span v-if="formatXyqCreditBreakdown(item)">（{{ formatXyqCreditBreakdown(item) }}）</span><span v-if="formatJimengCreditExpire(item)"> · 到期 {{ formatJimengCreditExpire(item) }}</span>
                 </span>
                 <span v-else-if="item.valid && item.has_cookie" class="dim mono jimeng-credit-tag">积分 —</span>
                 <span v-else-if="item.valid" class="dim mono jimeng-credit-tag">未绑 Cookie</span>
@@ -297,6 +1067,366 @@
               class="btn btn-sm btn-ghost"
               :disabled="xyqSessionSaving"
               @click="clearXyqSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">S通道7</div>
+              <div class="setup-title">扣子 Cookie / PAT</div>
+              <div class="setup-desc">
+                Cookie 或 Personal Access Token 二选一即可（可同时配置）。用于调用扣子 Ark 兼容 Seedance 2.0。仅管理员配置。
+                <a href="https://www.coze.cn" target="_blank" rel="noopener">打开扣子</a>
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                Cookie：登录 www.coze.cn → F12 → Network → 刷新 → 选中请求 → Headers → Cookie → 粘贴。<br />
+                PAT：扣子开放平台 → 个人访问令牌 → 创建后粘贴。可选自定义 API Base（默认 https://api.coze.cn）。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="cozeHasValidSession ? 'tag-accent' : ''">{{ cozeSessionStatusLabel }}</span>
+              <span v-if="cozeSessions.length" class="mono dim">{{ cozeSessions.length }} 个 Session</span>
+              <button
+                v-if="cozeSessions.length"
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="cozeSessionSaving"
+                @click="loadCozeSessionStatus"
+              >
+                刷新
+              </button>
+            </div>
+          </div>
+          <div v-if="cozeSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in cozeSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span v-if="item.api_key_masked" class="mono dim">PAT {{ item.api_key_masked }}</span>
+                <span v-else-if="item.cookie_masked" class="mono dim">Cookie {{ item.cookie_masked }}</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="cozeSessionSaving"
+                  @click="activateCozeSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="cozeSessionSaving"
+                  @click="validateCozeSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="cozeSessionSaving"
+                  @click="removeCozeSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何扣子 Session</div>
+          <textarea
+            v-model="cozeSessionCookieInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴 Cookie（可选，与 PAT 至少填一项）…"
+          />
+          <textarea
+            v-model="cozeSessionApiKeyInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴 Personal Access Token / PAT（可选）…"
+          />
+          <input
+            v-model="cozeSessionBaseUrlInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="API Base（可选，默认 https://api.coze.cn）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="cozeSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选）" />
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="cozeSessionSaving || (!cozeSessionCookieInput.trim() && !cozeSessionApiKeyInput.trim())"
+              @click="saveCozeSession"
+            >
+              {{ cozeSessionSaving ? '保存中…' : '添加 Session' }}
+            </button>
+            <button
+              v-if="cozeSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="cozeSessionSaving"
+              @click="clearCozeSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">通道8(梦工厂专用)</div>
+              <div class="setup-title">橙星梦工厂 Token</div>
+              <div class="setup-desc">
+                打开
+                <a href="https://mgc.funshion.com" target="_blank" rel="noopener">橙星梦工厂</a>
+                视频页 → F12 → Network → 任选接口 → Headers → Authorization（或 Application → Local Storage → token）粘贴到下方。
+                同时填写地址栏 <code>/ai-app/video/</code> 后面的项目 ID。仅管理员配置。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="funshionHasValidSession ? 'tag-accent' : ''">{{ funshionSessionStatusLabel }}</span>
+              <span v-if="funshionActiveCoinLabel" class="tag tag-success jimeng-credit-tag">{{ funshionActiveCoinLabel }}</span>
+              <span v-if="funshionSessions.length" class="mono dim">{{ funshionSessions.length }} 个 Session</span>
+              <button
+                v-if="funshionSessions.length"
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="funshionSessionSaving || funshionCreditsLoading"
+                @click="loadFunshionSessionStatus"
+              >
+                {{ funshionCreditsLoading ? '刷新中…' : '刷新积分' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="funshionSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in funshionSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span v-if="item.token_masked" class="mono dim">Token {{ item.token_masked }}</span>
+                <span v-if="item.project_id" class="mono dim">项目 {{ item.project_id }}</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span
+                  v-if="item.valid && item.coin_amount != null"
+                  class="tag tag-success jimeng-credit-tag"
+                  :title="funshionCoinTitle(item)"
+                >
+                  剩余 {{ item.coin_amount }} 星币
+                </span>
+                <span v-else-if="item.valid" class="dim mono jimeng-credit-tag">星币 —</span>
+                <span v-else-if="item.coin_error" class="dim mono jimeng-credit-tag" :title="item.coin_error">余额查询失败</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="funshionSessionSaving"
+                  @click="activateFunshionSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="funshionSessionSaving"
+                  @click="validateFunshionSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="funshionSessionSaving"
+                  @click="removeFunshionSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何橙星 Session</div>
+          <textarea
+            v-model="funshionSessionTokenInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴 Authorization / localStorage.token…"
+          />
+          <input
+            v-model="funshionSessionProjectIdInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="项目 ID（URL /ai-app/video/ 后面那段，必填）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <input
+            v-model="funshionSessionAppIdInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="appId（可选，无项目 ID 时用于自动创建）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <input
+            v-model="funshionSessionBaseUrlInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="站点 Base（可选，默认 https://mgc.funshion.com）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="funshionSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选）" />
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="funshionSessionSaving || !funshionSessionTokenInput.trim() || (!funshionSessionProjectIdInput.trim() && !funshionSessionAppIdInput.trim())"
+              @click="saveFunshionSession"
+            >
+              {{ funshionSessionSaving ? '保存中…' : '添加 Session' }}
+            </button>
+            <button
+              v-if="funshionSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="funshionSessionSaving"
+              @click="clearFunshionSession"
+            >
+              清除全部
+            </button>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
+              <div class="setup-kicker">S通道9</div>
+              <div class="setup-title">星月梦 Token</div>
+              <div class="setup-desc">
+                打开
+                <a href="https://xingyuemeng.com" target="_blank" rel="noopener">星月梦</a>
+                视频页 → F12 → Application → Local Storage → <code>xymai_token</code> 粘贴到下方。
+                可选填写 team_id / project_id / episode_id（与 Network 请求头或 URL 一致）。仅管理员配置。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="xingyuemengHasValidSession ? 'tag-accent' : ''">{{ xingyuemengSessionStatusLabel }}</span>
+              <span v-if="xingyuemengSessions.length" class="mono dim">{{ xingyuemengSessions.length }} 个 Session</span>
+              <button
+                v-if="xingyuemengSessions.length"
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="xingyuemengSessionSaving"
+                @click="loadXingyuemengSessionStatus"
+              >
+                刷新
+              </button>
+            </div>
+          </div>
+          <div v-if="xingyuemengSessions.length" class="jimeng-session-list">
+            <div
+              v-for="item in xingyuemengSessions"
+              :key="item.id"
+              class="jimeng-session-row"
+              :class="{ active: item.is_active }"
+            >
+              <div class="jimeng-session-row-main">
+                <span class="jimeng-session-row-label">{{ item.label || '未命名' }}</span>
+                <span v-if="item.token_masked" class="mono dim">Token {{ item.token_masked }}</span>
+                <span v-if="item.team_id != null && item.team_id !== ''" class="mono dim">Team {{ item.team_id }}</span>
+                <span v-if="item.project_id" class="mono dim">项目 {{ item.project_id }}</span>
+                <span v-if="item.episode_id" class="mono dim">分集 {{ item.episode_id }}</span>
+                <span class="tag" :class="item.valid ? 'tag-accent' : ''">{{ item.valid ? '有效' : '无效' }}</span>
+                <span v-if="item.is_active" class="tag">当前启用</span>
+              </div>
+              <div class="jimeng-session-row-actions">
+                <button
+                  v-if="!item.is_active"
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="xingyuemengSessionSaving"
+                  @click="activateXingyuemengSession(item.id)"
+                >
+                  设为当前
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  :disabled="xingyuemengSessionSaving"
+                  @click="validateXingyuemengSessionItem(item.id)"
+                >
+                  验证
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  :disabled="xingyuemengSessionSaving"
+                  @click="removeXingyuemengSession(item.id)"
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          </div>
+          <div v-else class="setup-desc dim" style="margin-top: 12px;">尚未保存任何星月梦 Session</div>
+          <textarea
+            v-model="xingyuemengSessionTokenInput"
+            class="jimeng-session-input"
+            rows="2"
+            placeholder="粘贴 xymai_token（可带 Bearer 前缀）…"
+          />
+          <input
+            v-model="xingyuemengSessionTeamIdInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="team_id（可选，默认 0）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <input
+            v-model="xingyuemengSessionProjectIdInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="project_id（可选）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <input
+            v-model="xingyuemengSessionEpisodeIdInput"
+            class="jimeng-session-label"
+            type="text"
+            placeholder="episode_id（可选）"
+            style="width: 100%; margin-top: 8px;"
+          />
+          <div class="jimeng-session-actions">
+            <input v-model="xingyuemengSessionLabel" class="jimeng-session-label" type="text" placeholder="备注（可选）" />
+            <button
+              type="button"
+              class="btn btn-sm btn-primary"
+              :disabled="xingyuemengSessionSaving || !xingyuemengSessionTokenInput.trim()"
+              @click="saveXingyuemengSession"
+            >
+              {{ xingyuemengSessionSaving ? '保存中…' : '添加 Session' }}
+            </button>
+            <button
+              v-if="xingyuemengSessions.length"
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="xingyuemengSessionSaving"
+              @click="clearXingyuemengSession"
             >
               清除全部
             </button>
@@ -441,6 +1571,95 @@
         <section class="setup-panel card jimeng-session-panel">
           <div class="setup-panel-head compact">
             <div>
+              <div class="setup-kicker">AI 配音 · 云端</div>
+              <div class="setup-title">RunningHub IndexTTS2</div>
+              <div class="setup-desc">
+                用于「工具箱 → AI 配音」页面。对接
+                <a
+                  href="https://www.runninghub.cn/call-api/api-detail/2012710824451772417?apiType=5"
+                  target="_blank"
+                  rel="noopener"
+                >RunningHub 工作流 API</a>
+                （情感向量控制）。
+              </div>
+              <div class="setup-desc jimeng-cookie-hint">
+                1) 保存 API Key → 2) 点「同步节点参数」。若仍失败：打开
+                <a
+                  href="https://www.runninghub.cn/call-api/api-detail/2012710824451772417?apiType=5"
+                  target="_blank"
+                  rel="noopener"
+                >API 文档 Playground</a>
+                ，复制请求体里的 <code>nodeInfoList</code>（或整段 curl），粘贴到下方模板后再点同步。
+              </div>
+            </div>
+            <div class="jimeng-session-status">
+              <span class="tag" :class="rhTtsConfigConfigured ? 'tag-accent' : ''">{{ rhTtsConfigStatusLabel }}</span>
+              <span v-if="rhTtsConfigSource === 'env'" class="mono dim">当前来自环境变量</span>
+              <span v-if="rhTtsHasBindings" class="tag tag-accent">节点已映射</span>
+            </div>
+          </div>
+          <div class="tts-config-fields">
+            <label class="tts-config-label">
+              API Key
+              <input
+                v-model="rhTtsConfigForm.api_key"
+                class="input"
+                type="password"
+                :placeholder="rhTtsHasApiKey ? `已保存 ${rhTtsApiKeyMasked || '••••'}，留空则不修改` : 'RunningHub 32 位 API Key'"
+                autocomplete="new-password"
+              />
+            </label>
+            <label class="tts-config-label">
+              API Base
+              <input v-model="rhTtsConfigForm.api_base" class="input" type="url" placeholder="https://www.runninghub.cn" />
+            </label>
+            <label class="tts-config-label">
+              Workflow ID
+              <input v-model="rhTtsConfigForm.workflow_id" class="input" placeholder="2012710824451772417" />
+            </label>
+            <label class="tts-config-label">
+              Webapp ID（同步节点用）
+              <input v-model="rhTtsConfigForm.webapp_id" class="input" placeholder="2012809189353070594" />
+            </label>
+            <label class="tts-config-label">
+              调用模式
+              <select v-model="rhTtsConfigForm.api_mode" class="input">
+                <option value="openapi_v2">OpenAPI v2 工作流</option>
+                <option value="ai_app">AI 应用 API（备用）</option>
+              </select>
+            </label>
+          </div>
+          <label class="tts-config-label" style="display:block;margin-top:10px">
+            nodeInfoList 模板（可粘贴 JSON 数组 / 整段请求体 / curl）
+            <textarea
+              v-model="rhTtsNodeTemplateText"
+              class="textarea"
+              rows="6"
+              placeholder='[{"nodeId":"1","fieldName":"audio","fieldValue":""},{"nodeId":"6","fieldName":"text","fieldValue":""},{"nodeId":"6","fieldName":"emo_vector","fieldValue":"[0, 0, 0, 0, 0, 0, 0, 0]"}]'
+            />
+          </label>
+          <div v-if="rhTtsConfigTestResult" class="tts-config-test-result" :class="{ ok: rhTtsConfigTestResult.ok || rhTtsConfigTestResult.reachable }">
+            {{ rhTtsConfigTestResult.message }}
+          </div>
+          <div class="jimeng-session-actions">
+            <button type="button" class="btn btn-sm btn-primary" :disabled="rhTtsConfigSaving || (!rhTtsConfigForm.api_key.trim() && !rhTtsHasApiKey)" @click="saveRhTtsConfig">
+              {{ rhTtsConfigSaving ? '保存中…' : '保存配置' }}
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="rhTtsConfigTesting" @click="testRhTtsConfig">
+              {{ rhTtsConfigTesting ? '测试中…' : '测试连通' }}
+            </button>
+            <button type="button" class="btn btn-sm" :disabled="rhTtsConfigSyncing" @click="syncRhTtsConfig">
+              {{ rhTtsConfigSyncing ? '同步中…' : '同步节点参数' }}
+            </button>
+            <label class="tts-config-active-toggle">
+              <input v-model="rhTtsConfigForm.is_active" type="checkbox" />
+              启用此配置
+            </label>
+          </div>
+        </section>
+        <section class="setup-panel card jimeng-session-panel">
+          <div class="setup-panel-head compact">
+            <div>
               <div class="setup-kicker">工具箱</div>
               <div class="setup-title">去字幕 API（本机 VSR）</div>
               <div class="setup-desc">
@@ -524,12 +1743,12 @@
         <div class="settings-head">
           <div class="settings-brand">
             <div class="settings-brand-mark">
-              <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+              <img v-if="showBrandImage" :src="brandLogo" alt="影光工场" class="settings-brand-logo" @error="showBrandImage = false" />
               <span v-else class="settings-brand-fallback">红</span>
             </div>
             <div class="settings-brand-copy">
-              <div class="settings-brand-kicker">Hongguo Shorts</div>
-              <div class="settings-brand-name">红果短剧</div>
+              <div class="settings-brand-kicker">Yingguang Studio</div>
+              <div class="settings-brand-name">影光工场</div>
             </div>
           </div>
           <h2 class="settings-title">Agent 配置</h2>
@@ -603,12 +1822,12 @@
           <div class="settings-head">
             <div class="settings-brand">
               <div class="settings-brand-mark">
-                <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="settings-brand-logo" @error="showBrandImage = false" />
+                <img v-if="showBrandImage" :src="brandLogo" alt="影光工场" class="settings-brand-logo" @error="showBrandImage = false" />
                 <span v-else class="settings-brand-fallback">红</span>
               </div>
               <div class="settings-brand-copy">
-                <div class="settings-brand-kicker">Hongguo Shorts</div>
-                <div class="settings-brand-name">红果短剧</div>
+                <div class="settings-brand-kicker">Yingguang Studio</div>
+                <div class="settings-brand-name">影光工场</div>
               </div>
             </div>
             <div style="display:flex;align-items:center;gap:10px">
@@ -677,6 +1896,22 @@
           <h2 class="settings-title">积分管理</h2>
           <p class="settings-desc">配置各操作的积分单价，并为团队成员充值。后续可按 1 元 = 100 积分 对接充值。</p>
         </div>
+        <section class="setup-panel card grant-credits-panel">
+          <div class="setup-title">为用户充值</div>
+          <p class="dim setup-pricing-hint">选择用户并填写积分数量。充值后立即生效，可在用户下拉中看到最新余额。</p>
+          <form class="user-create-form grant-credits-form" @submit.prevent="grantCredits">
+            <select v-model.number="grantForm.user_id" class="input" required>
+              <option :value="0" disabled hidden>选择用户</option>
+              <option v-for="u in grantableTeamUsers" :key="u.id" :value="u.id">{{ u.display_name || u.username }}（{{ u.credits_balance ?? 0 }} 积分）</option>
+            </select>
+            <input v-model.number="grantForm.amount" class="input" type="number" min="1" step="1" placeholder="充值积分" required />
+            <input v-model="grantForm.summary" class="input" placeholder="备注（可选）" />
+            <button type="submit" class="btn btn-primary" :disabled="grantSaving">
+              {{ grantSaving ? '充值中…' : '充值' }}
+            </button>
+          </form>
+          <p v-if="!grantableTeamUsers.length" class="dim grant-credits-empty">暂无可充值用户（可能全部被冻结）。</p>
+        </section>
         <section class="setup-panel card">
           <div class="setup-title">视频通道对照</div>
           <p class="dim setup-pricing-hint">以下对照表仅管理员可见，说明顶部导航通道名与实际服务商、积分定价项的对应关系。</p>
@@ -706,7 +1941,7 @@
         </section>
         <section v-if="chengmengPricingGroups.length" class="setup-panel card">
           <div class="setup-title">橙盟模型（通道1）</div>
-          <p class="dim setup-pricing-hint">每个上游 model_id 可单独启用或禁用；<strong>禁用后前台通道1页不再显示该模型</strong>（默认定价项仍保留，重新启用后可继续调价）。在「AI 服务」中刷新橙盟配置可同步新模型定价项。</p>
+          <p class="dim setup-pricing-hint">每个上游 model_id 可单独启用或禁用；<strong>禁用后前台通道1页不再显示该模型</strong>。上游按秒的线路本站也按秒扣费（单价×时长），按次线路仍按条。在「AI 服务」中刷新橙盟配置可同步新模型定价项。</p>
           <table class="user-table aistarslab-pricing-table">
             <thead>
               <tr><th>模型</th><th>单价</th><th>启用</th><th></th></tr>
@@ -725,7 +1960,7 @@
                 <td>
                   <div v-for="item in group.items" :key="`${item.action}-cost`" class="pricing-input-row">
                     <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" :disabled="!group.enabled" />
-                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action, item) }}</span>
                   </div>
                 </td>
                 <td>
@@ -793,7 +2028,7 @@
                   <td>
                     <div class="pricing-input-row">
                       <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" :disabled="!group.enabled" />
-                      <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                      <span class="dim pricing-unit">{{ pricingUnit(item.action, item) }}</span>
                     </div>
                   </td>
                   <td></td>
@@ -807,7 +2042,7 @@
         </section>
         <section v-if="jimengPricingItems.length" class="setup-panel card">
           <div class="setup-title">Seedance 通道4（即梦）</div>
-          <p class="dim setup-pricing-hint">前台仅展示 Seedance 2.0 Fast VIP / 2.0 VIP 两档；Session 由管理员在「AI 服务」中配置，用户可直接使用当前启用 Session 生成。</p>
+          <p class="dim setup-pricing-hint">按秒计费（默认 S 2.5 130 / Fast VIP 标价 60·实收 48（8折）/ VIP 80 积分/秒；VIP 有用户参考视频时 130）。S 2.5 自带参考视频 7 折。前台展示 S 2.5 / Fast VIP / VIP；Session 在「AI 服务」中配置。</p>
           <table class="user-table">
             <thead>
               <tr><th>模型</th><th>单价</th><th></th></tr>
@@ -821,7 +2056,7 @@
                 <td>
                   <div class="pricing-input-row">
                     <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" />
-                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action, item) }}</span>
                   </div>
                 </td>
                 <td>
@@ -833,7 +2068,7 @@
         </section>
         <section class="setup-panel card">
           <div class="setup-title">操作定价</div>
-          <p class="dim setup-pricing-hint">seedance通道2 相关项填<strong>每秒</strong>积分；seedance通道1/3/4 与 grok视频 填<strong>每条</strong>积分。「Seedance 2.0 VIP」为用户扣费单价（按条），与上游成本无关。通道1 各模型见上方「橙盟模型（通道1）」；通道3 各线路×模型定价见上方表格；通道4 见上方「Seedance 通道4」。</p>
+          <p class="dim setup-pricing-hint">通道2 / S通道9 为<strong>时长×分辨率一口价</strong>（管理端参考值为 5s·480p）；通道4 / S通道5·S 2.5 / S通道7 / 通道8(梦工厂专用) 填<strong>每秒</strong>积分；通道1/3、S通道5·2.0 与 grok视频 填<strong>每条</strong>积分。通道1 各模型见上方「橙盟模型（通道1）」；通道3 见上方表格；通道4 见上方「Seedance 通道4」。</p>
           <table class="user-table">
             <thead>
               <tr><th>操作</th><th>说明</th><th>单价</th><th></th></tr>
@@ -845,25 +2080,13 @@
                 <td>
                   <div class="pricing-input-row">
                     <input v-model.number="item.cost" class="input input-sm pricing-cost-input" type="number" min="0" step="1" />
-                    <span class="dim pricing-unit">{{ pricingUnit(item.action) }}</span>
+                    <span class="dim pricing-unit">{{ pricingUnit(item.action, item) }}</span>
                   </div>
                 </td>
                 <td><button type="button" class="btn btn-sm" @click="savePricing(item)">保存</button></td>
               </tr>
             </tbody>
           </table>
-        </section>
-        <section class="setup-panel card">
-          <div class="setup-title">为用户充值</div>
-          <form class="user-create-form" @submit.prevent="grantCredits">
-            <select v-model.number="grantForm.user_id" class="input" required>
-              <option :value="null" disabled>选择用户</option>
-              <option v-for="u in teamUsers" :key="u.id" :value="u.id">{{ u.display_name || u.username }}（{{ u.credits_balance ?? 0 }} 积分）</option>
-            </select>
-            <input v-model.number="grantForm.amount" class="input" type="number" min="1" step="1" placeholder="充值积分" required />
-            <input v-model="grantForm.summary" class="input" placeholder="备注（可选）" />
-            <button type="submit" class="btn btn-primary">充值</button>
-          </form>
         </section>
       </div>
 
@@ -958,7 +2181,7 @@
       <div v-else-if="tab === 'users' && isAdmin" class="settings-scroll">
         <div class="settings-head">
           <h2 class="settings-title">用户管理</h2>
-          <p class="settings-desc">创建团队成员账号，可为已有用户重置密码或冻结/解冻账号。冻结后用户无法登录且现有会话立即失效。普通用户可制作项目；管理员可修改全局设置。</p>
+          <p class="settings-desc">创建团队成员账号，可为已有用户重置密码、限制登录 IP，或冻结/解冻账号。冻结后用户无法登录且现有会话立即失效。普通用户可制作项目；管理员可修改全局设置。</p>
         </div>
         <section class="setup-panel card">
           <div class="setup-title">新建用户</div>
@@ -973,11 +2196,70 @@
             <button type="submit" class="btn btn-primary">创建</button>
           </form>
         </section>
+
+        <section class="setup-panel card">
+          <div class="setup-title">按团队批量设置登录 IP</div>
+          <p class="setup-desc">
+            限制该团队成员只能从指定 IP / 网段登录。留空并保存可清除限制。
+            支持单 IP（如 <code>1.2.3.4</code>）与 IPv4 CIDR（如 <code>1.2.3.0/24</code>），每行一条。
+            平台管理员账号不受 IP 限制，避免误锁死后台。
+          </p>
+          <div class="login-ip-bulk-form">
+            <label class="field">
+              <span class="field-label">团队</span>
+              <select v-model="bulkLoginIpTeamId" class="input" @change="onBulkLoginIpTeamChange">
+                <option value="">选择团队</option>
+                <option v-for="t in loginIpTeams" :key="t.id" :value="String(t.id)">{{ t.name }}</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">允许的 IP（每行一条）</span>
+              <textarea
+                v-model="bulkLoginIpText"
+                class="input login-ip-textarea"
+                rows="4"
+                placeholder="例如：&#10;203.0.113.10&#10;203.0.113.0/24"
+              />
+            </label>
+            <label class="field field-inline">
+              <input v-model="bulkLoginIpAlsoMembers" type="checkbox" />
+              <span>同时写入每位成员的个人白名单（推荐）</span>
+            </label>
+            <div class="login-ip-bulk-actions">
+              <button
+                type="button"
+                class="btn btn-primary"
+                :disabled="!bulkLoginIpTeamId || bulkLoginIpSaving"
+                @click="saveBulkLoginIps"
+              >
+                {{ bulkLoginIpSaving ? '保存中…' : '保存团队规则' }}
+              </button>
+              <button
+                type="button"
+                class="btn"
+                :disabled="!bulkLoginIpTeamId || bulkLoginIpSaving"
+                @click="clearBulkLoginIps"
+              >
+                清除限制
+              </button>
+            </div>
+          </div>
+        </section>
+
         <section class="setup-panel card">
           <div class="setup-title">已有用户</div>
           <table class="user-table">
             <thead>
-              <tr><th>用户名</th><th>显示名</th><th>角色</th><th>状态</th><th>积分</th><th>最近登录</th><th></th></tr>
+              <tr>
+                <th>用户名</th>
+                <th>显示名</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>积分</th>
+                <th>登录 IP</th>
+                <th>最近登录</th>
+                <th></th>
+              </tr>
             </thead>
             <tbody>
               <tr v-for="u in teamUsers" :key="u.id">
@@ -989,9 +2271,25 @@
                   <span v-else class="tag tag-danger">已冻结</span>
                 </td>
                 <td class="mono">{{ u.credits_balance ?? 0 }}</td>
-                <td class="dim mono">{{ u.last_login_at ? fmtUserTime(u.last_login_at) : '—' }}</td>
+                <td>
+                  <span v-if="u.role === 'admin'" class="dim">不受限</span>
+                  <span v-else-if="(u.allowed_ips || []).length" class="tag" :title="(u.allowed_ips || []).join(', ')">
+                    {{ (u.allowed_ips || []).length }} 条
+                  </span>
+                  <span v-else class="dim">不限</span>
+                </td>
+                <td class="dim mono">
+                  <div>{{ u.last_login_at ? fmtUserTime(u.last_login_at) : '—' }}</div>
+                  <div v-if="u.last_login_ip" class="login-ip-last">{{ u.last_login_ip }}</div>
+                </td>
                 <td class="user-table-actions">
                   <button type="button" class="btn btn-sm" @click="openPasswordDialog(u)">改密码</button>
+                  <button
+                    v-if="u.role !== 'admin'"
+                    type="button"
+                    class="btn btn-sm"
+                    @click="openLoginIpDialog(u)"
+                  >登录IP</button>
                   <button
                     v-if="u.is_active && u.id !== user?.id"
                     type="button"
@@ -1016,6 +2314,11 @@
           </table>
         </section>
       </div>
+
+      <!-- ===== 生图记录（含即梦账号，仅后台） ===== -->
+      <AdminImageRecordsPanel v-else-if="tab === 'image-records' && isAdmin" />
+      <AdminPortraitCertsPanel v-else-if="tab === 'portrait-certs' && isAdmin" />
+      <AdminMusicRecordsPanel v-else-if="tab === 'music-records' && isAdmin" />
     </div>
 
     <!-- AI Config Dialog -->
@@ -1042,7 +2345,7 @@
         </div>
         <label class="field">
           <span class="field-label">配置名称</span>
-          <input v-model="cfgForm.name" class="input" placeholder="如 红果默认图像服务" />
+          <input v-model="cfgForm.name" class="input" placeholder="如 影光工场默认图像服务" />
         </label>
         <label class="field"><span class="field-label">服务商</span>
           <BaseSelect v-model="cfgForm.provider" :options="providerSelectOptions" placeholder="选择服务商" searchable />
@@ -1162,14 +2465,14 @@
       </form>
     </div>
 
-    <!-- Hongguo Preset Dialog -->
+    <!-- Yingguang Studio Preset Dialog -->
     <div v-if="presetDialog" class="overlay" @click.self="presetDialog = false">
       <form class="modal card config-modal" @submit.prevent="applyHuobaoPreset">
         <div class="config-modal-head">
           <div>
-            <div class="setup-kicker">Hongguo Preset</div>
-            <h2 class="modal-title">红果一键配置</h2>
-            <div class="modal-note">按红果推荐链路自动创建或更新 4 条服务配置，并同时初始化 5 个 Agent 的默认模型。</div>
+            <div class="setup-kicker">Yingguang Preset</div>
+            <h2 class="modal-title">影光工场一键配置</h2>
+            <div class="modal-note">按影光工场推荐链路自动创建或更新 4 条服务配置，并同时初始化 5 个 Agent 的默认模型。</div>
           </div>
           <span class="tag tag-success">推荐</span>
         </div>
@@ -1249,6 +2552,35 @@
       </form>
     </div>
 
+    <!-- User Login IP Dialog -->
+    <div v-if="loginIpDialogUser" class="overlay" @click.self="closeLoginIpDialog">
+      <form class="modal card" @submit.prevent="saveUserLoginIps">
+        <h2 class="modal-title">登录 IP 白名单</h2>
+        <p class="dim modal-note">
+          用户：{{ loginIpDialogUser.username }}
+          <span v-if="loginIpDialogUser.display_name">（{{ loginIpDialogUser.display_name }}）</span>
+        </p>
+        <p class="setup-desc">
+          留空表示不单独限制该用户（仍可能受其所属团队规则约束）。每行一个 IP 或 IPv4 CIDR。
+        </p>
+        <label class="field">
+          <span class="field-label">允许的 IP</span>
+          <textarea
+            v-model="loginIpEditText"
+            class="input login-ip-textarea"
+            rows="5"
+            placeholder="例如：&#10;203.0.113.10&#10;203.0.113.0/24"
+          />
+        </label>
+        <div class="modal-actions">
+          <button type="button" class="btn" @click="closeLoginIpDialog">取消</button>
+          <button type="submit" class="btn btn-primary" :disabled="loginIpSaving">
+            {{ loginIpSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </form>
+    </div>
+
     <!-- S通道5 / 小云雀 Key 编辑 -->
     <div v-if="xyqEditDialog" class="overlay" @click.self="closeXyqEditDialog">
       <form class="modal card config-modal" @submit.prevent="saveXyqEditDialog">
@@ -1301,10 +2633,13 @@
 </template>
 
 <script setup>
-import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, Users, Coins, Building2 } from 'lucide-vue-next'
+import { Plus, Pencil, Trash2, FileText, ChevronDown, Check, Loader2, Bot, Cpu, Sparkles, Users, Coins, Building2, ImageIcon, BadgeCheck, Music2 } from 'lucide-vue-next'
 import BaseSelect from '~/components/BaseSelect.vue'
+import AdminImageRecordsPanel from '~/components/AdminImageRecordsPanel.vue'
+import AdminPortraitCertsPanel from '~/components/AdminPortraitCertsPanel.vue'
+import AdminMusicRecordsPanel from '~/components/AdminMusicRecordsPanel.vue'
 import { toast } from 'vue-sonner'
-import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI, jimengSessionAPI, xyqSessionAPI, doubaoTrainingSessionAPI, ttsAPI, subtitleRemoverAPI } from '~/composables/useApi'
+import { aiConfigAPI, agentConfigAPI, skillsAPI, usersAPI, creditsAPI, teamsAPI, jimengSessionAPI, xyqSessionAPI, cozeSessionAPI, funshionSessionAPI, xingyuemengSessionAPI, doubaoTrainingSessionAPI, ttsAPI, ttsRunninghubAPI, subtitleRemoverAPI } from '~/composables/useApi'
 import brandLogo from '~/assets/huobao-logo.png'
 import { VIDEO_CHANNEL_ADMIN_GUIDE } from '~/constants/video-channels.js'
 
@@ -1319,10 +2654,13 @@ watch([isAdmin, canManageTeam], () => {
 const baseTabs = computed(() => {
   if (isAdmin.value) {
     return [
-  { id: 'ai', label: 'AI 服务', icon: Cpu },
+      { id: 'ai', label: 'AI 服务', icon: Cpu },
       { id: 'team', label: '团队', icon: Building2 },
       { id: 'credits', label: '积分', icon: Coins },
       { id: 'users', label: '用户', icon: Users },
+      { id: 'image-records', label: '生图记录', icon: ImageIcon },
+      { id: 'portrait-certs', label: '人像认证', icon: BadgeCheck },
+      { id: 'music-records', label: '音乐记录', icon: Music2 },
     ]
   }
   if (canManageTeam.value) {
@@ -1353,9 +2691,16 @@ const cfgForm = reactive({ name: '', provider: '', api_key: '', base_url: '', mo
 const huobaoForm = reactive({ apiKey: '' })
 
 const jimengSessions = ref([])
+const jimengForceSessionId = ref('')
 const jimengSessionInput = ref('')
 const jimengSessionLabel = ref('')
 const jimengSessionSaving = ref(false)
+const jimengAccessEnabled = ref(true)
+const jimengAccessDefaultRate = ref(20)
+const jimengAccessTeams = ref([])
+const jimengAccessAvailableTeams = ref([])
+const jimengAccessAddTeamId = ref('')
+const jimengAccessSaving = ref(false)
 const xyqSessions = ref([])
 const xyqSessionInput = ref('')
 const xyqSessionCookieInput = ref('')
@@ -1372,8 +2717,141 @@ const xyqEditForm = ref({
   has_cookie: false,
   clear_cookie: false,
 })
+const cozeSessions = ref([])
+const cozeSessionCookieInput = ref('')
+const cozeSessionApiKeyInput = ref('')
+const cozeSessionBaseUrlInput = ref('')
+const cozeSessionLabel = ref('')
+const cozeSessionSaving = ref(false)
+const funshionSessions = ref([])
+const funshionSessionTokenInput = ref('')
+const funshionSessionProjectIdInput = ref('')
+const funshionSessionAppIdInput = ref('')
+const funshionSessionBaseUrlInput = ref('')
+const funshionSessionLabel = ref('')
+const funshionSessionSaving = ref(false)
+const funshionCreditsLoading = ref(false)
+const xingyuemengSessions = ref([])
+const xingyuemengSessionTokenInput = ref('')
+const xingyuemengSessionTeamIdInput = ref('')
+const xingyuemengSessionProjectIdInput = ref('')
+const xingyuemengSessionEpisodeIdInput = ref('')
+const xingyuemengSessionLabel = ref('')
+const xingyuemengSessionSaving = ref(false)
 const jimengCreditsLoading = ref(false)
+const chengmengBalanceLoading = ref(false)
+const chengmengBalanceError = ref('')
+const chengmengBalanceAccounts = ref([])
+const chengmengBalanceTasks = ref([])
+const chengmengBalanceTasksTotal = ref(0)
+const chengmengBalanceTasksError = ref('')
+const aistarslabBalanceLoading = ref(false)
+const aistarslabBalanceError = ref('')
+const aistarslabBalanceAccounts = ref([])
+const aistarslabBalanceTasks = ref([])
+const aistarslabBalanceTasksError = ref('')
+const aigcccBalanceLoading = ref(false)
+const aigcccBalanceError = ref('')
+const aigcccBalanceAccounts = ref([])
+const aigcccBalanceTasks = ref([])
+const aigcccBalanceTasksError = ref('')
+const officialBalanceLoading = ref(false)
+const officialBalanceError = ref('')
+const officialBalanceAccounts = ref([])
+const officialBalanceTasks = ref([])
+const officialBalanceTasksError = ref('')
+const officialBalancePage = ref(1)
+const officialBalancePageSize = 20
+const officialBalanceTasksTotal = ref(0)
+const officialBalanceHasMore = ref(false)
+const officialPnlLoading = ref(false)
+const officialPnlError = ref('')
+const officialPnlSummary = ref(null)
+const officialPnlBackfill = ref(null)
+const officialPnlByModel = ref([])
+const officialPnlLines = ref([])
+const officialPnlPagination = ref({ total: 0, has_more: false })
+const officialPnlPage = ref(1)
+const officialPnlPageSize = 50
+const officialPnlDays = ref(0)
+const officialBillSync = ref(null)
+const officialKeySaving = ref(false)
+const officialKeyForm = reactive({
+  editing_id: null,
+  name: '',
+  billing_label: '',
+  api_key: '',
+  access_key: '',
+  secret_key: '',
+  activate: false,
+  has_ak: false,
+  has_sk: false,
+})
 
+function resetOfficialKeyForm() {
+  officialKeyForm.editing_id = null
+  officialKeyForm.name = ''
+  officialKeyForm.billing_label = ''
+  officialKeyForm.api_key = ''
+  officialKeyForm.access_key = ''
+  officialKeyForm.secret_key = ''
+  officialKeyForm.activate = false
+  officialKeyForm.has_ak = false
+  officialKeyForm.has_sk = false
+}
+
+function startEditOfficialKey(item) {
+  if (!item?.config_id) return
+  officialKeyForm.editing_id = item.config_id
+  officialKeyForm.name = String(item.name || '').replace(/^火山方舟[·\-\s]*/u, '') || String(item.name || '')
+  officialKeyForm.billing_label = String(item.billing_label || '')
+  officialKeyForm.api_key = ''
+  officialKeyForm.access_key = ''
+  officialKeyForm.secret_key = ''
+  officialKeyForm.activate = false
+  officialKeyForm.has_ak = Boolean(item.has_billing_credentials || item.access_key_masked)
+  officialKeyForm.has_sk = Boolean(item.has_billing_credentials)
+  // 滚到表单区域更易操作
+  try {
+    document.querySelector('.jimeng-session-actions')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  } catch {}
+}
+
+async function saveOfficialKey() {
+  if (officialKeySaving.value) return
+  const editingId = officialKeyForm.editing_id
+  if (!editingId && !officialKeyForm.api_key.trim()) return
+  officialKeySaving.value = true
+  try {
+    if (editingId) {
+      const payload = {
+        name: officialKeyForm.name.trim() || undefined,
+        billing_label: officialKeyForm.billing_label.trim() || null,
+      }
+      if (officialKeyForm.api_key.trim()) payload.api_key = officialKeyForm.api_key.trim()
+      if (officialKeyForm.access_key.trim()) payload.access_key = officialKeyForm.access_key.trim()
+      if (officialKeyForm.secret_key.trim()) payload.secret_key = officialKeyForm.secret_key.trim()
+      await aiConfigAPI.officialKeyUpdate(editingId, payload)
+      toast.success('通道2 API Key 已更新')
+    } else {
+      await aiConfigAPI.officialKeyCreate({
+        name: officialKeyForm.name.trim() || undefined,
+        billing_label: officialKeyForm.billing_label.trim() || undefined,
+        api_key: officialKeyForm.api_key.trim(),
+        access_key: officialKeyForm.access_key.trim() || undefined,
+        secret_key: officialKeyForm.secret_key.trim() || undefined,
+        activate: !!officialKeyForm.activate,
+      })
+      toast.success('通道2 API Key 已添加')
+    }
+    resetOfficialKeyForm()
+    await loadOfficialBalance()
+  } catch (err) {
+    toast.error(err?.message || (editingId ? '更新失败' : '添加失败'))
+  } finally {
+    officialKeySaving.value = false
+  }
+}
 const doubaoTrainingSessions = ref([])
 const doubaoTrainingSessionInput = ref('')
 const doubaoTrainingSessionLabel = ref('')
@@ -1395,6 +2873,33 @@ const ttsConfigStatusLabel = computed(() => {
   if (ttsConfigSource.value === 'database' && ttsConfigForm.is_active) return '已配置'
   if (ttsConfigSource.value === 'env') return '环境变量'
   if (ttsConfigForm.base_url.trim()) return '未保存'
+  return '未配置'
+})
+
+const rhTtsConfigForm = reactive({
+  api_key: '',
+  api_base: 'https://www.runninghub.cn',
+  workflow_id: '2012710824451772417',
+  webapp_id: '2012809189353070594',
+  api_mode: 'openapi_v2',
+  is_active: true,
+})
+const rhTtsNodeTemplateText = ref('')
+const rhTtsConfigSaving = ref(false)
+const rhTtsConfigTesting = ref(false)
+const rhTtsConfigSyncing = ref(false)
+const rhTtsConfigTestResult = ref(null)
+const rhTtsConfigSource = ref('none')
+const rhTtsHasBindings = ref(false)
+const rhTtsHasApiKey = ref(false)
+const rhTtsApiKeyMasked = ref('')
+const rhTtsConfigConfigured = computed(() => rhTtsHasApiKey.value || !!rhTtsConfigForm.api_key.trim())
+const rhTtsConfigStatusLabel = computed(() => {
+  if (rhTtsConfigSource.value === 'database' && rhTtsConfigForm.is_active) return '已配置'
+  if (rhTtsConfigSource.value === 'database_inactive' && rhTtsHasApiKey.value) return '已保存未启用'
+  if (rhTtsConfigSource.value === 'env') return '环境变量'
+  if (rhTtsConfigForm.api_key.trim()) return '未保存'
+  if (rhTtsHasApiKey.value) return '已配置'
   return '未配置'
 })
 
@@ -1424,11 +2929,56 @@ const xyqKeyStatusLabel = computed(() => {
   if (xyqKeyConfigured.value) return 'Key 均无效'
   return '未配置 Access Key'
 })
+const cozeHasValidSession = computed(() => cozeSessions.value.some(item => item.valid))
+const cozeSessionConfigured = computed(() => cozeSessions.value.length > 0)
+const cozeSessionStatusLabel = computed(() => {
+  if (cozeHasValidSession.value) return 'Session 可用'
+  if (cozeSessionConfigured.value) return 'Session 均无效'
+  return '未配置'
+})
+const funshionHasValidSession = computed(() => funshionSessions.value.some(item => item.valid))
+const funshionSessionConfigured = computed(() => funshionSessions.value.length > 0)
+const funshionSessionStatusLabel = computed(() => {
+  if (funshionHasValidSession.value) return 'Session 可用'
+  if (funshionSessionConfigured.value) return 'Session 均无效'
+  return '未配置'
+})
+const funshionActiveCoinLabel = computed(() => {
+  const active = funshionSessions.value.find(item => item.is_active && item.valid && item.coin_amount != null)
+    || funshionSessions.value.find(item => item.valid && item.coin_amount != null)
+  if (!active || active.coin_amount == null) return ''
+  return `上游 ${active.coin_amount} 星币`
+})
+
+function funshionCoinTitle(item) {
+  if (!item) return ''
+  const parts = []
+  if (item.coin_vip != null) parts.push(`VIP ${item.coin_vip}`)
+  if (item.coin_package != null) parts.push(`套餐 ${item.coin_package}`)
+  if (item.coin_give != null) parts.push(`赠送 ${item.coin_give}`)
+  if (item.coin_error) parts.push(item.coin_error)
+  return parts.length ? parts.join(' · ') : '橙星上游星币余额'
+}
+const xingyuemengHasValidSession = computed(() => xingyuemengSessions.value.some(item => item.valid))
+const xingyuemengSessionConfigured = computed(() => xingyuemengSessions.value.length > 0)
+const xingyuemengSessionStatusLabel = computed(() => {
+  if (xingyuemengHasValidSession.value) return 'Session 可用'
+  if (xingyuemengSessionConfigured.value) return 'Session 均无效'
+  return '未配置'
+})
 
 const jimengSessionStatusLabel = computed(() => {
+  if (jimengForceSessionId.value) return '强制全员使用中'
   if (jimengHasValidSession.value) return '有可用 Session'
   if (jimengSessionConfigured.value) return 'Session 均无效或已过期'
   return '未配置'
+})
+
+const jimengForceSessionLabel = computed(() => {
+  if (!jimengForceSessionId.value) return ''
+  const item = jimengSessions.value.find(s => s.id === jimengForceSessionId.value)
+  if (!item) return jimengForceSessionId.value
+  return item.label || item.session_id_masked || item.id
 })
 
 const doubaoTrainingHasValidSession = computed(() => doubaoTrainingSessions.value.some(item => item.valid))
@@ -1496,6 +3046,118 @@ async function testTtsConfig() {
     ttsConfigTestResult.value = { reachable: false, message: e.message || '测试失败' }
   } finally {
     ttsConfigTesting.value = false
+  }
+}
+
+async function loadRhTtsConfig() {
+  if (!isAdmin.value) return
+  try {
+    const res = await ttsRunninghubAPI.getConfig()
+    rhTtsConfigSource.value = res?.source || 'none'
+    rhTtsHasApiKey.value = !!(res?.has_api_key || res?.configured)
+    rhTtsApiKeyMasked.value = res?.api_key_masked || ''
+    // 输入框保持空白，避免把掩码当真实 Key 再存回去
+    rhTtsConfigForm.api_key = ''
+    rhTtsConfigForm.api_base = res?.api_base || 'https://www.runninghub.cn'
+    rhTtsConfigForm.workflow_id = res?.workflow_id || '2012710824451772417'
+    rhTtsConfigForm.webapp_id = res?.webapp_id || '2012809189353070594'
+    rhTtsConfigForm.api_mode = res?.api_mode || 'openapi_v2'
+    // 已有 Key 时默认勾选启用，避免「保存了却未启用」
+    rhTtsConfigForm.is_active = res?.is_active !== false || rhTtsHasApiKey.value
+    rhTtsHasBindings.value = !!res?.has_bindings
+    const tpl = res?.node_info_template
+    rhTtsNodeTemplateText.value = Array.isArray(tpl) && tpl.length
+      ? JSON.stringify(tpl, null, 2)
+      : ''
+    rhTtsConfigTestResult.value = null
+  } catch (e) {
+    toast.error(e.message || '加载 RunningHub 配置失败')
+  }
+}
+
+async function saveRhTtsConfig() {
+  if (!rhTtsConfigForm.api_key.trim() && !rhTtsHasApiKey.value) return
+  rhTtsConfigSaving.value = true
+  try {
+    let nodeInfoTemplate
+    const raw = rhTtsNodeTemplateText.value.trim()
+    if (raw) {
+      try {
+        nodeInfoTemplate = JSON.parse(raw)
+      } catch {
+        toast.error('nodeInfoList 模板不是合法 JSON')
+        return
+      }
+    }
+    const res = await ttsRunninghubAPI.saveConfig({
+      // 空字符串表示不改动已保存 Key
+      api_key: rhTtsConfigForm.api_key.trim() || undefined,
+      api_base: rhTtsConfigForm.api_base.trim() || undefined,
+      workflow_id: rhTtsConfigForm.workflow_id.trim() || undefined,
+      webapp_id: rhTtsConfigForm.webapp_id.trim() || undefined,
+      api_mode: rhTtsConfigForm.api_mode,
+      node_info_template: nodeInfoTemplate,
+      is_active: true,
+    })
+    rhTtsConfigSource.value = res?.source || 'database'
+    rhTtsHasApiKey.value = !!(res?.has_api_key || res?.configured)
+    rhTtsApiKeyMasked.value = res?.api_key_masked || ''
+    rhTtsConfigForm.api_key = ''
+    rhTtsConfigForm.is_active = res?.is_active !== false
+    rhTtsHasBindings.value = !!res?.has_bindings
+    toast.success('RunningHub IndexTTS2 配置已保存')
+    await loadCfgs()
+  } catch (e) {
+    toast.error(e.message || '保存失败')
+  } finally {
+    rhTtsConfigSaving.value = false
+  }
+}
+
+async function testRhTtsConfig() {
+  rhTtsConfigTesting.value = true
+  rhTtsConfigTestResult.value = null
+  try {
+    rhTtsConfigTestResult.value = await ttsRunninghubAPI.testConfig({
+      api_key: rhTtsConfigForm.api_key || undefined,
+      api_base: rhTtsConfigForm.api_base.trim() || undefined,
+    })
+  } catch (e) {
+    rhTtsConfigTestResult.value = { ok: false, reachable: false, message: e.message || '测试失败' }
+  } finally {
+    rhTtsConfigTesting.value = false
+  }
+}
+
+async function syncRhTtsConfig() {
+  rhTtsConfigSyncing.value = true
+  try {
+    let nodeInfoTemplate
+    const raw = rhTtsNodeTemplateText.value.trim()
+    if (raw) {
+      // 后端可解析数组 / 请求体 / curl；前端先尝试 JSON
+      try {
+        nodeInfoTemplate = JSON.parse(raw)
+      } catch {
+        nodeInfoTemplate = raw
+      }
+    }
+    const res = await ttsRunninghubAPI.syncConfig({
+      api_key: rhTtsConfigForm.api_key || undefined,
+      node_info_template: nodeInfoTemplate,
+    })
+    rhTtsConfigSource.value = res?.source || 'database'
+    rhTtsConfigForm.api_key = res?.api_key || '********'
+    rhTtsHasBindings.value = !!res?.has_bindings
+    const tpl = res?.node_info_template
+    if (Array.isArray(tpl) && tpl.length) {
+      rhTtsNodeTemplateText.value = JSON.stringify(tpl, null, 2)
+    }
+    toast.success(res?.sync_source === 'manual' ? '已根据粘贴模板推断节点映射' : `已同步节点参数（${res?.sync_source || 'api'}）`)
+  } catch (e) {
+    toast.error(e.message || '同步失败')
+  } finally {
+    rhTtsConfigSyncing.value = false
   }
 }
 
@@ -1629,11 +3291,408 @@ async function loadJimengSessionStatus() {
   try {
     const res = await jimengSessionAPI.list()
     jimengSessions.value = res?.items || res?.sessions || []
+    jimengForceSessionId.value = res?.force_session_id || ''
   } catch {
     jimengSessions.value = []
+    jimengForceSessionId.value = ''
   } finally {
     jimengCreditsLoading.value = false
   }
+}
+
+async function loadJimengAccessSettings() {
+  if (!isAdmin.value) return
+  try {
+    const res = await jimengSessionAPI.accessSettings()
+    jimengAccessEnabled.value = res?.enabled !== false
+    jimengAccessDefaultRate.value = Number(res?.default_success_rate ?? 20)
+    jimengAccessTeams.value = (res?.teams || []).map(item => ({
+      team_id: Number(item.team_id),
+      team_name: item.team_name || `团队 #${item.team_id}`,
+      success_rate: Number(item.success_rate ?? 100),
+    }))
+    jimengAccessAvailableTeams.value = res?.available_teams || []
+  } catch {
+    jimengAccessTeams.value = []
+    jimengAccessAvailableTeams.value = []
+  }
+}
+
+function addJimengAccessTeamRule() {
+  const id = Number(jimengAccessAddTeamId.value)
+  if (!id) return
+  if (jimengAccessTeams.value.some(item => Number(item.team_id) === id)) {
+    toast.warning('该团队已在列表中')
+    return
+  }
+  const team = jimengAccessAvailableTeams.value.find(item => Number(item.id) === id)
+  jimengAccessTeams.value.push({
+    team_id: id,
+    team_name: team?.name || `团队 #${id}`,
+    success_rate: 100,
+  })
+  jimengAccessAddTeamId.value = ''
+}
+
+async function saveJimengAccessSettings() {
+  if (!isAdmin.value) return
+  jimengAccessSaving.value = true
+  try {
+    const res = await jimengSessionAPI.saveAccessSettings({
+      enabled: jimengAccessEnabled.value,
+      default_success_rate: Number(jimengAccessDefaultRate.value),
+      teams: jimengAccessTeams.value.map(item => ({
+        team_id: Number(item.team_id),
+        success_rate: Number(item.success_rate),
+      })),
+    })
+    jimengAccessEnabled.value = res?.enabled !== false
+    jimengAccessDefaultRate.value = Number(res?.default_success_rate ?? 20)
+    jimengAccessTeams.value = (res?.teams || []).map(item => ({
+      team_id: Number(item.team_id),
+      team_name: item.team_name || `团队 #${item.team_id}`,
+      success_rate: Number(item.success_rate ?? 100),
+    }))
+    jimengAccessAvailableTeams.value = res?.available_teams || jimengAccessAvailableTeams.value
+    toast.success('通道4提交规则已保存')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    jimengAccessSaving.value = false
+  }
+}
+
+async function loadChengmengBalance() {
+  if (!isAdmin.value) return
+  chengmengBalanceLoading.value = true
+  chengmengBalanceError.value = ''
+  chengmengBalanceTasksError.value = ''
+  try {
+    const res = await aiConfigAPI.chengmengBalance({ page_size: 20, light: true })
+    chengmengBalanceAccounts.value = res?.accounts || []
+    chengmengBalanceTasks.value = res?.tasks || []
+    chengmengBalanceTasksTotal.value = Number(res?.total || 0)
+    if (res?.tasks_error) chengmengBalanceTasksError.value = res.tasks_error
+  } catch (err) {
+    chengmengBalanceAccounts.value = []
+    chengmengBalanceTasks.value = []
+    chengmengBalanceTasksTotal.value = 0
+    chengmengBalanceError.value = err?.message || '查询通道1余额失败'
+  } finally {
+    chengmengBalanceLoading.value = false
+  }
+}
+
+async function loadAistarslabBalance() {
+  if (!isAdmin.value) return
+  aistarslabBalanceLoading.value = true
+  aistarslabBalanceError.value = ''
+  aistarslabBalanceTasksError.value = ''
+  try {
+    const res = await aiConfigAPI.aistarslabBalance({ limit: 20, light: true })
+    aistarslabBalanceAccounts.value = res?.accounts || []
+    aistarslabBalanceTasks.value = res?.tasks || []
+    if (res?.tasks_error) aistarslabBalanceTasksError.value = res.tasks_error
+  } catch (err) {
+    aistarslabBalanceAccounts.value = []
+    aistarslabBalanceTasks.value = []
+    aistarslabBalanceError.value = err?.message || '查询通道3余额失败'
+  } finally {
+    aistarslabBalanceLoading.value = false
+  }
+}
+
+async function loadAigcccBalance() {
+  if (!isAdmin.value) return
+  aigcccBalanceLoading.value = true
+  aigcccBalanceError.value = ''
+  aigcccBalanceTasksError.value = ''
+  try {
+    const res = await aiConfigAPI.aigcccBalance({ limit: 20 })
+    aigcccBalanceAccounts.value = res?.accounts || []
+    aigcccBalanceTasks.value = res?.tasks || []
+    if (res?.tasks_error) aigcccBalanceTasksError.value = res.tasks_error
+  } catch (err) {
+    aigcccBalanceAccounts.value = []
+    aigcccBalanceTasks.value = []
+    aigcccBalanceError.value = err?.message || '查询通道6余额失败'
+  } finally {
+    aigcccBalanceLoading.value = false
+  }
+}
+
+async function loadOfficialBalance() {
+  return loadOfficialBalancePage(1)
+}
+
+async function loadOfficialBalancePage(page) {
+  if (!isAdmin.value) return
+  const nextPage = Math.max(1, Number(page) || 1)
+  officialBalanceLoading.value = true
+  officialBalanceError.value = ''
+  officialBalanceTasksError.value = ''
+  try {
+    const res = await aiConfigAPI.officialBalance({
+      limit: officialBalancePageSize,
+      page: nextPage,
+      light: true,
+    })
+    officialBalanceAccounts.value = res?.accounts || []
+    officialBalanceTasks.value = res?.tasks || []
+    officialBalancePage.value = Number(res?.page || res?.page_num || nextPage) || nextPage
+    officialBalanceTasksTotal.value = Number(res?.total || 0)
+    officialBalanceHasMore.value = !!res?.has_more
+      || (
+        officialBalanceTasksTotal.value > 0
+        && officialBalancePage.value * officialBalancePageSize < officialBalanceTasksTotal.value
+      )
+    if (res?.tasks_error) officialBalanceTasksError.value = res.tasks_error
+  } catch (err) {
+    officialBalanceAccounts.value = []
+    officialBalanceTasks.value = []
+    officialBalanceTasksTotal.value = 0
+    officialBalanceHasMore.value = false
+    officialBalanceError.value = err?.message || '查询通道2用量失败'
+  } finally {
+    officialBalanceLoading.value = false
+  }
+}
+
+function officialBalanceTitle(item) {
+  if (!item?.balance) return ''
+  const parts = []
+  if (item.balance.cash_balance != null) parts.push(`现金 ${formatUpstreamMoney(item.balance.cash_balance)}`)
+  if (item.balance.freeze_amount != null) parts.push(`冻结 ${formatUpstreamMoney(item.balance.freeze_amount)}`)
+  if (item.balance.arrears_balance != null) parts.push(`欠费 ${formatUpstreamMoney(item.balance.arrears_balance)}`)
+  return parts.join(' · ')
+}
+
+async function activateOfficialKey(id) {
+  if (!id || officialKeySaving.value) return
+  officialKeySaving.value = true
+  try {
+    await aiConfigAPI.officialKeyActivate(id)
+    toast.success('已切换当前通道2 API Key')
+    await loadOfficialBalance()
+  } catch (err) {
+    toast.error(err?.message || '切换失败')
+  } finally {
+    officialKeySaving.value = false
+  }
+}
+
+async function removeOfficialKey(item) {
+  if (!item?.config_id || officialKeySaving.value) return
+  if (!confirm(`确定删除「${item.name || item.config_id}」？`)) return
+  officialKeySaving.value = true
+  try {
+    await aiConfigAPI.officialKeyDelete(item.config_id)
+    toast.success('已删除')
+    await loadOfficialBalance()
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    officialKeySaving.value = false
+  }
+}
+
+async function syncOfficialKeysFromEnv() {
+  if (officialKeySaving.value) return
+  officialKeySaving.value = true
+  try {
+    const res = await aiConfigAPI.officialKeySyncEnv()
+    toast.success(`已同步环境变量：新建 ${res?.created || 0}，更新 ${res?.updated || 0}`)
+    await loadOfficialBalance()
+  } catch (err) {
+    toast.error(err?.message || '同步失败')
+  } finally {
+    officialKeySaving.value = false
+  }
+}
+
+function formatUpstreamMoney(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
+}
+
+function formatUpstreamCost(cost, unit) {
+  if (cost == null || cost === '') return '—'
+  const n = Number(cost)
+  if (!Number.isFinite(n)) return '—'
+  const suffix = unit || ''
+  if (suffix === '元') return `${formatUpstreamMoney(n)} 元`
+  if (suffix === '积分') return `${n} 积分`
+  return `${n}${suffix ? ` ${suffix}` : ''}`
+}
+
+function formatAistarslabTaskCost(task) {
+  if (!task) return '—'
+  if (task.cost_note) return task.cost_note
+  if (task.refunded) {
+    const listed = Number(task.cost)
+    if (Number.isFinite(listed)) return `已退还（原扣 ${listed}）`
+    return '已退还'
+  }
+  return formatUpstreamCost(task.net_cost ?? task.cost, task.cost_unit || '积分')
+}
+
+function formatAigcccTaskCost(task) {
+  return formatAistarslabTaskCost(task)
+}
+
+function formatOfficialTokens(task) {
+  const n = Number(task?.tokens ?? task?.completion_tokens ?? task?.total_tokens)
+  if (!Number.isFinite(n) || n <= 0) return '—'
+  return n.toLocaleString('zh-CN')
+}
+
+/** 视频生成时长（秒）；有排队耗时时附注 */
+function formatOfficialTaskDuration(task) {
+  const videoSec = Number(task?.duration_seconds ?? task?.seconds)
+  const elapsed = Number(task?.elapsed_seconds)
+  const parts = []
+  if (Number.isFinite(videoSec) && videoSec > 0) parts.push(`${Math.round(videoSec)} 秒`)
+  if (Number.isFinite(elapsed) && elapsed > 0) {
+    const waitLabel = elapsed >= 60
+      ? `${Math.floor(elapsed / 60)}分${elapsed % 60}秒`
+      : `${elapsed}秒`
+    parts.push(parts.length ? `耗时 ${waitLabel}` : waitLabel)
+  }
+  return parts.length ? parts.join(' · ') : '—'
+}
+
+function formatOfficialTaskCost(task) {
+  const value = task?.estimated_cost ?? task?.cost
+  if (value == null || value === '') return '—'
+  return formatUpstreamCost(value, task.cost_unit || '元')
+}
+
+function formatOfficialActualCost(task) {
+  if (task?.actual_cost == null || task?.actual_cost === '') return '—'
+  return formatUpstreamCost(task.actual_cost, task.actual_cost_unit || '元')
+}
+
+function formatOfficialSiteCredits(task) {
+  const net = task?.site_credits
+  if (net == null || net === '') return '—'
+  const n = Number(net)
+  if (!Number.isFinite(n)) return '—'
+  if (task?.site_credits_refunded && task?.site_credits_gross != null) {
+    return `${n} 积分（原 ${task.site_credits_gross}）`
+  }
+  return `${n} 积分`
+}
+
+function formatOfficialPnlSigned(value) {
+  if (value == null || value === '') return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${formatUpstreamMoney(n)}`
+}
+
+function formatOfficialPnlMargin(value) {
+  if (value == null || value === '') return '—'
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return `${n.toFixed(2)}%`
+}
+
+function formatOfficialPnlOutcome(outcome) {
+  const map = {
+    profit: '盈利',
+    loss: '亏损',
+    breakeven: '持平',
+    missing_actual_cost: '缺实付',
+    missing_revenue: '缺实收',
+    not_billable: '未计费',
+    unknown: '—',
+  }
+  return map[String(outcome || '')] || outcome || '—'
+}
+
+function officialPnlProfitClass(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n === 0) return ''
+  return n > 0 ? 'official-pnl-positive' : 'official-pnl-negative'
+}
+
+async function loadOfficialPnl(backfill = false) {
+  return loadOfficialPnlPage(1, backfill)
+}
+
+async function loadOfficialPnlPage(page, backfill = false) {
+  if (!isAdmin.value) return
+  const nextPage = Math.max(1, Number(page) || 1)
+  officialPnlLoading.value = true
+  officialPnlError.value = ''
+  try {
+    const res = await aiConfigAPI.officialPnl({
+      days: officialPnlDays.value > 0 ? officialPnlDays.value : undefined,
+      limit: officialPnlPageSize,
+      offset: (nextPage - 1) * officialPnlPageSize,
+      sort: 'profit_asc',
+      backfill: backfill ? 1 : undefined,
+    })
+    officialPnlSummary.value = res?.summary || null
+    officialPnlBackfill.value = res?.backfill || null
+    officialBillSync.value = res?.bill_sync || null
+    officialPnlByModel.value = res?.by_model || []
+    officialPnlLines.value = res?.lines || []
+    officialPnlPagination.value = res?.pagination || { total: 0, has_more: false }
+    officialPnlPage.value = nextPage
+  } catch (err) {
+    officialPnlSummary.value = null
+    officialPnlBackfill.value = null
+    officialPnlByModel.value = []
+    officialPnlLines.value = []
+    officialPnlPagination.value = { total: 0, has_more: false }
+    officialPnlError.value = err?.message || '通道2盈亏统计失败'
+  } finally {
+    officialPnlLoading.value = false
+  }
+}
+
+function officialTaskPlayUrl(task) {
+  const raw = String(task?.play_url || task?.local_path || task?.video_url || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  if (raw.startsWith('/')) return raw
+  return `/${raw}`
+}
+
+function formatUpstreamDelta(delta, unit) {
+  if (delta == null || delta === '') return '—'
+  const n = Number(delta)
+  if (!Number.isFinite(n)) return '—'
+  if (n === 0) return unit === '元' ? '0 元' : '0 积分'
+  const sign = n > 0 ? '+' : ''
+  if (unit === '元') return `${sign}${formatUpstreamMoney(n)} 元`
+  return `${sign}${n} 积分`
+}
+
+function formatUpstreamBalanceAfter(task, unit) {
+  if (task?.balance_after == null || task?.balance_after === '') return '—'
+  const n = Number(task.balance_after)
+  if (!Number.isFinite(n)) return '—'
+  if (unit === '元') return `${formatUpstreamMoney(n)} 元`
+  return `${n} 积分`
+}
+
+function formatUpstreamTime(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return '—'
+  const d = new Date(raw.includes('T') || raw.includes('Z') || raw.includes('+') ? raw : raw.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(d.getTime())) return raw.slice(0, 19)
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function shortTaskId(value) {
+  const id = String(value || '').trim()
+  if (!id) return '—'
+  if (id.length <= 18) return id
+  return `${id.slice(0, 8)}…${id.slice(-6)}`
 }
 
 async function loadXyqSessionStatus() {
@@ -1768,6 +3827,278 @@ async function clearXyqSession() {
   }
 }
 
+async function loadCozeSessionStatus() {
+  if (!isAdmin.value) return
+  try {
+    const res = await cozeSessionAPI.list()
+    cozeSessions.value = res?.items || res?.sessions || []
+  } catch {
+    cozeSessions.value = []
+  }
+}
+
+async function saveCozeSession() {
+  if (!cozeSessionCookieInput.value.trim() && !cozeSessionApiKeyInput.value.trim()) return
+  cozeSessionSaving.value = true
+  try {
+    const res = await cozeSessionAPI.save({
+      cookie: cozeSessionCookieInput.value.trim() || undefined,
+      api_key: cozeSessionApiKeyInput.value.trim() || undefined,
+      base_url: cozeSessionBaseUrlInput.value.trim() || undefined,
+      label: cozeSessionLabel.value || undefined,
+      set_active: true,
+    })
+    cozeSessionCookieInput.value = ''
+    cozeSessionApiKeyInput.value = ''
+    cozeSessionBaseUrlInput.value = ''
+    cozeSessionLabel.value = ''
+    await loadCozeSessionStatus()
+    toast.success(res?.valid ? '扣子 Session 已添加且有效' : 'Session 已添加，但验证未通过')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    cozeSessionSaving.value = false
+  }
+}
+
+async function validateCozeSessionItem(id) {
+  cozeSessionSaving.value = true
+  try {
+    const res = await cozeSessionAPI.validate(id)
+    await loadCozeSessionStatus()
+    toast.success(res?.valid ? 'Session 有效' : 'Session 无效，请检查 Cookie 或 PAT')
+  } catch (err) {
+    toast.error(err?.message || '验证失败')
+  } finally {
+    cozeSessionSaving.value = false
+  }
+}
+
+async function activateCozeSession(id) {
+  cozeSessionSaving.value = true
+  try {
+    await cozeSessionAPI.setActive(id)
+    await loadCozeSessionStatus()
+    toast.success('已设为当前启用 Session')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    cozeSessionSaving.value = false
+  }
+}
+
+async function removeCozeSession(id) {
+  cozeSessionSaving.value = true
+  try {
+    await cozeSessionAPI.remove(id)
+    await loadCozeSessionStatus()
+    toast.success('Session 已删除')
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    cozeSessionSaving.value = false
+  }
+}
+
+async function clearCozeSession() {
+  if (!confirm('确定清除全部扣子 Session？')) return
+  cozeSessionSaving.value = true
+  try {
+    await cozeSessionAPI.clear()
+    await loadCozeSessionStatus()
+    toast.success('已清除全部 Session')
+  } catch (err) {
+    toast.error(err?.message || '清除失败')
+  } finally {
+    cozeSessionSaving.value = false
+  }
+}
+
+async function loadFunshionSessionStatus() {
+  if (!isAdmin.value) return
+  funshionCreditsLoading.value = true
+  try {
+    const res = await funshionSessionAPI.list()
+    funshionSessions.value = res?.items || res?.sessions || []
+  } catch {
+    funshionSessions.value = []
+  } finally {
+    funshionCreditsLoading.value = false
+  }
+}
+
+async function saveFunshionSession() {
+  if (!funshionSessionTokenInput.value.trim()) return
+  if (!funshionSessionProjectIdInput.value.trim() && !funshionSessionAppIdInput.value.trim()) {
+    toast.error('请填写项目 ID 或 appId')
+    return
+  }
+  funshionSessionSaving.value = true
+  try {
+    const res = await funshionSessionAPI.save({
+      token: funshionSessionTokenInput.value.trim(),
+      project_id: funshionSessionProjectIdInput.value.trim() || undefined,
+      app_id: funshionSessionAppIdInput.value.trim() || undefined,
+      base_url: funshionSessionBaseUrlInput.value.trim() || undefined,
+      label: funshionSessionLabel.value || undefined,
+      set_active: true,
+    })
+    funshionSessionTokenInput.value = ''
+    funshionSessionProjectIdInput.value = ''
+    funshionSessionAppIdInput.value = ''
+    funshionSessionBaseUrlInput.value = ''
+    funshionSessionLabel.value = ''
+    await loadFunshionSessionStatus()
+    toast.success(res?.valid ? '橙星 Session 已添加且有效' : 'Session 已添加，但验证未通过')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    funshionSessionSaving.value = false
+  }
+}
+
+async function validateFunshionSessionItem(id) {
+  funshionSessionSaving.value = true
+  try {
+    const res = await funshionSessionAPI.validate(id)
+    await loadFunshionSessionStatus()
+    toast.success(res?.valid ? 'Token 有效' : 'Token 无效，请重新从视频页复制')
+  } catch (err) {
+    toast.error(err?.message || '验证失败')
+  } finally {
+    funshionSessionSaving.value = false
+  }
+}
+
+async function activateFunshionSession(id) {
+  funshionSessionSaving.value = true
+  try {
+    await funshionSessionAPI.setActive(id)
+    await loadFunshionSessionStatus()
+    toast.success('已设为当前启用 Session')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    funshionSessionSaving.value = false
+  }
+}
+
+async function removeFunshionSession(id) {
+  funshionSessionSaving.value = true
+  try {
+    await funshionSessionAPI.remove(id)
+    await loadFunshionSessionStatus()
+    toast.success('Session 已删除')
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    funshionSessionSaving.value = false
+  }
+}
+
+async function clearFunshionSession() {
+  if (!confirm('确定清除全部橙星 Session？')) return
+  funshionSessionSaving.value = true
+  try {
+    await funshionSessionAPI.clear()
+    await loadFunshionSessionStatus()
+    toast.success('已清除全部 Session')
+  } catch (err) {
+    toast.error(err?.message || '清除失败')
+  } finally {
+    funshionSessionSaving.value = false
+  }
+}
+
+async function loadXingyuemengSessionStatus() {
+  if (!isAdmin.value) return
+  try {
+    const res = await xingyuemengSessionAPI.list()
+    xingyuemengSessions.value = res?.items || res?.sessions || []
+  } catch {
+    xingyuemengSessions.value = []
+  }
+}
+
+async function saveXingyuemengSession() {
+  if (!xingyuemengSessionTokenInput.value.trim()) return
+  xingyuemengSessionSaving.value = true
+  try {
+    const res = await xingyuemengSessionAPI.save({
+      token: xingyuemengSessionTokenInput.value.trim(),
+      team_id: xingyuemengSessionTeamIdInput.value.trim() || undefined,
+      project_id: xingyuemengSessionProjectIdInput.value.trim() || undefined,
+      episode_id: xingyuemengSessionEpisodeIdInput.value.trim() || undefined,
+      label: xingyuemengSessionLabel.value || undefined,
+      set_active: true,
+    })
+    xingyuemengSessionTokenInput.value = ''
+    xingyuemengSessionTeamIdInput.value = ''
+    xingyuemengSessionProjectIdInput.value = ''
+    xingyuemengSessionEpisodeIdInput.value = ''
+    xingyuemengSessionLabel.value = ''
+    await loadXingyuemengSessionStatus()
+    toast.success(res?.valid ? '星月梦 Session 已添加且有效' : 'Session 已添加，但验证未通过')
+  } catch (err) {
+    toast.error(err?.message || '保存失败')
+  } finally {
+    xingyuemengSessionSaving.value = false
+  }
+}
+
+async function validateXingyuemengSessionItem(id) {
+  xingyuemengSessionSaving.value = true
+  try {
+    const res = await xingyuemengSessionAPI.validate(id)
+    await loadXingyuemengSessionStatus()
+    toast.success(res?.valid ? 'Token 有效' : 'Token 无效，请重新从视频页复制')
+  } catch (err) {
+    toast.error(err?.message || '验证失败')
+  } finally {
+    xingyuemengSessionSaving.value = false
+  }
+}
+
+async function activateXingyuemengSession(id) {
+  xingyuemengSessionSaving.value = true
+  try {
+    await xingyuemengSessionAPI.setActive(id)
+    await loadXingyuemengSessionStatus()
+    toast.success('已设为当前启用 Session')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    xingyuemengSessionSaving.value = false
+  }
+}
+
+async function removeXingyuemengSession(id) {
+  xingyuemengSessionSaving.value = true
+  try {
+    await xingyuemengSessionAPI.remove(id)
+    await loadXingyuemengSessionStatus()
+    toast.success('Session 已删除')
+  } catch (err) {
+    toast.error(err?.message || '删除失败')
+  } finally {
+    xingyuemengSessionSaving.value = false
+  }
+}
+
+async function clearXingyuemengSession() {
+  if (!confirm('确定清除全部星月梦 Session？')) return
+  xingyuemengSessionSaving.value = true
+  try {
+    await xingyuemengSessionAPI.clear()
+    await loadXingyuemengSessionStatus()
+    toast.success('已清除全部 Session')
+  } catch (err) {
+    toast.error(err?.message || '清除失败')
+  } finally {
+    xingyuemengSessionSaving.value = false
+  }
+}
+
 function formatJimengCreditExpire(item) {
   const unix = Number(item?.credit_expire_at)
   const iso = item?.credit_expire_at_iso
@@ -1792,6 +4123,31 @@ function jimengCreditTitle(item) {
   const expire = formatJimengCreditExpire(item)
   if (expire) parts.push(`到期 ${expire}`)
   return parts.length ? `${parts.join(' · ')}（合计 ${item.total_credit}）` : `合计 ${item.total_credit} 积分`
+}
+
+/** 小云雀含「每日免费」分项；漏显会导致合计看起来对不上官网 */
+function formatXyqCreditBreakdown(item) {
+  if (!item || item.total_credit == null) return ''
+  const parts = []
+  if (item.free_credit != null && Number(item.free_credit) !== 0) parts.push(`免费${item.free_credit}`)
+  if (item.gift_credit != null && Number(item.gift_credit) !== 0) parts.push(`赠送${item.gift_credit}`)
+  if (item.vip_credit != null && Number(item.vip_credit) !== 0) parts.push(`VIP${item.vip_credit}`)
+  if (item.purchase_credit != null && Number(item.purchase_credit) !== 0) parts.push(`购买${item.purchase_credit}`)
+  return parts.join('+')
+}
+
+function xyqCreditTitle(item) {
+  if (item?.total_credit == null) return ''
+  const parts = []
+  if (item.free_credit != null) parts.push(`免费 ${item.free_credit}`)
+  if (item.gift_credit != null) parts.push(`赠送 ${item.gift_credit}`)
+  if (item.purchase_credit != null) parts.push(`购买 ${item.purchase_credit}`)
+  if (item.vip_credit != null) parts.push(`VIP ${item.vip_credit}`)
+  const expire = formatJimengCreditExpire(item)
+  if (expire) parts.push(`到期 ${expire}`)
+  return parts.length
+    ? `${parts.join(' · ')}（合计 ${item.total_credit}）`
+    : `合计 ${item.total_credit} 积分`
 }
 
 async function saveJimengSession() {
@@ -1840,6 +4196,35 @@ async function activateJimengSession(id) {
   }
 }
 
+async function forceJimengSession(id) {
+  const item = jimengSessions.value.find(s => s.id === id)
+  const name = item?.label || item?.session_id_masked || id
+  if (!confirm(`确定强制全员使用「${name}」？之后所有用户发布通道4视频都将使用此账号。`)) return
+  jimengSessionSaving.value = true
+  try {
+    await jimengSessionAPI.setForce(id)
+    await loadJimengSessionStatus()
+    toast.success('已强制全员使用该 Session')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
+async function clearJimengForceSession() {
+  jimengSessionSaving.value = true
+  try {
+    await jimengSessionAPI.clearForce()
+    await loadJimengSessionStatus()
+    toast.success('已取消强制，恢复按用户分配')
+  } catch (err) {
+    toast.error(err?.message || '操作失败')
+  } finally {
+    jimengSessionSaving.value = false
+  }
+}
+
 async function removeJimengSession(id) {
   jimengSessionSaving.value = true
   try {
@@ -1860,6 +4245,7 @@ async function clearJimengSession() {
     jimengSessionInput.value = ''
     jimengSessionLabel.value = ''
     jimengSessions.value = []
+    jimengForceSessionId.value = ''
     toast.success('已清除全部 Session')
   } catch (err) {
     toast.error(err?.message || '清除失败')
@@ -1869,12 +4255,13 @@ async function clearJimengSession() {
 }
 
 const serviceTypes = [{ type: 'text', label: '文本' }, { type: 'image', label: '图片' }, { type: 'video', label: '视频' }, { type: 'audio', label: '音频' }]
-const providers = ['ali', 'ali-intl', 'ali-us', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'qilingze', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
+const providers = ['ali', 'ali-intl', 'ali-us', 'apimart', 'chatfire', 'chengmeng', 'aistarslab', 'geeknow', 'qilingze', 'gemini', 'minimax', 'openai', 'openrouter', 'vidu', 'volcengine', 'volcengine_proxy']
 const providerLabels = {
   ali: '阿里百炼（北京）',
   'ali-intl': '阿里百炼（新加坡）',
   'ali-us': '阿里百炼（美国）',
   chatfire: 'ChatFire',
+  apimart: 'APIMart',
   chengmeng: '橙盟 Seedance 2.0 9图过人脸',
   aistarslab: 'Seedance 2.0 VIP',
   geeknow: 'GeekNow (NewAPI)',
@@ -1915,6 +4302,7 @@ const providerPresets = {
       hint: '美国（弗吉尼亚）地域 API Key 与 Base URL 需一致',
     },
     chatfire: { label: 'ChatFire 推荐', baseUrl: 'https://api.chatfire.site', models: ['gemini-3-pro-preview'] },
+    apimart: { label: 'APIMart ChatGPT', baseUrl: 'https://api.apib.ai', models: ['gpt-5.6-terra', 'gpt-5.5', 'gpt-5.6-luna'] },
     openrouter: { label: 'OpenRouter 推荐', baseUrl: 'https://openrouter.ai/api', models: ['google/gemini-3-flash-preview'] },
     openai: { label: 'OpenAI 推荐', baseUrl: 'https://api.openai.com', models: ['gpt-4.1-mini'] },
   },
@@ -1957,7 +4345,7 @@ const providerPresets = {
       label: '橙盟 Seedance 2.0 9图过人脸',
       baseUrl: 'https://api.chengmeng.site',
       models: ['70', '77'],
-      hint: 'Base URL 填 https://api.chengmeng.site；模型从上游 /api/models 同步（当前默认 model_id=70 九图满血线路1 / 77 九图满血线路2）；创建任务仅需 model_id，无需 group_id',
+      hint: 'Base URL 填 https://api.chengmeng.site；模型从上游 /api/models 同步（当前默认 model_id=91 官转满血线路1）；创建任务仅需 model_id，无需 group_id',
       defaultApiKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NyIsInVzZXJpZCI6ImppbmdsaW5nIiwidHlwZSI6InVzZXIiLCJpYXQiOjE3NzgyMDYwMjQsImV4cCI6MTc3ODgxMDgyNH0.-rE2vYTdktoOYf2g7S5qAhcacQA_0GrA6bNkeRpndnc',
     },
     aistarslab: {
@@ -1982,7 +4370,7 @@ const providerPresets = {
     },
   },
   audio: {
-    minimax: { label: '红果音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
+    minimax: { label: '影光工场音频', baseUrl: 'https://api.chatfire.site/minimax', models: ['speech-2.8-hd'] },
   },
 }
 const huobaoPresetCards = [
@@ -1996,6 +4384,7 @@ const huobaoPresetCards = [
 ]
 const endpointPrefixes = {
   chatfire: '/v1',
+  apimart: '/v1',
   geeknow: '/v1',
   qilingze: '/v1',
   openai: '/v1',
@@ -2060,8 +4449,16 @@ const aistarslabRemoteMeta = ref('')
 let aistarslabRemoteTimer = null
 
 function formatChengmengModelPrice(model) {
+  const unit = String(model.billing_unit || '').toLowerCase()
+  if (unit === 'per_second' || unit === 'second' || model.credit_cost_per_second != null) {
+    const rate = model.credit_cost_per_second ?? model.credit_cost
+    return rate != null ? `${rate} 积分/秒（用户扣费）` : '按秒计费'
+  }
   if (model.credit_cost_flat != null) return `${model.credit_cost_flat} 积分/条（用户扣费）`
-  if (model.base_price_yuan != null) return `上游约 ${model.base_price_yuan} 元/条`
+  if (model.base_price_yuan != null) {
+    const ul = String(model.unit_label || '')
+    return `上游约 ${model.base_price_yuan} ${ul || '元'}`
+  }
   return '价格待配置'
 }
 
@@ -2437,7 +4834,7 @@ async function applyHuobaoPreset() {
     await loadCfgs()
     await loadAgents()
     presetDialog.value = false
-    toast.success('红果推荐配置与默认 Agent LLM 已写入')
+    toast.success('影光工场推荐配置与默认 Agent LLM 已写入')
   } catch (e) {
     toast.error(e.message)
   }
@@ -2727,7 +5124,8 @@ const chengmengModelEnabled = ref({})
 const aistarslabChannelSaving = ref('')
 const chengmengModelSaving = ref('')
 const videoChannelGuide = VIDEO_CHANNEL_ADMIN_GUIDE
-const grantForm = reactive({ user_id: null, amount: 1000, summary: '' })
+const grantForm = reactive({ user_id: 0, amount: 1000, summary: '' })
+const grantSaving = ref(false)
 
 const AISTARSLAB_CHANNEL_ACTION_RE = /^video\.generate\.aistarslab\.(\d+)\./i
 
@@ -2812,6 +5210,7 @@ function isJimengPricingAction(action) {
   return key === 'video.generate.jimeng'
     || key === 'video.generate.jimeng.seedance2_fast'
     || key === 'video.generate.jimeng.seedance2'
+    || key === 'video.generate.jimeng.seedance25'
 }
 
 async function loadCreditPricing() {
@@ -2866,20 +5265,47 @@ const FLAT_VIDEO_PRICING_ACTIONS = new Set([
   'video.generate.grok.1_5_max',
   'video.generate.grok.3_pro',
   'video.generate.grok.3_max',
+  'video.generate.doubao_training',
+  'video.generate.aistarslab',
+  'video.generate.xyq.mini_trial',
+  'video.generate.xyq.mini',
+  'video.generate.xyq.seedance2_fast',
+  'video.generate.xyq.seedance2',
+])
+
+const PER_SECOND_VIDEO_PRICING_ACTIONS = new Set([
+  'video.generate',
   'video.generate.jimeng',
   'video.generate.jimeng.seedance2_fast',
   'video.generate.jimeng.seedance2',
-  'video.generate.doubao_training',
-  'video.generate.aistarslab',
+  'video.generate.jimeng.seedance25',
+  'video.generate.xyq.seedance25',
+  'video.generate.coze.seedance2_fast',
+  'video.generate.coze.seedance2',
+  'video.upscale.seedvr2',
 ])
 
-function pricingUnit(action) {
+const OFFICIAL_CHANNEL2_PRICING_ACTIONS = new Set([
+  'video.generate.seedance2',
+  'video.generate.seedance2_fast',
+  'video.generate.seedance2_mini',
+  'video.generate.seedance2_fast_hd',
+  'video.generate.seedance25',
+])
+
+function pricingUnit(action, item) {
+  const desc = `${item?.description || ''} ${item?.label || ''}`
   if (FLAT_VIDEO_PRICING_ACTIONS.has(action)) return '积分/条'
-  if (/^video\.generate\.chengmeng\.\d+$/.test(String(action || ''))) return '积分/条'
-  if (/^video\.generate\.aistarslab\.\d+\.[a-z0-9-]+$/i.test(String(action || ''))) return '积分/条'
-  if (action === 'video.generate' || action === 'video.generate.seedance2' || action === 'video.generate.seedance2_fast') {
-    return '积分/秒'
+  if (OFFICIAL_CHANNEL2_PRICING_ACTIONS.has(action) || String(action || '').startsWith('video.generate.xingyuemeng.')) {
+    return '参考(5s·480p)'
   }
+  if (/^video\.generate\.chengmeng\.\d+$/.test(String(action || ''))) {
+    return /按秒|积分\/秒/.test(desc) ? '积分/秒' : '积分/条'
+  }
+  if (/^video\.generate\.aistarslab\.\d+\.[a-z0-9-]+$/i.test(String(action || ''))) {
+    return /按秒|积分\/秒/.test(desc) ? '积分/秒' : '积分/条'
+  }
+  if (PER_SECOND_VIDEO_PRICING_ACTIONS.has(action)) return '积分/秒'
   return '积分/次'
 }
 
@@ -2897,11 +5323,22 @@ async function savePricing(item) {
 }
 
 async function grantCredits() {
-  if (!grantForm.user_id || !grantForm.amount) return
+  const userId = Number(grantForm.user_id)
+  const amount = Math.floor(Number(grantForm.amount))
+  if (!Number.isFinite(userId) || userId <= 0) {
+    toast.error('请选择要充值的用户')
+    return
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    toast.error('充值积分必须大于 0')
+    return
+  }
+  if (grantSaving.value) return
+  grantSaving.value = true
   try {
     await creditsAPI.grant({
-      user_id: grantForm.user_id,
-      amount: grantForm.amount,
+      user_id: userId,
+      amount,
       summary: grantForm.summary.trim() || undefined,
     })
     toast.success('充值成功')
@@ -2909,7 +5346,9 @@ async function grantCredits() {
     grantForm.summary = ''
     await loadTeamUsers()
   } catch (e) {
-    toast.error(e.message)
+    toast.error(e.message || '充值失败')
+  } finally {
+    grantSaving.value = false
   }
 }
 
@@ -2921,6 +5360,10 @@ watch(tab, (value) => {
   if (value === 'credits' && isAdmin.value) {
     loadCreditPricing()
     loadTeamUsers()
+  }
+  if (value === 'users' && isAdmin.value) {
+    loadTeamUsers()
+    loadLoginIpTeams()
   }
   if (value === 'team') {
     syncRenameForm()
@@ -3049,22 +5492,49 @@ async function removeMember(m) {
 
 // ===== Users =====
 const teamUsers = ref([])
+const grantableTeamUsers = computed(() => teamUsers.value.filter(u => u.is_active !== false))
 const userForm = reactive({ username: '', password: '', display_name: '', role: 'user' })
 const passwordDialogUser = ref(null)
 const passwordEditValue = ref('')
 const passwordSaving = ref(false)
 const userFreezeLoadingId = ref(null)
 
+const loginIpDialogUser = ref(null)
+const loginIpEditText = ref('')
+const loginIpSaving = ref(false)
+const loginIpTeams = ref([])
+const bulkLoginIpTeamId = ref('')
+const bulkLoginIpText = ref('')
+const bulkLoginIpAlsoMembers = ref(true)
+const bulkLoginIpSaving = ref(false)
+
 function fmtUserTime(s) {
   return new Date(s).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatAllowedIpsText(list) {
+  return (Array.isArray(list) ? list : []).join('\n')
 }
 
 async function loadTeamUsers() {
   try {
     const res = await usersAPI.list()
     teamUsers.value = res.items || []
+    const selectedId = Number(grantForm.user_id)
+    if (selectedId > 0 && !grantableTeamUsers.value.some(u => Number(u.id) === selectedId)) {
+      grantForm.user_id = 0
+    }
   } catch (e) {
     toast.error(e.message)
+  }
+}
+
+async function loadLoginIpTeams() {
+  try {
+    const res = await teamsAPI.directory()
+    loginIpTeams.value = res.items || []
+  } catch (e) {
+    loginIpTeams.value = []
   }
 }
 
@@ -3116,6 +5586,78 @@ async function saveUserPassword() {
   }
 }
 
+function openLoginIpDialog(target) {
+  loginIpDialogUser.value = target
+  loginIpEditText.value = formatAllowedIpsText(target?.allowed_ips)
+}
+
+function closeLoginIpDialog() {
+  loginIpDialogUser.value = null
+  loginIpEditText.value = ''
+}
+
+async function saveUserLoginIps() {
+  if (!loginIpDialogUser.value || loginIpSaving.value) return
+  loginIpSaving.value = true
+  try {
+    await usersAPI.update(loginIpDialogUser.value.id, { allowed_ips: loginIpEditText.value })
+    toast.success(`已更新 ${loginIpDialogUser.value.username} 的登录 IP`)
+    closeLoginIpDialog()
+    await loadTeamUsers()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    loginIpSaving.value = false
+  }
+}
+
+async function onBulkLoginIpTeamChange() {
+  const id = Number(bulkLoginIpTeamId.value)
+  if (!id) {
+    bulkLoginIpText.value = ''
+    return
+  }
+  try {
+    const res = await teamsAPI.getLoginIps(id)
+    bulkLoginIpText.value = formatAllowedIpsText(res.allowed_ips)
+  } catch (e) {
+    bulkLoginIpText.value = ''
+    toast.error(e.message)
+  }
+}
+
+async function saveBulkLoginIps() {
+  const teamId = Number(bulkLoginIpTeamId.value)
+  if (!teamId || bulkLoginIpSaving.value) return
+  bulkLoginIpSaving.value = true
+  try {
+    if (bulkLoginIpAlsoMembers.value) {
+      const res = await usersAPI.bulkLoginIps({
+        team_id: teamId,
+        allowed_ips: bulkLoginIpText.value,
+        mode: 'set',
+        also_set_team: true,
+      })
+      toast.success(`已更新团队规则，并写入 ${res.updated || 0} 名成员`)
+    } else {
+      await teamsAPI.setLoginIps(teamId, bulkLoginIpText.value)
+      toast.success('已保存团队登录 IP 规则')
+    }
+    await loadTeamUsers()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    bulkLoginIpSaving.value = false
+  }
+}
+
+async function clearBulkLoginIps() {
+  if (!bulkLoginIpTeamId.value) return
+  if (!window.confirm('确定清除该团队的登录 IP 限制？')) return
+  bulkLoginIpText.value = ''
+  await saveBulkLoginIps()
+}
+
 async function toggleUserFreeze(targetUser, nextActive) {
   if (!targetUser?.id || userFreezeLoadingId.value === targetUser.id) return
   if (!nextActive && targetUser.id === user.value?.id) {
@@ -3137,16 +5679,35 @@ async function toggleUserFreeze(targetUser, nextActive) {
   }
 }
 
+async function loadAdminUpstreamPanels() {
+  if (!isAdmin.value) return
+  await loadChengmengBalance()
+  await new Promise(r => setTimeout(r, 400))
+  await loadOfficialBalance()
+  await new Promise(r => setTimeout(r, 400))
+  await loadAistarslabBalance()
+  await new Promise(r => setTimeout(r, 400))
+  await loadAigcccBalance()
+  await new Promise(r => setTimeout(r, 400))
+  await loadJimengSessionStatus()
+}
+
 onMounted(() => {
   if (isAdmin.value) {
     loadCfgs()
     loadAgents()
     loadAllSkills()
     loadTeamUsers()
-    loadJimengSessionStatus()
+    loadLoginIpTeams()
+    loadJimengAccessSettings()
+    void loadAdminUpstreamPanels()
     loadXyqSessionStatus()
+    loadCozeSessionStatus()
+    loadFunshionSessionStatus()
+    loadXingyuemengSessionStatus()
     loadDoubaoTrainingSessionStatus()
     loadTtsConfig()
+    loadRhTtsConfig()
     loadVsrConfig()
   }
   if (canManageMembers.value) {
@@ -3170,8 +5731,20 @@ onMounted(() => {
   grid-template-columns: 1fr auto;
   max-width: 480px;
 }
+.grant-credits-form {
+  grid-template-columns: minmax(220px, 1.4fr) 140px minmax(180px, 1fr) auto;
+  max-width: 920px;
+}
+.grant-credits-panel {
+  margin-bottom: 20px;
+}
+.grant-credits-empty {
+  margin-top: 10px;
+  font-size: 13px;
+}
 @media (max-width: 900px) {
   .user-create-form { grid-template-columns: 1fr 1fr; }
+  .grant-credits-form { grid-template-columns: 1fr; max-width: none; }
   .team-member-form { grid-template-columns: 1fr; }
   .team-name-form { grid-template-columns: 1fr; max-width: none; }
 }
@@ -3191,6 +5764,35 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.login-ip-bulk-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 560px;
+}
+.login-ip-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  min-height: 96px;
+  resize: vertical;
+}
+.login-ip-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.field-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.login-ip-last {
+  font-size: 11px;
+  margin-top: 2px;
+  opacity: 0.75;
 }
 .btn-danger-outline {
   border-color: rgba(239, 83, 80, 0.45);
@@ -3299,6 +5901,78 @@ onMounted(() => {
   border-color: var(--accent, #6366f1);
 }
 
+.jimeng-session-row.forced {
+  border-color: var(--accent, #6366f1);
+  background: color-mix(in srgb, var(--accent, #6366f1) 8%, transparent);
+}
+
+.jimeng-force-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
+}
+
+.jimeng-access-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.jimeng-access-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px);
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.jimeng-access-teams {
+  margin-top: 14px;
+}
+
+.jimeng-access-teams-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.jimeng-access-add-row {
+  margin-bottom: 10px;
+}
+
+.jimeng-access-team-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jimeng-access-rate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.jimeng-access-rate-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.jimeng-access-rate-input {
+  width: 72px;
+}
+
 .jimeng-session-row-main {
   display: flex;
   flex-wrap: wrap;
@@ -3314,6 +5988,137 @@ onMounted(() => {
 
 .jimeng-credit-tag {
   white-space: nowrap;
+}
+
+.upstream-task-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.official-pnl-panel {
+  margin-top: 18px;
+}
+
+.official-pnl-head-row,
+.official-pnl-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.official-pnl-actions {
+  align-items: center;
+}
+
+.official-pnl-filter {
+  min-width: 110px;
+}
+
+.official-pnl-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.official-pnl-summary.is-profit {
+  border-color: rgba(82, 196, 26, 0.35);
+}
+
+.official-pnl-summary.is-loss {
+  border-color: rgba(255, 77, 79, 0.35);
+}
+
+.official-pnl-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.official-pnl-net {
+  font-weight: 600;
+}
+
+.official-pnl-positive {
+  color: #52c41a;
+}
+
+.official-pnl-negative {
+  color: #ff4d4f;
+}
+
+.official-pnl-subtable-wrap {
+  margin-top: 14px;
+}
+
+.official-bill-sync-status {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.upstream-task-head {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-1);
+}
+
+.upstream-task-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.upstream-task-pager-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.upstream-task-table {
+  width: 100%;
+  font-size: 12px;
+}
+
+.upstream-task-table th,
+.upstream-task-table td {
+  vertical-align: top;
+}
+
+.upstream-task-prompt {
+  margin-top: 4px;
+  max-width: 360px;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.upstream-task-video {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.upstream-task-video-player {
+  width: 240px;
+  max-width: 36vw;
+  border-radius: 8px;
+  background: #111;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
 }
 
 .jimeng-session-row-actions {

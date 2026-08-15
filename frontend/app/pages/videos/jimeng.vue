@@ -5,7 +5,7 @@
         <h1 class="studio-title">通道4</h1>
         <StudioGuideButton
           title="通道4 使用说明"
-          :text="`S 2.0 通道4（全能参考）：参考素材上限 ${refLimitsHint}，提示词可用 @图片N @视频N @音频N。同一用户同一项目会自动复用同一个即梦 Session；换用户或换项目时自动分配其他 Session（需管理员预先配置多个 Session），以实现创作隔离。`"
+          :text="`S通道4：当前模型参考上限 ${refLimitsHint}。S 2.5 最长 30 秒、图≤30/音视频各≤10（合计≤50）；2.0 档 9图3音3视频、最长 15 秒。S 2.5 用户自带参考视频时按标价 7 折扣积分。提示词可用 @图片N @视频N @音频N。同一用户同一项目会自动复用同一个即梦 Session；换用户或换项目时自动分配其他 Session（需管理员预先配置多个 Session），以实现创作隔离。`"
         />
       </div>
       <div class="studio-header-actions">
@@ -44,7 +44,13 @@
             {{ m.display_name || m.username }}
           </option>
         </select>
-        <select v-if="isAdmin && jimengSessions.length > 1" v-model="selectedSessionId" class="studio-filter-select" title="管理员可覆盖当前用户+项目绑定的 Session">
+        <select
+          v-if="isAdmin && jimengSessions.length > 1"
+          v-model="selectedSessionId"
+          class="studio-filter-select"
+          title="管理员可指定 Session；选「全部」则按用户+项目自动分配"
+        >
+          <option value="">全部（自动分配）</option>
           <option v-for="s in jimengSessions" :key="s.id" :value="s.id">
             {{ sessionOptionLabel(s) }}
           </option>
@@ -112,7 +118,7 @@
             <p class="studio-card-prompt">{{ previewPrompt(item.prompt) }}</p>
             <div class="studio-card-meta">
               <span class="mono dim">#{{ item.id }}</span>
-              <span v-if="item.model" class="tag tag-accent">{{ modelLabel(item.model) }}</span>
+              <span v-if="item.model" class="tag tag-accent">{{ modelTagLabel(item) }}</span>
               <span v-if="item.is_manual" class="tag">手动</span>
               <span v-if="item.drama_title" class="dim">{{ item.drama_title }}</span>
               <button
@@ -154,9 +160,10 @@
         :default-drama-id="filterDramaId"
         :jimeng-models="displayModels"
         :fixed-model="selectedModel"
-        :duration-min="4"
-        :duration-max="15"
-        :credit-cost-flat="selectedCreditCostFlat"
+        :ref-limits-override="selectedRefLimits"
+        :credit-cost-per-second="selectedCreditCostPerSecond"
+        :credit-cost-per-second-list="selectedCreditCostPerSecondList"
+        :reference-video-multiplier="effectiveReferenceVideoMultiplier"
         drama-preference-scope="video-jimeng"
         @update:fixed-model="selectedModel = $event"
         @generate="onGenerate"
@@ -168,7 +175,7 @@
         <div class="studio-detail-head">
           <div>
             <h3>视频详情 #{{ detailItem.id }}</h3>
-            <p class="dim">{{ formatTime(detailItem.created_at) }} · {{ modelLabel(detailItem.model) }}</p>
+            <p class="dim">{{ formatTime(detailItem.created_at) }} · {{ modelTagLabel(detailItem) }}</p>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="detailItem = null">关闭</button>
         </div>
@@ -230,6 +237,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
 import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
@@ -244,21 +252,30 @@ import {
   loadVideoDramasLite,
   finalizeVideoLedgerItems,
 } from '~/utils/video-studio-page.js'
+import { modelTagWithResolution } from '~/utils/video-resolution-label.js'
+import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
 
 const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-jimeng-v1'
 
 const JIMENG_MODEL_IDS = [
+  'jimeng-video-seedance-2.5',
   'jimeng-video-seedance-2.0-fast',
   'jimeng-video-seedance-2.0',
 ]
 
-const DEFAULT_JIMENG_MODEL = 'jimeng-video-seedance-2.0-fast'
+const DEFAULT_JIMENG_MODEL = 'jimeng-video-seedance-2.5'
 
-const refLimitsHint = computed(() => formatRefLimitsHint(JIMENG_REF_LIMITS))
+const JIMENG_SEEDANCE_25_REF_LIMITS = { images: 30, audios: 10, videos: 10, max_total: 50 }
+
+function refLimitsForModel(modelId) {
+  if (String(modelId || '').includes('seedance-2.5')) return JIMENG_SEEDANCE_25_REF_LIMITS
+  return JIMENG_REF_LIMITS
+}
 
 const DEFAULT_JIMENG_MODELS = [
-  { id: 'jimeng-video-seedance-2.0-fast', label: 'Seedance 2.0 Fast VIP', credit_cost_flat: 0, duration_min: 4, duration_max: 15, duration_default: 5 },
-  { id: 'jimeng-video-seedance-2.0', label: 'Seedance 2.0 VIP', credit_cost_flat: 0, duration_min: 4, duration_max: 15, duration_default: 5 },
+  { id: 'jimeng-video-seedance-2.5', label: 'S 2.5', credit_cost_per_second: 130, duration_min: 4, duration_max: 30, duration_default: 10, ref_limits: { images: 30, audios: 10, videos: 10, max_total: 50 } },
+  { id: 'jimeng-video-seedance-2.0-fast', label: 'Seedance 2.0 Fast VIP', credit_cost_per_second: 48, credit_cost_per_second_list: 60, discount_multiplier: 0.8, duration_min: 4, duration_max: 15, duration_default: 5, ref_limits: { images: 9, audios: 3, videos: 3, max_total: 12 } },
+  { id: 'jimeng-video-seedance-2.0', label: 'Seedance 2.0 VIP', credit_cost_per_second: 80, credit_cost_per_second_with_ref_video: 130, reference_video_multiplier: 1.625, duration_min: 4, duration_max: 15, duration_default: 5, ref_limits: { images: 9, audios: 3, videos: 3, max_total: 12 } },
 ]
 
 const route = useRoute()
@@ -274,6 +291,8 @@ const selectedSessionId = ref('')
 const sessionConfigured = ref(false)
 const sessionValid = ref(false)
 const selectedModel = ref(DEFAULT_JIMENG_MODEL)
+const seedance25ReferenceVideoMultiplier = ref(0.7)
+const vipReferenceVideoMultiplier = ref(1.625)
 const items = ref([])
 const dramas = ref([])
 const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
@@ -316,6 +335,22 @@ const displayModels = computed(() =>
   jimengModels.value.length ? jimengModels.value : DEFAULT_JIMENG_MODELS,
 )
 
+const selectedRefLimits = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  const fromApi = model?.ref_limits
+  if (fromApi && Number.isFinite(Number(fromApi.images))) {
+    return {
+      images: Number(fromApi.images),
+      audios: Number(fromApi.audios ?? 3),
+      videos: Number(fromApi.videos ?? 3),
+      max_total: fromApi.max_total ?? fromApi.maxTotal ?? null,
+    }
+  }
+  return refLimitsForModel(selectedModel.value)
+})
+
+const refLimitsHint = computed(() => formatRefLimitsHint(selectedRefLimits.value))
+
 const serviceAvailable = computed(() => sessionConfigured.value && sessionValid.value)
 
 const selectableTeamMembers = computed(() => {
@@ -331,16 +366,43 @@ function sessionOptionLabel(session) {
   return `${label} ${masked}${status}${active}`.trim()
 }
 
-const selectedCreditCostFlat = computed(() => {
+const selectedCreditCostPerSecond = computed(() => {
   const model = displayModels.value.find(item => item.id === selectedModel.value)
-  const cost = model?.credit_cost_flat ?? model?.credit_cost
-  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : 0
+  const cost = model?.credit_cost_per_second ?? model?.credit_cost
+  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : 48
+})
+
+const selectedCreditCostPerSecondList = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  const list = model?.credit_cost_per_second_list
+  return list != null && Number.isFinite(Number(list)) ? Number(list) : null
+})
+
+const effectiveReferenceVideoMultiplier = computed(() => {
+  const id = String(selectedModel.value || '')
+  if (id.includes('seedance-2.5')) return seedance25ReferenceVideoMultiplier.value
+  if (id.includes('seedance-2.0') && !id.includes('fast') && !id.includes('mini')) {
+    const model = displayModels.value.find(item => item.id === selectedModel.value)
+    const fromModel = Number(model?.reference_video_multiplier)
+    if (Number.isFinite(fromModel) && fromModel > 1) return fromModel
+    const withRef = Number(model?.credit_cost_per_second_with_ref_video)
+    const base = Number(model?.credit_cost_per_second)
+    if (Number.isFinite(withRef) && withRef > 0 && Number.isFinite(base) && base > 0) {
+      return withRef / base
+    }
+    return vipReferenceVideoMultiplier.value
+  }
+  return 1
 })
 
 function modelLabel(modelId) {
   const label = displayModels.value.find(item => item.id === modelId)?.label
     || String(modelId || '').replace(/^jimeng-video-/, '即梦 ').replace(/-/g, ' ')
   return toSeedanceDisplayLabel(label)
+}
+
+function modelTagLabel(item) {
+  return modelTagWithResolution(item, modelLabel)
 }
 
 function statsForTab(id) {
@@ -362,9 +424,14 @@ function normalizeItem(row) {
     status: row.status || 'pending',
     error_msg: sanitizeUserFacingProviderError(row.error_msg || row.errorMsg || ''),
     duration: row.duration,
+    resolution: row.resolution || '',
+    width: row.width ?? null,
+    height: row.height ?? null,
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
     reference_images: row.reference_images || [],
+    reference_videos: row.reference_videos || [],
+    reference_audios: row.reference_audios || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
@@ -480,12 +547,9 @@ async function reuseDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function videoDownloadName(item) {
@@ -610,23 +674,26 @@ async function loadJimengOptions() {
     const res = await videoAPI.jimengOptions()
     jimengModels.value = (res?.models || []).map(item => ({
       ...item,
-      credit_cost_flat: item.credit_cost_flat ?? item.credit_cost ?? 0,
+      credit_cost_per_second: item.credit_cost_per_second ?? item.credit_cost ?? 50,
+      credit_cost_per_second_list: item.credit_cost_per_second_list ?? null,
+      discount_multiplier: item.discount_multiplier ?? null,
     }))
     jimengSessions.value = res?.sessions || []
     sessionConfigured.value = !!res?.session_configured || jimengSessions.value.length > 0
     sessionValid.value = !!res?.session_valid || jimengSessions.value.some(item => item.valid)
-    const activeId = res?.active_id
-      || jimengSessions.value.find(item => item.is_active)?.id
-      || jimengSessions.value.find(item => item.valid)?.id
-      || jimengSessions.value[0]?.id
-      || ''
-    if (!selectedSessionId.value || !jimengSessions.value.some(item => item.id === selectedSessionId.value)) {
-      selectedSessionId.value = activeId
+    // 默认「全部（自动分配）」；仅当当前已选手动 Session 且仍有效时保留
+    if (selectedSessionId.value && !jimengSessions.value.some(item => item.id === selectedSessionId.value)) {
+      selectedSessionId.value = ''
     }
+    if (!isAdmin.value) selectedSessionId.value = ''
     if (jimengModels.value.length && !jimengModels.value.some(item => item.id === selectedModel.value)) {
       const preferred = jimengModels.value.find(item => item.id === DEFAULT_JIMENG_MODEL)
       selectedModel.value = preferred?.id || jimengModels.value[0].id
     }
+    const mult25 = Number(res?.reference_video_multiplier)
+    if (Number.isFinite(mult25) && mult25 > 0) seedance25ReferenceVideoMultiplier.value = mult25
+    const multVip = Number(res?.vip_reference_video_multiplier)
+    if (Number.isFinite(multVip) && multVip > 1) vipReferenceVideoMultiplier.value = multVip
   } catch {
     jimengModels.value = []
     jimengSessions.value = []
@@ -637,11 +704,15 @@ async function loadJimengOptions() {
 }
 
 async function onGenerate(payload) {
+  if (generating.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
   if (!selectedModel.value) {
     toast.error('请选择模型')
     return
   }
-  await loadJimengOptions()
+  if (!serviceAvailable.value) await loadJimengOptions()
   if (!serviceAvailable.value) {
     toast.error(sessionConfigured.value
       ? '即梦视频服务暂时不可用，请稍后再试或联系管理员'
@@ -649,7 +720,6 @@ async function onGenerate(payload) {
     return
   }
   generating.value = true
-  const startedAt = Date.now()
   try {
     const generation = await videoAPI.generate({
       ...payload,
@@ -666,10 +736,7 @@ async function onGenerate(payload) {
     toast.error(formatVideoGenerationError(err?.message || '生成失败'))
     await reload()
   } finally {
-    const elapsed = Date.now() - startedAt
-    setTimeout(() => {
-      generating.value = false
-    }, Math.max(0, 1000 - elapsed))
+    generating.value = false
   }
 }
 
@@ -795,7 +862,7 @@ onUnmounted(() => {
   flex-wrap: nowrap;
   justify-content: flex-end;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
 }
 
 .studio-header-actions .studio-filter-select {

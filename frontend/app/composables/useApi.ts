@@ -147,6 +147,87 @@ export const dramaAPI = {
   removeShare: (id: number, teamId: number) => api.del(`/dramas/${id}/shares/${teamId}`),
 }
 
+export const scriptImportAPI = {
+  preview: (data: { script_text: string; title?: string }) =>
+    api.post<{
+      ok: boolean
+      reason?: string
+      preamble?: string
+      episodes: Array<{
+        episode_number: number
+        marker: string
+        title: string
+        content: string
+        char_count: number
+        warn_long: boolean
+        risk_long: boolean
+      }>
+      total_chars: number
+      model_note?: string
+      warn_chars?: number
+      risk_chars?: number
+    }>('/script-import/preview', data),
+  commit: (data: {
+    title: string
+    script_text?: string
+    style?: string
+    director_style?: string
+    image_config_id?: number | null
+    video_config_id?: number | null
+    audio_config_id?: number | null
+    episodes?: any[]
+  }) => api.post<{
+    drama_id: number
+    episode_count: number
+    image_config_id?: number | null
+    script_import?: any
+  }>('/script-import/commit', data),
+  status: (dramaId: number) => api.get(`/script-import/${dramaId}/status`),
+  extract: (dramaId: number) => api.post(`/script-import/${dramaId}/extract`),
+  assets: (dramaId: number) => api.get<{
+    total: number
+    ready_count: number
+    missing_count: number
+    items: Array<{
+      type: 'character' | 'scene' | 'prop'
+      id: number
+      name: string
+      description?: string
+      prompt?: string
+      has_image: boolean
+      image_url?: string | null
+    }>
+    script_import?: any
+  }>(`/script-import/${dramaId}/assets`),
+  generateImages: (dramaId: number, data?: {
+    character_ids?: number[]
+    scene_ids?: number[]
+    prop_ids?: number[]
+    only_missing?: boolean
+  }) => api.post<{
+    requested: number
+    started: number
+    failed: number
+    errors: any[]
+    assets?: any
+  }>(`/script-import/${dramaId}/generate-images`, data || {}),
+}
+
+export const autoProduceAPI = {
+  create: (data: {
+    title: string
+    script_text: string
+    clip_count?: number
+    duration_sec?: number
+    aspect_ratio?: '16:9' | '9:16'
+    dialogue_lock?: boolean
+    generate_images?: boolean
+    director_style?: string
+  }) => api.post<any>('/auto-produce/jobs', data),
+  list: (limit = 20) => api.get<{ items: any[] }>(`/auto-produce/jobs?limit=${limit}`),
+  get: (id: string) => api.get<any>(`/auto-produce/jobs/${id}`),
+}
+
 export const promptsAPI = {
   directorStyles: () => api.get<{ items: { id: string; label: string; description: string }[]; default: string }>('/prompts/director-styles'),
 }
@@ -451,9 +532,35 @@ export const portraitAPI = {
     seedance_asset_group_id?: string | null
     seedance_asset_status?: string | null
   }) => api.put(`/portraits/characters/${id}`, data),
-  syncAsset: (id: number, opts?: { force?: boolean }) =>
+  syncAsset: (id: number, opts?: { force?: boolean; outfit_id?: string | null; candidate_id?: string | null }) =>
     api.post(`/portraits/characters/${id}/sync-asset`, opts || {}),
-  assetStatus: (id: number) => api.get(`/portraits/characters/${id}/asset-status`),
+  assetStatus: (id: number, opts?: { outfit_id?: string | null; candidate_id?: string | null }) => {
+    const qs = new URLSearchParams()
+    if (opts?.outfit_id) qs.set('outfit_id', opts.outfit_id)
+    if (opts?.candidate_id) qs.set('candidate_id', opts.candidate_id)
+    const q = qs.toString()
+    return api.get(`/portraits/characters/${id}/asset-status${q ? `?${q}` : ''}`)
+  },
+  cancelAsset: (id: number, opts?: { outfit_id?: string | null; candidate_id?: string | null }) =>
+    api.del(`/portraits/characters/${id}/asset`, {
+      ...(opts?.outfit_id ? { outfit_id: opts.outfit_id } : {}),
+      ...(opts?.candidate_id ? { candidate_id: opts.candidate_id } : {}),
+    }),
+  adminSummary: () => api.get('/portraits/admin/summary'),
+  adminRecords: (params?: { status?: string; config_id?: number | string; q?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams()
+    if (params?.status) qs.set('status', String(params.status))
+    if (params?.config_id != null && params.config_id !== '') qs.set('config_id', String(params.config_id))
+    if (params?.q) qs.set('q', String(params.q))
+    if (params?.limit != null) qs.set('limit', String(params.limit))
+    if (params?.offset != null) qs.set('offset', String(params.offset))
+    const q = qs.toString()
+    return api.get(`/portraits/admin/records${q ? `?${q}` : ''}`)
+  },
+  adminUpdateQuota: (configId: number, portrait_asset_quota: number) =>
+    api.put(`/portraits/admin/keys/${configId}/quota`, { portrait_asset_quota }),
+  adminCancelRecord: (id: number) => api.del(`/portraits/admin/records/${id}`),
+  adminRecertifyRecord: (id: number) => api.post(`/portraits/admin/records/${id}/recertify`),
 }
 
 export const characterAPI = {
@@ -632,6 +739,29 @@ export const imageAPI = {
     if (params?.user_id) query.set('user_id', String(params.user_id))
     return api.get(`/images/ledger${query.size ? `?${query.toString()}` : ''}`)
   },
+  /** 管理员生图记录（含即梦账号）；仅设置页使用 */
+  adminRecords: (params?: {
+    drama_id?: number
+    status?: string
+    keyword?: string
+    limit?: number
+    offset?: number
+    studio_only?: boolean
+    user_id?: number
+    model?: string
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.drama_id) query.set('drama_id', String(params.drama_id))
+    if (params?.status) query.set('status', params.status)
+    if (params?.keyword) query.set('keyword', params.keyword)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.studio_only === false) query.set('studio_only', '0')
+    else if (params?.studio_only !== undefined) query.set('studio_only', '1')
+    if (params?.user_id) query.set('user_id', String(params.user_id))
+    if (params?.model) query.set('model', params.model)
+    return api.get(`/images/admin/records${query.size ? `?${query.toString()}` : ''}`)
+  },
   pin: (id: number) => api.post(`/images/${id}/pin`),
   unpin: (id: number) => api.del(`/images/${id}/pin`),
 }
@@ -647,10 +777,15 @@ export const videoAPI = {
   grokOptions: () => api.get('/videos/grok-options'),
   jimengOptions: () => api.get('/videos/jimeng-options'),
   xyqOptions: () => api.get('/videos/xyq-options'),
+  cozeOptions: () => api.get('/videos/coze-options'),
+  funshionOptions: () => api.get('/videos/funshion-options'),
+  xingyuemengOptions: () => api.get('/videos/xingyuemeng-options'),
   doubaoTrainingOptions: () => api.get('/videos/doubao-training-options'),
   officialOptions: () => api.get('/videos/official-options'),
   aistarslabOptions: () => api.get('/videos/aistarslab-options'),
+  aigcccOptions: () => api.get('/videos/aigccc-options'),
   get: (id: number) => api.get(`/videos/${id}`),
+  cancel: (id: number) => api.post(`/videos/${id}/cancel`),
   list: (params?: { drama_id?: number; storyboard_id?: number }) => {
     const query = new URLSearchParams()
     if (params?.drama_id) query.set('drama_id', String(params.drama_id))
@@ -674,8 +809,8 @@ export const videoAPI = {
     if (params?.episode_id) query.set('episode_id', String(params.episode_id))
     if (params?.status) query.set('status', params.status)
     if (params?.keyword) query.set('keyword', params.keyword)
-    if (params?.limit) query.set('limit', String(params.limit))
-    if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.limit != null && Number.isFinite(Number(params.limit))) query.set('limit', String(params.limit))
+    if (params?.offset != null && Number.isFinite(Number(params.offset))) query.set('offset', String(params.offset))
     if (params?.provider) query.set('provider', params.provider)
     if (params?.models) query.set('models', params.models)
     if (params?.user_id) query.set('user_id', String(params.user_id))
@@ -716,11 +851,111 @@ export const ttsAPI = {
     return api.get(`/tts${qs ? `?${qs}` : ''}`)
   },
   get: (id: number) => api.get(`/tts/${id}`),
+  status: (opts?: { force?: boolean }) => {
+    const q = opts?.force ? '?force=1' : ''
+    return api.get<{
+      state: 'online' | 'offline' | 'unconfigured'
+      online: boolean
+      configured: boolean
+      reachable: boolean
+      label: string
+      detail: string
+      checked_at: string
+      http_status?: number | null
+    }>(`/tts/status${q}`)
+  },
   voices: () => api.get('/tts/voices'),
   generate: (data: Record<string, unknown>) => api.post('/tts', data),
   getConfig: () => api.get('/tts/config'),
   saveConfig: (data: Record<string, unknown>) => api.put('/tts/config', data),
   testConfig: (data: { base_url: string }) => api.post('/tts/config/test', data),
+}
+
+/** RunningHub IndexTTS2 云端配音 */
+export const ttsRunninghubAPI = {
+  list: (params: { limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return api.get(`/tts/runninghub${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/tts/runninghub/${id}`),
+  meta: () => api.get('/tts/runninghub/meta'),
+  status: () => api.get<{
+    state: 'ready' | 'needs_bindings' | 'unconfigured'
+    configured: boolean
+    ready: boolean
+    label: string
+    detail: string
+  }>('/tts/runninghub/status'),
+  generate: (data: Record<string, unknown>) => api.post('/tts/runninghub', data),
+  getConfig: () => api.get('/tts/runninghub/config'),
+  saveConfig: (data: Record<string, unknown>) => api.put('/tts/runninghub/config', data),
+  testConfig: (data: Record<string, unknown>) => api.post('/tts/runninghub/config/test', data),
+  syncConfig: (data: Record<string, unknown> = {}) => api.post('/tts/runninghub/config/sync', data),
+}
+
+/** RunningHub IndexTTS2 参考音色（AI App apiType=4） */
+export const ttsRunninghubRefAPI = {
+  list: (params: { limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return api.get(`/tts/runninghub-ref${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/tts/runninghub-ref/${id}`),
+  meta: () => api.get('/tts/runninghub-ref/meta'),
+  status: () => api.get<{
+    state: 'ready' | 'needs_bindings' | 'unconfigured'
+    configured: boolean
+    ready: boolean
+    label: string
+    detail: string
+    docs_url?: string
+  }>('/tts/runninghub-ref/status'),
+  generate: (data: Record<string, unknown>) => api.post('/tts/runninghub-ref', data),
+  syncConfig: (data: Record<string, unknown> = {}) => api.post('/tts/runninghub-ref/config/sync', data),
+}
+
+/** APIMart Suno 配乐 */
+export const musicSunoAPI = {
+  list: (params: { limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return api.get(`/music/suno${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/music/suno/${id}`),
+  certificate: (id: number) => api.get(`/music/suno/${id}/certificate`),
+  meta: () => api.get('/music/suno/meta'),
+  status: () => api.get<{
+    state: 'ready' | 'unconfigured'
+    configured: boolean
+    ready: boolean
+    label: string
+    detail: string
+  }>('/music/suno/status'),
+  generate: (data: Record<string, unknown>) => api.post('/music/suno', data),
+  delete: (id: number) => api.del(`/music/suno/${id}`),
+  setVisibility: (id: number, visibility: 'private' | 'team' | 'public') =>
+    api.patch(`/music/suno/${id}/visibility`, { visibility }),
+  adminSummary: () => api.get('/music/suno/admin/summary'),
+  adminRecords: (params?: {
+    status?: string
+    q?: string
+    keyword?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set('status', params.status)
+    if (params?.q) q.set('q', params.q)
+    if (params?.keyword) q.set('keyword', params.keyword)
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    if (params?.offset != null) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return api.get(`/music/suno/admin/records${qs ? `?${qs}` : ''}`)
+  },
 }
 
 export const subtitleRemoverAPI = {
@@ -732,6 +967,51 @@ export const subtitleRemoverAPI = {
   getConfig: () => api.get('/subtitle-remover/config'),
   saveConfig: (data: Record<string, unknown>) => api.put('/subtitle-remover/config', data),
   testConfig: (data: { base_url: string; api_key?: string }) => api.post('/subtitle-remover/config/test', data),
+}
+
+/** 视频超分 */
+export const videoUpscaleAPI = {
+  meta: () => api.get('/video-upscale/meta'),
+  balance: () => api.get('/video-upscale/balance'),
+  list: (params?: { status?: string; range?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set('status', params.status)
+    if (params?.range) q.set('range', params.range)
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    if (params?.offset != null) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return api.get(`/video-upscale${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/video-upscale/${id}`),
+  forGenerations: (ids: number[]) => {
+    const q = new URLSearchParams()
+    q.set('ids', ids.filter(n => Number.isFinite(n) && n > 0).join(','))
+    return api.get(`/video-upscale/for-generations?${q.toString()}`)
+  },
+  fromGeneration: (videoGenerationId: number) =>
+    api.post('/video-upscale/from-generation', { video_generation_id: videoGenerationId }),
+  downloadUrl: (id: number) => `/api/v1/video-upscale/${id}/download`,
+  create: (form: FormData, opts?: { onProgress?: (percent: number) => void }) =>
+    uploadForm('/video-upscale', form, opts),
+}
+
+/** RunningHub 去字幕/去水印 */
+export const subtitleEraseAPI = {
+  meta: () => api.get('/subtitle-erase/meta'),
+  balance: () => api.get('/subtitle-erase/balance'),
+  list: (params?: { status?: string; range?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set('status', params.status)
+    if (params?.range) q.set('range', params.range)
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    if (params?.offset != null) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return api.get(`/subtitle-erase${qs ? `?${qs}` : ''}`)
+  },
+  get: (id: number) => api.get(`/subtitle-erase/${id}`),
+  downloadUrl: (id: number) => `/api/v1/subtitle-erase/${id}/download`,
+  create: (form: FormData, opts?: { onProgress?: (percent: number) => void }) =>
+    uploadForm('/subtitle-erase', form, opts),
 }
 
 export const canvasAPI = {
@@ -757,6 +1037,19 @@ export const canvasAPI = {
   removeNode: (id: number, nodeKey: string) => api.del(`/canvas/boards/${id}/nodes/${encodeURIComponent(nodeKey)}`),
 }
 
+export const directorDeskAPI = {
+  getScene: (instanceId: string) =>
+    api.get<{ scene: any | null }>(`/director-desk/scenes?instance_id=${encodeURIComponent(instanceId)}`),
+  saveScene: (instanceId: string, data: {
+    state: unknown
+    drama_id?: number | null
+    episode_id?: number | null
+    storyboard_id?: number | null
+  }) => api.put(`/director-desk/scenes/${encodeURIComponent(instanceId)}`, data),
+  deleteScene: (instanceId: string) =>
+    api.del(`/director-desk/scenes/${encodeURIComponent(instanceId)}`),
+}
+
 export const narrationAPI = {
   list: () => api.get('/narration'),
   get: (id: number) => api.get(`/narration/${id}`),
@@ -778,10 +1071,15 @@ export const narrationAPI = {
   patchAnalysis: (id: number, analysis: Record<string, unknown>) =>
     api.patch(`/narration/${id}/analysis`, { analysis }),
   tts: (id: number) => api.post(`/narration/${id}/tts`),
+  autoVoices: (id: number, data: { force?: boolean } = {}) =>
+    api.post(`/narration/${id}/auto-voices`, data),
   previewVoice: (id: number, data: { voice_id: string; text?: string }) =>
     api.post(`/narration/${id}/preview-voice`, data),
   resplitSegments: (id: number) => api.post(`/narration/${id}/resplit-segments`),
+  replaceNovel: (id: number, novel_text: string) =>
+    api.post(`/narration/${id}/replace-novel`, { novel_text }),
   listVoices: () => api.get('/narration/voices'),
+  grokChannels: () => api.get('/narration/grok-channels'),
   assetReadiness: (id: number) => api.get(`/narration/${id}/asset-readiness`),
   generateAllAssets: (id: number) => api.post(`/narration/${id}/assets/generate-all`),
   generateAsset: (id: number, type: 'characters' | 'scenes' | 'props', entityId: string) =>
@@ -792,6 +1090,7 @@ export const narrationAPI = {
     api.post(`/narration/${id}/segments/${segmentId}/generate`),
   generateAll: (id: number) => api.post(`/narration/${id}/generate-all`),
   exportJianying: (id: number) => api.post(`/narration/${id}/export-jianying`),
+  delete: (id: number) => api.del(`/narration/${id}`),
 }
 
 export const jimengSessionAPI = {
@@ -799,9 +1098,22 @@ export const jimengSessionAPI = {
   get: () => api.get('/jimeng/session'),
   save: (d: { id?: string; cookie?: string; session_id?: string; label?: string; set_active?: boolean }) => api.put('/jimeng/session', d),
   setActive: (id: string) => api.put(`/jimeng/session/${id}/active`),
+  setForce: (id: string) => api.put(`/jimeng/session/${id}/force`),
+  clearForce: () => api.del('/jimeng/force-session'),
   remove: (id: string) => api.del(`/jimeng/session/${id}`),
   clear: () => api.del('/jimeng/session'),
   validate: (id?: string) => api.post(id ? `/jimeng/session/${id}/validate` : '/jimeng/session/validate'),
+  accessSettings: () => api.get<{
+    enabled: boolean
+    default_success_rate: number
+    teams: { team_id: number; team_name: string; success_rate: number }[]
+    available_teams: { id: number; name: string }[]
+  }>('/jimeng/access-settings'),
+  saveAccessSettings: (d: {
+    enabled?: boolean
+    default_success_rate?: number
+    teams?: { team_id: number; success_rate: number }[]
+  }) => api.put('/jimeng/access-settings', d),
 }
 export const xyqSessionAPI = {
   list: () => api.get('/xyq/sessions'),
@@ -818,6 +1130,58 @@ export const xyqSessionAPI = {
   remove: (id: string) => api.del(`/xyq/session/${id}`),
   clear: () => api.del('/xyq/session'),
   validate: (id?: string) => api.post(id ? `/xyq/session/${id}/validate` : '/xyq/session/validate'),
+}
+export const cozeSessionAPI = {
+  list: () => api.get('/coze/sessions'),
+  get: () => api.get('/coze/session'),
+  save: (d: {
+    id?: string
+    cookie?: string | null
+    api_key?: string
+    pat?: string
+    base_url?: string | null
+    label?: string
+    set_active?: boolean
+  }) => api.put('/coze/session', d),
+  setActive: (id: string) => api.put(`/coze/session/${id}/active`),
+  remove: (id: string) => api.del(`/coze/session/${id}`),
+  clear: () => api.del('/coze/session'),
+  validate: (id?: string) => api.post(id ? `/coze/session/${id}/validate` : '/coze/session/validate'),
+}
+export const funshionSessionAPI = {
+  list: () => api.get('/funshion/sessions'),
+  get: () => api.get('/funshion/session'),
+  save: (d: {
+    id?: string
+    token?: string
+    authorization?: string
+    base_url?: string | null
+    project_id?: string | null
+    app_id?: string | null
+    label?: string
+    set_active?: boolean
+  }) => api.put('/funshion/session', d),
+  setActive: (id: string) => api.put(`/funshion/session/${id}/active`),
+  remove: (id: string) => api.del(`/funshion/session/${id}`),
+  clear: () => api.del('/funshion/session'),
+  validate: (id?: string) => api.post(id ? `/funshion/session/${id}/validate` : '/funshion/session/validate'),
+}
+export const xingyuemengSessionAPI = {
+  list: () => api.get('/xingyuemeng/sessions'),
+  get: () => api.get('/xingyuemeng/session'),
+  save: (d: {
+    id?: string
+    token?: string
+    label?: string
+    team_id?: string | null
+    project_id?: string | null
+    episode_id?: string | null
+    set_active?: boolean
+  }) => api.put('/xingyuemeng/session', d),
+  setActive: (id: string) => api.put(`/xingyuemeng/session/${id}/active`),
+  remove: (id: string) => api.del(`/xingyuemeng/session/${id}`),
+  clear: () => api.del('/xingyuemeng/session'),
+  validate: (id?: string) => api.post(id ? `/xingyuemeng/session/${id}/validate` : '/xingyuemeng/session/validate'),
 }
 export const doubaoTrainingSessionAPI = {
   list: () => api.get('/doubao-training/sessions'),
@@ -852,6 +1216,72 @@ export const aiConfigAPI = {
     if (params.base_url) query.set('base_url', params.base_url)
     return api.get(`/ai-configs/chengmeng-config?${query.toString()}`)
   },
+  chengmengBalance: (params?: { page_size?: number; light?: boolean }) => {
+    const query = new URLSearchParams()
+    if (params?.page_size) query.set('page_size', String(params.page_size))
+    if (params?.light) query.set('light', '1')
+    const qs = query.toString()
+    return api.get(`/ai-configs/chengmeng-balance${qs ? `?${qs}` : ''}`)
+  },
+  aistarslabBalance: (params?: { limit?: number; light?: boolean }) => {
+    const query = new URLSearchParams()
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.light) query.set('light', '1')
+    const qs = query.toString()
+    return api.get(`/ai-configs/aistarslab-balance${qs ? `?${qs}` : ''}`)
+  },
+  aigcccBalance: (params?: { limit?: number }) => {
+    const query = new URLSearchParams()
+    if (params?.limit) query.set('limit', String(params.limit))
+    const qs = query.toString()
+    return api.get(`/ai-configs/aigccc-balance${qs ? `?${qs}` : ''}`)
+  },
+  officialBalance: (params?: { limit?: number; page?: number; page_size?: number; page_num?: number; light?: boolean }) => {
+    const query = new URLSearchParams()
+    const limit = params?.limit ?? params?.page_size
+    const page = params?.page ?? params?.page_num
+    if (limit) query.set('limit', String(limit))
+    if (page) query.set('page', String(page))
+    if (params?.light) query.set('light', '1')
+    const qs = query.toString()
+    return api.get(`/ai-configs/official-balance${qs ? `?${qs}` : ''}`)
+  },
+  officialPnl: (params?: {
+    days?: number
+    limit?: number
+    offset?: number
+    sort?: string
+    backfill?: number
+  }) => {
+    const query = new URLSearchParams()
+    if (params?.days) query.set('days', String(params.days))
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    if (params?.sort) query.set('sort', params.sort)
+    if (params?.backfill) query.set('backfill', String(params.backfill))
+    const qs = query.toString()
+    return api.get(`/ai-configs/official-pnl${qs ? `?${qs}` : ''}`)
+  },
+  officialBillSyncStatus: () => api.get('/ai-configs/official-bill-sync'),
+  officialBillSyncRun: (d?: { batch_size?: number; reset_cursor?: boolean }) =>
+    api.post('/ai-configs/official-bill-sync/run', d || {}),
+  officialKeyCreate: (d: {
+    name?: string
+    api_key: string
+    access_key?: string
+    secret_key?: string
+    activate?: boolean
+  }) => api.post('/ai-configs/official-keys', d),
+  officialKeyUpdate: (id: number, d: {
+    name?: string
+    api_key?: string
+    access_key?: string
+    secret_key?: string
+    clear_secret?: boolean
+  }) => api.put(`/ai-configs/official-keys/${id}`, d),
+  officialKeyActivate: (id: number) => api.put(`/ai-configs/official-keys/${id}/active`),
+  officialKeyDelete: (id: number) => api.del(`/ai-configs/official-keys/${id}`),
+  officialKeySyncEnv: () => api.post('/ai-configs/official-keys/sync-env', {}),
   huobaoPreset: (apiKey: string) => api.post('/ai-configs/huobao-preset', { api_key: apiKey }),
 }
 
@@ -883,8 +1313,14 @@ export const authAPI = {
 
 export const usersAPI = {
   list: () => api.get<{ items: any[] }>('/users'),
-  create: (data: { username: string; password: string; display_name?: string; role?: string }) => api.post('/users', data),
+  create: (data: { username: string; password: string; display_name?: string; role?: string; allowed_ips?: string[] | string }) => api.post('/users', data),
   update: (id: number, data: any) => api.put(`/users/${id}`, data),
+  bulkLoginIps: (data: {
+    team_id: number
+    allowed_ips: string[] | string
+    mode?: 'set' | 'merge'
+    also_set_team?: boolean
+  }) => api.post('/users/bulk-login-ips', data),
 }
 
 export const teamsAPI = {
@@ -892,6 +1328,8 @@ export const teamsAPI = {
   directory: () => api.get<{ items: { id: number; name: string }[] }>('/teams/directory'),
   create: (name: string) => api.post<{ id: number; name: string; role: string }>('/teams', { name }),
   update: (teamId: number, data: { name: string }) => api.put(`/teams/${teamId}`, data),
+  getLoginIps: (teamId: number) => api.get<{ team_id: number; team_name: string; allowed_ips: string[] }>(`/teams/${teamId}/login-ips`),
+  setLoginIps: (teamId: number, allowed_ips: string[] | string) => api.put(`/teams/${teamId}/login-ips`, { allowed_ips }),
   members: (teamId: number) => api.get<{ items: any[] }>(`/teams/${teamId}/members`),
   addMember: (teamId: number, data: { username: string; role?: string }) => api.post(`/teams/${teamId}/members`, data),
   updateMember: (teamId: number, userId: number, role: string) => api.put(`/teams/${teamId}/members/${userId}`, { role }),
@@ -959,6 +1397,38 @@ export const activityAPI = {
   },
 }
 
+export const generationLogsAPI = {
+  list: (params?: {
+    all?: boolean
+    team?: boolean
+    team_id?: number
+    user_id?: number
+    kind?: 'all' | 'image' | 'video'
+    status?: string
+    keyword?: string
+    limit?: number
+    offset?: number
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.all) q.set('all', '1')
+    if (params?.team) q.set('team', '1')
+    if (params?.team_id) q.set('team_id', String(params.team_id))
+    if (params?.user_id) q.set('user_id', String(params.user_id))
+    if (params?.kind && params.kind !== 'all') q.set('kind', params.kind)
+    if (params?.status && params.status !== 'all') q.set('status', params.status)
+    if (params?.keyword) q.set('keyword', params.keyword)
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset != null) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return api.get<{
+      items: any[]
+      stats?: Record<string, number>
+      pagination?: { limit: number; offset: number; total: number; has_more: boolean }
+      scope?: string
+    }>(`/generation-logs${qs ? `?${qs}` : ''}`)
+  },
+}
+
 export const ACTION_LABELS: Record<string, string> = {
   'auth.login': '登录',
   'drama.create': '创建项目',
@@ -1001,7 +1471,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'settings.ai_config.create': '新增 AI 配置',
   'settings.ai_config.update': '更新 AI 配置',
   'settings.ai_config.delete': '删除 AI 配置',
-  'settings.huobao_preset': '红果一键配置',
+  'settings.huobao_preset': '影光工场一键配置',
   'settings.agent_config.save': '保存 Agent 配置',
   'user.create': '创建用户',
   'user.update': '更新用户',

@@ -1,5 +1,5 @@
 <template>
-  <div class="studio-card-media" :class="ratioClass">
+  <div class="studio-card-media" :class="effectiveRatioClass">
     <img
       v-if="posterSrc"
       :src="posterSrc"
@@ -7,21 +7,31 @@
       loading="lazy"
       decoding="async"
       alt=""
+      @load="onPosterLoad"
     />
-    <div v-else-if="processing" class="studio-card-loading">
-      <div class="studio-spinner" />
-      <span>{{ processingLabel }}</span>
-    </div>
-    <div v-else-if="playable" class="studio-card-fallback studio-card-playable-placeholder">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <path d="M8 5v14l11-7z" />
-      </svg>
-      <span>点击查看视频</span>
-    </div>
-    <div v-else class="studio-card-fallback">
-      <span>{{ fallbackLabel }}</span>
-      <p v-if="errorMsg" class="studio-card-error">{{ errorMsg }}</p>
-    </div>
+    <template v-else>
+      <img
+        v-if="ratioHintSrc"
+        :src="ratioHintSrc"
+        class="studio-card-ratio-hint"
+        alt=""
+        @load="onHintLoad"
+      />
+      <div v-if="processing" class="studio-card-loading">
+        <div class="studio-spinner" />
+        <span>{{ processingLabel }}</span>
+      </div>
+      <div v-else-if="playable" class="studio-card-fallback studio-card-playable-placeholder">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M8 5v14l11-7z" />
+        </svg>
+        <span>点击查看视频</span>
+      </div>
+      <div v-else class="studio-card-fallback">
+        <span>{{ fallbackLabel }}</span>
+        <p v-if="errorMsg" class="studio-card-error">{{ errorMsg }}</p>
+      </div>
+    </template>
 
     <div v-if="posterSrc && playable" class="studio-card-play-badge" aria-hidden="true">
       <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
@@ -44,12 +54,26 @@
     >
       ↓
     </button>
+    <button
+      v-if="cancellable"
+      type="button"
+      class="studio-card-cancel"
+      title="取消排队任务"
+      :disabled="cancelling"
+      @click.stop="$emit('cancel')"
+    >
+      {{ cancelling ? '…' : '取消' }}
+    </button>
   </div>
 </template>
 
 <script setup>
-defineProps({
+import { computed, ref, watch } from 'vue'
+
+const props = defineProps({
   posterSrc: { type: String, default: '' },
+  /** 无封面时用参考图推断横竖屏（生成中/失败占位） */
+  ratioHintSrc: { type: String, default: '' },
   playable: { type: Boolean, default: false },
   processing: { type: Boolean, default: false },
   ratioClass: { type: String, default: '' },
@@ -59,9 +83,38 @@ defineProps({
   fallbackLabel: { type: String, default: '' },
   errorMsg: { type: String, default: '' },
   refCount: { type: Number, default: 0 },
+  cancellable: { type: Boolean, default: false },
+  cancelling: { type: Boolean, default: false },
 })
 
-defineEmits(['download'])
+defineEmits(['download', 'cancel'])
+
+/** 由封面/参考图真实宽高推断；优先于传入的 ratioClass */
+const detectedRatioClass = ref('')
+
+const effectiveRatioClass = computed(() => detectedRatioClass.value || props.ratioClass || '')
+
+watch(
+  () => [props.posterSrc, props.ratioHintSrc],
+  () => {
+    detectedRatioClass.value = ''
+  },
+)
+
+function applyNaturalSize(w, h) {
+  if (w <= 0 || h <= 0) return
+  detectedRatioClass.value = w >= h ? 'ratio-landscape' : 'ratio-portrait'
+}
+
+function onPosterLoad(event) {
+  const img = event?.target
+  applyNaturalSize(Number(img?.naturalWidth) || 0, Number(img?.naturalHeight) || 0)
+}
+
+function onHintLoad(event) {
+  const img = event?.target
+  applyNaturalSize(Number(img?.naturalWidth) || 0, Number(img?.naturalHeight) || 0)
+}
 </script>
 
 <style scoped>
@@ -75,12 +128,22 @@ defineEmits(['download'])
 .studio-card-media.ratio-landscape {
   aspect-ratio: 16 / 9;
 }
+.studio-card-media.ratio-portrait {
+  aspect-ratio: 9 / 16;
+}
 .studio-card-poster {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
   background: #101620;
+}
+.studio-card-ratio-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 .studio-card-play-badge {
   position: absolute;
@@ -104,7 +167,8 @@ defineEmits(['download'])
   align-items: center;
   justify-content: center;
   gap: 8px;
-  color: var(--text-3);
+  /* 媒体区背景为深色，不能用页面 --text-*（浅色主题下接近黑） */
+  color: rgba(255, 255, 255, 0.82);
   font-size: 13px;
   padding: 12px;
   text-align: center;
@@ -118,10 +182,11 @@ defineEmits(['download'])
 }
 .studio-card-error {
   font-size: 11px;
-  color: var(--danger);
+  color: #ffb4b4;
   margin: 0;
   max-height: 4.5em;
   overflow: hidden;
+  line-height: 1.45;
 }
 .studio-card-ref-badge {
   position: absolute;
@@ -160,5 +225,26 @@ defineEmits(['download'])
 }
 .studio-card-download:hover {
   background: rgba(76, 125, 255, 0.88);
+}
+.studio-card-cancel {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 3;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+.studio-card-cancel:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+.studio-card-cancel:hover:not(:disabled) {
+  background: rgba(200, 80, 80, 0.9);
 }
 </style>

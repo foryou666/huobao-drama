@@ -1,8 +1,8 @@
-<template>
+﻿<template>
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
-        <h1 class="studio-title">视频生成（S VIP）</h1>
+        <h1 class="studio-title">通道三</h1>
         <StudioGuideButton title="S VIP 使用说明">
           <p class="studio-guide-line">
             S 2.0 VIP 通道：支持参考图/视频/音频（@图片N @视频N @音频N），素材需公网 URL；含参考视频时积分 ×{{ referenceVideoMultiplier }}。
@@ -43,32 +43,6 @@
         </button>
       </div>
     </header>
-
-    <div v-if="channelOptions.length" class="studio-channel-bar">
-      <label class="studio-select-field">
-        <span class="studio-select-label">线路</span>
-        <select v-model="selectedChannel" class="studio-model-select" @change="onChannelChange">
-          <option v-for="ch in channelOptions" :key="ch.channel" :value="String(ch.channel)">
-            {{ toAistarslabChannelDisplayTitle(ch.title) || `线路 ${ch.channel}` }}
-          </option>
-        </select>
-      </label>
-      <label class="studio-select-field">
-        <span class="studio-select-label">模型</span>
-        <select v-model="selectedModel" class="studio-model-select">
-          <option
-            v-for="m in modelsForSelectedChannel"
-            :key="m.option_key || m.id"
-            :value="m.model || m.id"
-          >
-            {{ toSeedanceDisplayLabel(m.label) }} · {{ m.credit_cost_flat ?? m.credit_cost }} 积分
-          </option>
-        </select>
-      </label>
-      <span v-if="activeChannelMeta?.description" class="studio-channel-hint dim">
-        {{ toAistarslabChannelDisplayTitle(activeChannelMeta.description) }}
-      </span>
-    </div>
 
     <div class="studio-tabs">
       <button
@@ -157,6 +131,37 @@
     </div>
 
     <div class="studio-composer-wrap">
+      <div v-if="channelOptions.length" class="studio-channel-bar studio-channel-bar-composer">
+        <div class="studio-channel-bar-row">
+          <label class="studio-select-field">
+            <span class="studio-select-label">线路</span>
+            <select v-model="selectedChannel" class="studio-model-select" @change="onChannelChange">
+              <option v-for="ch in channelOptions" :key="ch.channel" :value="String(ch.channel)">
+                {{ toAistarslabChannelDisplayTitle(ch.title) || `线路 ${ch.channel}` }}
+              </option>
+            </select>
+          </label>
+          <label class="studio-select-field">
+            <span class="studio-select-label">模型</span>
+            <select v-model="selectedModel" class="studio-model-select">
+              <option
+                v-for="m in modelsForSelectedChannel"
+                :key="m.option_key || m.id"
+                :value="m.model || m.id"
+              >
+                {{ toSeedanceDisplayLabel(m.label) }} · {{ modelPriceLabel(m) }}
+              </option>
+            </select>
+          </label>
+          <span class="studio-channel-tip">如多次失败，请尝试切换线路</span>
+          <span class="dim studio-channel-tip-limits">
+            参考上限 {{ channelRefLimits.images }}图 / {{ channelRefLimits.videos }}视频 / {{ channelRefLimits.audios }}音频
+          </span>
+        </div>
+        <p v-if="activeChannelMeta?.description" class="studio-channel-hint dim">
+          {{ toAistarslabChannelDisplayTitle(activeChannelMeta.description) }}
+        </p>
+      </div>
       <VideoStudioComposer
         ref="composerRef"
         aistarslab-mode
@@ -167,8 +172,10 @@
         :fixed-model="selectedModel"
         :duration-min="durationMin"
         :duration-max="durationMax"
-        :credit-cost-flat="selectedCreditCostFlat"
+        :credit-cost-flat="isPerSecondBilling ? null : selectedCreditCostFlat"
+        :credit-cost-per-second="isPerSecondBilling ? selectedCreditCostPerSecond : null"
         :reference-video-multiplier="referenceVideoMultiplier"
+        :ref-limits-override="channelRefLimits"
         drama-preference-scope="video-aistarslab"
         @generate="onGenerate"
       />
@@ -243,6 +250,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
 import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
@@ -266,25 +274,25 @@ import {
 
 const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-aistarslab-v1'
 
-const DEFAULT_MODEL = 'seedance-2.0-720p-fast'
-const DEFAULT_CHANNEL = '12'
+const DEFAULT_MODEL = 'seedance-2.0-fast'
+const DEFAULT_CHANNEL = '50'
 
 const DEFAULT_MODELS = [
   {
     id: DEFAULT_MODEL,
     channel: DEFAULT_CHANNEL,
     label: 'Seedance 2.0 Fast VIP',
-    credit_cost_flat: 750,
+    credit_cost_flat: 550,
     config_id: null,
     duration_min: 4,
     duration_max: 15,
     duration_default: 15,
   },
   {
-    id: 'seedance-2.0-720p',
+    id: 'seedance-2.0',
     channel: DEFAULT_CHANNEL,
     label: 'Seedance 2.0 VIP',
-    credit_cost_flat: 780,
+    credit_cost_flat: 650,
     config_id: null,
     duration_min: 4,
     duration_max: 15,
@@ -364,14 +372,54 @@ const activeChannelMeta = computed(() =>
   channelOptions.value.find(item => item.channel === selectedChannel.value) || null,
 )
 
+const channelRefLimits = computed(() => ({
+  images: Number.isFinite(Number(activeChannelMeta.value?.max_images))
+    ? Number(activeChannelMeta.value.max_images)
+    : 9,
+  videos: Number.isFinite(Number(activeChannelMeta.value?.max_videos))
+    ? Number(activeChannelMeta.value.max_videos)
+    : 3,
+  audios: Number.isFinite(Number(activeChannelMeta.value?.max_audios))
+    ? Number(activeChannelMeta.value.max_audios)
+    : 3,
+}))
+
 const durationMin = computed(() => activeChannelMeta.value?.seconds_min ?? 4)
 const durationMax = computed(() => activeChannelMeta.value?.seconds_max ?? 15)
 
+const isPerSecondBilling = computed(() => {
+  const model = activeModelOption.value
+  const unit = String(model?.billing_unit || '').toLowerCase()
+  if (unit === 'per_second' || unit === 'second') return true
+  if (unit === 'flat') return false
+  return !!(model?.credit_cost_per_second || model?.credits_per_second)
+    && !(model?.credit_cost_flat || model?.fixed_total_credits)
+})
+
 const selectedCreditCostFlat = computed(() => {
+  if (isPerSecondBilling.value) return null
   const model = activeModelOption.value
   const cost = model?.credit_cost_flat ?? model?.credit_cost
   return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : 750
 })
+
+const selectedCreditCostPerSecond = computed(() => {
+  if (!isPerSecondBilling.value) return null
+  const model = activeModelOption.value
+  const cost = model?.credit_cost_per_second ?? model?.credit_cost
+  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : null
+})
+
+function modelPriceLabel(m) {
+  const unit = String(m?.billing_unit || '').toLowerCase()
+  const perSec = m?.credit_cost_per_second
+  if (unit === 'per_second' || unit === 'second' || (perSec != null && !(m?.credit_cost_flat || m?.fixed_total_credits))) {
+    const rate = perSec ?? m?.credit_cost
+    return rate != null ? `${rate} 积分/秒` : '按秒计费'
+  }
+  const flat = m?.credit_cost_flat ?? m?.credit_cost
+  return flat != null ? `${flat} 积分` : '—'
+}
 
 function onChannelChange() {
   const models = modelsForSelectedChannel.value
@@ -462,6 +510,8 @@ function normalizeItem(row) {
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
     reference_images: row.reference_images || [],
+    reference_videos: row.reference_videos || [],
+    reference_audios: row.reference_audios || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
@@ -600,12 +650,9 @@ async function reuseDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function videoDownloadName(item) {
@@ -686,7 +733,10 @@ async function refreshLedger() {
 async function reload() {
   if (!items.value.length) loading.value = true
   try {
-    await loadLedger({ offset: 0 })
+    await Promise.all([
+      loadLedger({ offset: 0 }),
+      loadAistarslabOptions(),
+    ])
   } finally {
     loading.value = false
   }
@@ -711,10 +761,19 @@ function setStatus(status) {
 async function loadAistarslabOptions() {
   try {
     const res = await videoAPI.aistarslabOptions()
-    aistarslabModels.value = (res?.models || []).map(item => ({
-      ...item,
-      credit_cost_flat: item.credit_cost_flat ?? item.credit_cost ?? 750,
-    }))
+    aistarslabModels.value = (res?.models || []).map(item => {
+      const perSecond = String(item.billing_unit || '').toLowerCase() === 'per_second'
+        || String(item.billing_unit || '').toLowerCase() === 'second'
+        || (item.credit_cost_per_second != null && item.credit_cost_flat == null && !item.fixed_total_credits)
+      return {
+        ...item,
+        billing_unit: perSecond ? 'per_second' : (item.billing_unit || 'flat'),
+        credit_cost_flat: perSecond ? null : (item.credit_cost_flat ?? item.credit_cost ?? 750),
+        credit_cost_per_second: perSecond
+          ? (item.credit_cost_per_second ?? item.credit_cost ?? null)
+          : (item.credit_cost_per_second ?? null),
+      }
+    })
     channelOptions.value = res?.channels || []
     aistarslabApiKeyConfigured.value = res?.api_key_configured !== false
     const mult = Number(res?.reference_video_multiplier)
@@ -729,6 +788,10 @@ async function loadAistarslabOptions() {
 }
 
 async function onGenerate(payload) {
+  if (generating.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
   if (!selectedModel.value) {
     toast.error('请选择模型')
     return
@@ -745,7 +808,6 @@ async function onGenerate(payload) {
     return
   }
   generating.value = true
-  const startedAt = Date.now()
   try {
     const generation = await videoAPI.generate({
       ...payload,
@@ -762,10 +824,7 @@ async function onGenerate(payload) {
     toast.error(formatVideoGenerationError(err?.message || '生成失败'))
     await reload()
   } finally {
-    const elapsed = Date.now() - startedAt
-    setTimeout(() => {
-      generating.value = false
-    }, Math.max(0, 1000 - elapsed))
+    generating.value = false
   }
 }
 
@@ -921,11 +980,23 @@ onUnmounted(() => {
 
 .studio-channel-bar {
   display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 24px 12px;
+  flex-shrink: 0;
+}
+
+.studio-channel-bar-composer {
+  padding: 10px 24px 8px;
+  background: color-mix(in srgb, var(--bg-1) 88%, transparent);
+  border-top: 1px solid var(--border);
+}
+
+.studio-channel-bar-row {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-  padding: 0 24px 12px;
-  flex-shrink: 0;
 }
 
 .studio-select-field {
@@ -945,14 +1016,22 @@ onUnmounted(() => {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: var(--bg-1);
+  background: var(--bg-0);
   color: var(--text-1);
   font-size: 12px;
 }
 
-.studio-channel-hint {
+.studio-channel-tip {
   font-size: 12px;
-  max-width: 420px;
+  font-weight: 600;
+  color: var(--accent, #4c7dff);
+  white-space: nowrap;
+}
+
+.studio-channel-hint {
+  margin: 0;
+  font-size: 12px;
+  max-width: 100%;
   line-height: 1.45;
 }
 

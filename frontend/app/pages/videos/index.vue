@@ -2,11 +2,12 @@
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
-        <h1 class="studio-title">视频生成</h1>
+        <h1 class="studio-title">通道一</h1>
         <StudioGuideButton title="通道1 使用说明">
           <p class="studio-guide-line">关联项目后选择角色/场景并用 @ 写入提示词；支持参考图/视频/音频（@图片N @素材N @音频N），素材需公网 URL。</p>
-          <p class="studio-guide-line studio-guide-emphasize">9图线路支持：9图3音频3视频。10图版本：支持10图，不支持音频视频。</p>
+          <p class="studio-guide-line studio-guide-emphasize">底部可切换线路；各线路参考图数量不同（如 4图 / 9图），以线路说明为准。如多次失败，请尝试切换线路。</p>
         </StudioGuideButton>
+        <p class="studio-channel-suspend-banner" role="status">通道暂停使用 2026.8.10</p>
       </div>
       <div class="studio-header-actions">
         <div class="studio-scope-toggle">
@@ -27,6 +28,23 @@
             查看全部
           </button>
         </div>
+        <select
+          v-if="selectableTeamMembers.length"
+          v-model.number="filterMemberUserId"
+          class="studio-filter-select studio-member-select"
+          :class="{ active: viewScope === 'member' }"
+          title="查看团队成员"
+          @change="onMemberFilterChange"
+        >
+          <option :value="null">指定成员</option>
+          <option
+            v-for="m in selectableTeamMembers"
+            :key="m.user_id"
+            :value="m.user_id"
+          >
+            {{ m.display_name || m.username }}
+          </option>
+        </select>
         <select v-model="filterDramaId" class="studio-filter-select" @focus="ensureDramasLoaded" @change="reload">
           <option value="">全部项目</option>
           <option v-for="d in dramas" :key="d.id" :value="String(d.id)">{{ d.title }}</option>
@@ -103,6 +121,7 @@
                 下载
               </button>
             </div>
+            <p v-if="operatorLabel(item)" class="studio-card-operator">操作人 {{ operatorLabel(item) }}</p>
           </div>
         </article>
       </div>
@@ -117,18 +136,46 @@
     </div>
 
     <div class="studio-composer-wrap">
+      <div v-if="chengmengModels.length" class="studio-channel-bar studio-channel-bar-composer">
+        <div class="studio-channel-bar-row">
+          <label class="studio-select-field">
+            <span class="studio-select-label">线路</span>
+            <select v-model="selectedChengmengModel" class="studio-model-select">
+              <option
+                v-for="m in chengmengModels"
+                :key="m.id"
+                :value="String(m.id)"
+              >
+                {{ lineOptionLabel(m) }}
+              </option>
+            </select>
+          </label>
+          <span class="studio-channel-tip">如多次失败，请尝试切换线路</span>
+          <span class="dim studio-channel-tip-limits">
+            参考上限 {{ channelRefLimits.images }}图 / {{ channelRefLimits.videos }}视频 / {{ channelRefLimits.audios }}音频
+          </span>
+        </div>
+        <p v-if="selectedChengmengPricing?.description" class="studio-channel-hint dim">
+          {{ selectedChengmengPricing.description }}
+        </p>
+      </div>
       <VideoStudioComposer
         ref="composerRef"
         :generating="generating"
         :dramas="dramas"
         :default-drama-id="filterDramaId"
         :chengmeng-models="chengmengModels"
+        hide-chengmeng-model-select
         :fixed-config-id="chengmengConfigId"
         :fixed-model="selectedChengmengModel"
         :credit-cost-hint="selectedCreditHint"
+        :credit-cost-flat="isPerSecondBilling ? null : selectedCreditCostFlat"
+        :credit-cost-per-second="isPerSecondBilling ? selectedCreditCostPerSecond : null"
+        :ref-limits-override="channelRefLimits"
         :duration-min="4"
         :duration-max="15"
         :show-ref-mode-toggle="false"
+        drama-preference-scope="video-chengmeng"
         @update:fixed-model="selectedChengmengModel = $event"
         @generate="onGenerate"
       />
@@ -140,6 +187,7 @@
           <div>
             <h3>视频详情 #{{ detailItem.id }}</h3>
             <p class="dim">{{ formatTime(detailItem.created_at) }}</p>
+            <p v-if="operatorLabel(detailItem)" class="studio-detail-operator">操作人 {{ operatorLabel(detailItem) }}</p>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="detailItem = null">关闭</button>
         </div>
@@ -199,7 +247,10 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import { videoAPI } from '~/composables/useApi'
+import { useAuth } from '~/composables/useAuth'
+import { useTeam } from '~/composables/useTeam'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
 import { mediaDisplayUrl, seedMediaUrlCacheFromLedgerItems, videoPosterDisplayUrl } from '~/utils/media-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
@@ -215,9 +266,11 @@ import {
   finalizeVideoLedgerItems,
 } from '~/utils/video-studio-page.js'
 
-const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-chengmeng-v1'
+const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-chengmeng-v3'
 
 const route = useRoute()
+const { user } = useAuth()
+const { activeTeamMembers, loadActiveTeamMembers } = useTeam()
 
 const loading = ref(false)
 const loadingMore = ref(false)
@@ -229,6 +282,7 @@ const pagination = ref({ limit: 30, offset: 0, total: 0, has_more: false })
 const filterDramaId = ref(String(route.query.drama_id || ''))
 const filterStatus = ref('all')
 const viewScope = ref('mine')
+const filterMemberUserId = ref(null)
 const detailItem = ref(null)
 const detailDownloading = ref(false)
 const composerRef = ref(null)
@@ -240,6 +294,7 @@ let pollTimer = null
 function videoLedgerCacheKey() {
   return buildVideoLedgerCacheKey(VIDEO_LEDGER_CACHE_PREFIX, [
     viewScope.value,
+    filterMemberUserId.value || 'all',
     filterDramaId.value || 'all',
     filterStatus.value,
   ])
@@ -249,12 +304,24 @@ function ensureDramasLoaded() {
   if (!dramas.value.length) void loadVideoDramasLite(dramas)
 }
 
+const selectableTeamMembers = computed(() => {
+  const selfId = user.value?.id
+  return activeTeamMembers.value.filter(m => m.user_id !== selfId)
+})
+
 const CHENGMENG_MODEL_LABELS = {
-  70: '9图-满血',
-  77: '9图-满血-线路2（已停用）',
+  91: '官转满血 · 线路1',
+  56: '官转满血',
+  55: '官转 Fast',
+  32: 'Seedance 2.0',
+  53: 'Seedance 2.0 Fast',
+  90: '限时特价满血（已下线）',
+  83: '线路 83（已下线）',
+  71: '线路 71（已下线）',
+  82: '线路 82（已下线）',
+  70: '9图-满血（已下线）',
+  77: '9图-满血-线路2（已下线）',
   49: '9图-满血-线路2（旧）',
-  53: 'Seedance 2.0 Fast（旧）',
-  32: 'Seedance 2.0（旧）',
 }
 
 const chengmengConfigId = computed(() => {
@@ -268,15 +335,69 @@ const selectedChengmengPricing = computed(() =>
   || null,
 )
 
-const selectedCreditHint = computed(() => {
-  const pricing = selectedChengmengPricing.value
-  if (!pricing?.credit_cost) return ''
-  return `${pricing.credit_cost} 积分/条`
+const isPerSecondBilling = computed(() => {
+  const model = selectedChengmengPricing.value
+  const unit = String(model?.billing_unit || '').toLowerCase()
+  if (unit === 'per_second' || unit === 'second') return true
+  if (unit === 'flat') return false
+  return !!(model?.credit_cost_per_second)
+    && !(model?.credit_cost_flat != null)
 })
+
+const selectedCreditCostFlat = computed(() => {
+  if (isPerSecondBilling.value) return null
+  const model = selectedChengmengPricing.value
+  const cost = model?.credit_cost_flat ?? model?.credit_cost
+  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : null
+})
+
+const selectedCreditCostPerSecond = computed(() => {
+  if (!isPerSecondBilling.value) return null
+  const model = selectedChengmengPricing.value
+  const cost = model?.credit_cost_per_second ?? model?.credit_cost
+  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : null
+})
+
+const channelRefLimits = computed(() => {
+  const pricing = selectedChengmengPricing.value
+  return {
+    images: Number.isFinite(Number(pricing?.max_images)) ? Number(pricing.max_images) : 9,
+    videos: Number.isFinite(Number(pricing?.max_videos)) ? Number(pricing.max_videos) : 3,
+    audios: Number.isFinite(Number(pricing?.max_audios)) ? Number(pricing.max_audios) : 3,
+  }
+})
+
+const selectedCreditHint = computed(() => {
+  if (isPerSecondBilling.value) {
+    const rate = selectedCreditCostPerSecond.value
+    return rate != null ? `${rate} 积分/秒` : '按秒计费'
+  }
+  const cost = selectedCreditCostFlat.value
+  return cost != null ? `${cost} 积分/条` : ''
+})
+
+function lineOptionLabel(m) {
+  const name = modelLabel(m?.id) || m?.label || m?.id
+  const hint = m?.ref_limits_hint
+    || (m?.max_images != null ? `${m.max_images}图` : '')
+  const parts = [name]
+  if (hint && !String(name).includes(`${m?.max_images ?? ''}图`)) parts.push(hint)
+  const unit = String(m?.billing_unit || '').toLowerCase()
+  const perSec = m?.credit_cost_per_second
+  if (unit === 'per_second' || unit === 'second' || (perSec != null && m?.credit_cost_flat == null)) {
+    const rate = perSec ?? m?.credit_cost
+    if (rate != null) parts.push(`${rate} 积分/秒`)
+  } else {
+    const cost = m?.credit_cost_flat ?? m?.credit_cost
+    if (cost != null) parts.push(`${cost} 积分`)
+  }
+  return parts.join(' · ')
+}
 
 function modelLabel(model) {
   const key = String(model || '').trim()
-  const label = chengmengModels.value.find(item => item.id === key)?.label
+  const fromApi = chengmengModels.value.find(item => item.id === key)
+  const label = fromApi?.label
     || CHENGMENG_MODEL_LABELS[key]
     || key
     || '未知模型'
@@ -316,6 +437,8 @@ function normalizeItem(row) {
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
     reference_images: row.reference_images || [],
+    reference_videos: row.reference_videos || [],
+    reference_audios: row.reference_audios || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
@@ -329,7 +452,16 @@ function normalizeItem(row) {
     storyboard_title: row.storyboard_title || '',
     storyboard_number: row.storyboard_number,
     storyboard_exists: row.storyboard_exists !== false,
+    operator_id: row.operator_id ?? null,
+    operator_name: row.operator_name || '',
+    username: row.username || '',
+    display_name: row.display_name || '',
   }
+}
+
+function operatorLabel(item) {
+  if (!item) return ''
+  return item.operator_name || item.display_name || item.username || ''
 }
 
 function playableUrl(item) {
@@ -388,6 +520,12 @@ function openDetail(item) {
 
 async function reuseDetail() {
   if (!detailItem.value) return
+  if (detailItem.value.model) {
+    const mid = String(detailItem.value.model).trim()
+    if (chengmengModels.value.some(item => String(item.id) === mid)) {
+      selectedChengmengModel.value = mid
+    }
+  }
   await composerRef.value?.loadFromItem(detailItem.value)
   detailItem.value = null
   nextTick(() => {
@@ -397,12 +535,9 @@ async function reuseDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function videoDownloadName(item) {
@@ -442,6 +577,9 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
     limit,
     offset,
     mine_only: viewScope.value === 'mine',
+    user_id: viewScope.value === 'member' && filterMemberUserId.value
+      ? filterMemberUserId.value
+      : undefined,
     provider: 'chengmeng',
   }
 }
@@ -449,7 +587,21 @@ function buildQuery(offset = 0, limit = pagination.value.limit) {
 function setViewScope(scope) {
   if (viewScope.value === scope) return
   viewScope.value = scope
+  if (scope !== 'member') {
+    filterMemberUserId.value = null
+  }
   reload()
+}
+
+function onMemberFilterChange() {
+  if (filterMemberUserId.value) {
+    viewScope.value = 'member'
+    reload()
+    return
+  }
+  if (viewScope.value === 'member') {
+    setViewScope('mine')
+  }
 }
 
 async function loadLedger({ append = false, offset = 0, refreshVisible = false } = {}) {
@@ -511,13 +663,20 @@ async function loadChengmengOptions() {
     const res = await videoAPI.chengmengOptions()
     chengmengModels.value = (res?.models || []).map(item => ({
       ...item,
-      credit_cost_flat: item.credit_cost_flat ?? item.credit_cost ?? null,
+      id: String(item.id),
+      billing_unit: item.billing_unit || 'flat',
+      credit_cost_flat: item.credit_cost_flat ?? (String(item.billing_unit || '').includes('second') ? null : (item.credit_cost ?? null)),
+      credit_cost_per_second: item.credit_cost_per_second ?? null,
     }))
     if (chengmengModels.value.length) {
-      const defaultModel = res?.default_model
+      const defaultModel = String(
+        res?.default_model
         || chengmengModels.value.find(item => item.default_option)?.id
         || chengmengModels.value[0]?.id
-      if (defaultModel && !chengmengModels.value.some(item => item.id === selectedChengmengModel.value)) {
+        || '',
+      )
+      const current = String(selectedChengmengModel.value || '')
+      if (!chengmengModels.value.some(item => item.id === current)) {
         selectedChengmengModel.value = defaultModel
       }
     }
@@ -527,6 +686,10 @@ async function loadChengmengOptions() {
 }
 
 async function onGenerate(payload) {
+  if (generating.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
   if (!selectedChengmengModel.value) {
     toast.error('请选择模型')
     return
@@ -538,13 +701,21 @@ async function onGenerate(payload) {
     toast.error('未配置橙盟视频服务，请联系管理员')
     return
   }
+  // 防止与其它通道共用草稿时把 mini/pro 等写进线路选择
+  if (!chengmengModels.value.some(item => String(item.id) === String(selectedChengmengModel.value))) {
+    await loadChengmengOptions()
+    if (!chengmengModels.value.some(item => String(item.id) === String(selectedChengmengModel.value))) {
+      toast.error('请重新选择线路后再提交')
+      return
+    }
+  }
   generating.value = true
-  const startedAt = Date.now()
   try {
     const generation = await videoAPI.generate({
       ...payload,
       config_id: chengmengConfigId.value,
       model: selectedChengmengModel.value,
+      provider: 'chengmeng',
     })
     toast.success('视频任务已提交')
     filterStatus.value = 'all'
@@ -553,10 +724,7 @@ async function onGenerate(payload) {
   } catch (err) {
     toast.error(formatVideoGenerationError(err?.message || '生成失败'))
   } finally {
-    const elapsed = Date.now() - startedAt
-    setTimeout(() => {
-      generating.value = false
-    }, Math.max(0, 1000 - elapsed))
+    generating.value = false
   }
 }
 
@@ -616,6 +784,7 @@ onMounted(() => {
   }
   void loadChengmengOptions()
   void loadVideoDramasLite(dramas)
+  void loadActiveTeamMembers()
   void loadLedger({ offset: 0 }).finally(() => {
     loading.value = false
     startPolling()
@@ -670,6 +839,17 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+.studio-channel-suspend-banner {
+  margin: 0;
+  margin-left: 8px;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #e53935;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
 .studio-guide-line {
   margin: 0;
   font-size: 13px;
@@ -718,6 +898,11 @@ onUnmounted(() => {
 
 .studio-scope-btn.active {
   background: var(--accent-bg);
+  color: var(--accent-text);
+}
+
+.studio-member-select.active {
+  border-color: var(--accent);
   color: var(--accent-text);
 }
 
@@ -924,6 +1109,12 @@ onUnmounted(() => {
   font-size: 11px;
 }
 
+.studio-card-operator {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
 .tag-warn {
   border-color: rgba(255, 167, 38, 0.35);
   color: #ffb74d;
@@ -964,6 +1155,12 @@ onUnmounted(() => {
 .studio-detail-head h3 {
   margin: 0 0 4px;
   font-size: 18px;
+}
+
+.studio-detail-operator {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .studio-detail-body {
@@ -1074,7 +1271,70 @@ onUnmounted(() => {
   .studio-header,
   .studio-tabs,
   .studio-feed { padding-left: 16px; padding-right: 16px; }
+  .studio-channel-bar { padding-left: 16px; padding-right: 16px; }
   .studio-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .studio-detail-body { grid-template-columns: 1fr; }
+}
+
+.studio-channel-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 24px 12px;
+  flex-shrink: 0;
+}
+
+.studio-channel-bar-composer {
+  padding: 10px 24px 8px;
+  background: color-mix(in srgb, var(--bg-1) 88%, transparent);
+  border-top: 1px solid var(--border);
+}
+
+.studio-channel-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.studio-select-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.studio-select-label {
+  white-space: nowrap;
+}
+
+.studio-model-select {
+  min-width: 220px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-size: 12px;
+}
+
+.studio-channel-tip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #4c7dff);
+  white-space: nowrap;
+}
+
+.studio-channel-tip-limits {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.studio-channel-hint {
+  margin: 0;
+  font-size: 12px;
+  max-width: 100%;
+  line-height: 1.45;
 }
 </style>

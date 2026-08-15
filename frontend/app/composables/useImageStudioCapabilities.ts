@@ -6,22 +6,40 @@ export type ImageStudioResolutionOption = {
   credit_cost?: number
 }
 
+export type ImageStudioModelOption = {
+  id: string
+  label?: string
+  default?: boolean
+  available?: boolean
+  resolutions?: ImageStudioResolutionOption[]
+  default_resolution?: string
+  aspect_ratios?: string[]
+  default_aspect_ratio?: string
+  quantities?: number[]
+  default_quantity?: number
+  max_reference_images?: number
+  supports_reference?: boolean
+}
+
 export type ImageStudioCapabilities = {
   max_reference_images?: number
   supports_reference?: boolean
   provider?: string | null
   model?: string | null
   models?: string[]
+  model_options?: ImageStudioModelOption[]
   resolutions?: ImageStudioResolutionOption[]
   default_resolution?: string
   aspect_ratios?: string[]
   default_aspect_ratio?: string
+  quantities?: number[]
+  default_quantity?: number
   can_view_all_studio?: boolean
   user_filter_options?: { id: number; username: string; display_name: string }[]
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000
-const SESSION_KEY = 'studio-image-capabilities-v2'
+const SESSION_KEY = 'studio-image-capabilities-v4'
 let cached: { at: number; data: ImageStudioCapabilities } | null = null
 let inflight: Promise<ImageStudioCapabilities> | null = null
 

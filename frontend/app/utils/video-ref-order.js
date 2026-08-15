@@ -101,6 +101,14 @@ export function findCandidateForPromptLabel(promptLabel, candidates, usedKeys = 
   )
   if (propExact) return propExact
 
+  // 角色多形态：优先更长/更具体的标签（避免「涂山赤娆面部」误匹配「涂山赤娆」原图）
+  const charFuzzy = pool
+    .filter(candidate =>
+      candidate.source === 'character' && labelsMatch(promptLabel, candidate.label, candidate.source),
+    )
+    .sort((a, b) => normalizeLabel(b.label).length - normalizeLabel(a.label).length)
+  if (charFuzzy.length) return charFuzzy[0]
+
   const direct = pool.find(candidate => labelsMatch(promptLabel, candidate.label, candidate.source))
   if (direct) return direct
   if (normalized.includes('站位') || normalized.includes('blocking')) {
@@ -494,7 +502,11 @@ export function buildOrderedVideoContentRefs(sb, prompt, chars, scenes, helpers)
   if (tts) items.push({ type: 'audio', url: String(tts).replace(/^\/+/, ''), label: '配音', role: 'reference_audio' })
 
   const voiceRefs = helpers.getVoiceRefs?.(sb) || []
-  for (const ref of voiceRefs.slice(0, 3)) {
+  const maxVoiceRefsRaw = helpers.maxVoiceRefs ?? helpers.getMaxVoiceRefs?.(sb)
+  const maxVoiceRefs = Number.isFinite(Number(maxVoiceRefsRaw)) && Number(maxVoiceRefsRaw) >= 0
+    ? Math.floor(Number(maxVoiceRefsRaw))
+    : 3
+  for (const ref of voiceRefs.slice(0, maxVoiceRefs)) {
     const url = String(ref?.path || '').trim().replace(/^\/+/, '')
     if (!url) continue
     items.push({ type: 'audio', url, label: formatVoicePromptLabel(ref.name || '音色参考'), role: 'reference_audio' })

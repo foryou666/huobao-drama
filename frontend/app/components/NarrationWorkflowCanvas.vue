@@ -76,11 +76,15 @@
 
           <div v-else-if="node.imageUrl" class="nw-node-media">
             <img
-              :src="mediaDisplayUrl(node.imageUrl)"
+              v-if="assetThumbUrl(node.imageUrl)"
+              :src="assetThumbUrl(node.imageUrl)"
               alt=""
               class="nw-node-thumb"
+              loading="lazy"
+              decoding="async"
               @load="measureNodes"
             />
+            <div v-else class="nw-node-video-placeholder">…</div>
           </div>
 
           <div v-else-if="node.type === 'segment' && node.data.segments?.length" class="nw-node-text">
@@ -90,6 +94,38 @@
           <div v-else-if="node.type === 'extract' && node.stageDone" class="nw-node-chips">
             <span v-for="c in node.data.analysis.characters?.slice(0, 3)" :key="c.id" class="nw-chip">{{ c.name }}</span>
             <span v-if="(node.data.analysis.characters?.length || 0) > 3" class="nw-chip dim">+{{ node.data.analysis.characters.length - 3 }}</span>
+          </div>
+
+          <div v-else-if="node.type === 'asset-group'" class="nw-asset-grid">
+            <div
+              v-for="thumb in (node.data?.thumbs || [])"
+              :key="thumb.id"
+              class="nw-asset-cell"
+              :class="{ ready: thumb.ready, generating: thumb.status === 'generating' }"
+              :title="thumb.name"
+            >
+              <img
+                v-if="thumb.imageUrl && assetThumbUrl(thumb.imageUrl)"
+                :src="assetThumbUrl(thumb.imageUrl)"
+                :alt="thumb.name"
+                class="nw-asset-thumb"
+                loading="lazy"
+                decoding="async"
+                @load="measureNodes"
+              />
+              <span v-else class="nw-asset-empty">{{ thumb.status === 'generating' ? '…' : thumb.name?.slice(0, 2) || '?' }}</span>
+            </div>
+            <div
+              v-if="(node.data?.total || 0) > (node.data?.thumbs?.length || 0)"
+              class="nw-asset-cell nw-asset-more"
+            >
+              +{{ (node.data.total || 0) - (node.data.thumbs?.length || 0) }}
+            </div>
+          </div>
+
+          <div v-else-if="node.type === 'grok-group'" class="nw-node-meta">
+            <span class="tag">{{ node.data?.done || 0 }}/{{ node.data?.total || 0 }}</span>
+            <span class="dim">点击查看各段镜头</span>
           </div>
 
           <div v-else-if="node.type === 'grok'" class="nw-node-meta">
@@ -104,7 +140,7 @@
 
 <script setup>
 import { buildNarrationCanvasGraph, nodeAnchor, bezierEdgePath } from '~/utils/narration-canvas-layout.js'
-import { cacheVersion, mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
+import { cacheVersion, mediaDisplayUrl, thumbPathFromSource, videoPosterDisplayUrl } from '~/utils/media-url.js'
 
 const props = defineProps({
   job: { type: Object, default: null },
@@ -190,14 +226,23 @@ function grokPosterUrl(node) {
   })
 }
 
+/** 画布小图只用缩略图，避免加载原图拖慢渲染 */
+function assetThumbUrl(raw) {
+  void cacheVersion.value
+  const thumb = thumbPathFromSource(raw)
+  if (!thumb) return ''
+  return mediaDisplayUrl(thumb)
+}
+
 function nodeTypeLabel(node) {
   if (node.type === 'segment') return '原文'
   if (node.type === 'extract') return '抽取'
+  if (node.type === 'asset-group') return '定稿'
   if (node.type.startsWith('asset-character')) return '角色'
   if (node.type.startsWith('asset-scene')) return '场景'
   if (node.type.startsWith('asset-prop')) return '道具'
   if (node.type === 'tts') return 'TTS'
-  if (node.type === 'grok') return 'Grok'
+  if (node.type === 'grok' || node.type === 'grok-group') return '画面'
   if (node.type === 'export') return '导出'
   return '节点'
 }
@@ -507,5 +552,51 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.nw-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.nw-asset-cell {
+  aspect-ratio: 1;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nw-asset-cell.ready {
+  border-color: rgba(102, 187, 106, 0.45);
+}
+
+.nw-asset-cell.generating {
+  border-color: rgba(255, 193, 7, 0.5);
+}
+
+.nw-asset-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.nw-asset-empty {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  padding: 2px;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.nw-asset-more {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
 }
 </style>

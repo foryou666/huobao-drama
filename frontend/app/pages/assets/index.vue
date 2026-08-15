@@ -3,7 +3,7 @@
     <div class="page-head">
       <div class="head-left">
         <h1 class="page-title">资产库</h1>
-        <p class="page-desc">角色、场景、服装、道具、参考图与音色库统一归档；结构化资产与项目双向同步</p>
+        <p class="page-desc">角色、场景、服装、道具、参考图与音色库统一归档；虚拟人像在造型分组内对单张图认证，通道2选用时自动走 asset://</p>
       </div>
       <div class="head-actions">
         <button class="btn btn-sm" :disabled="!selectedDramaId || syncing" @click="syncDrama">
@@ -83,10 +83,19 @@
           </span>
         </div>
         <div class="asset-body">
-          <div class="asset-name">{{ item.name }}</div>
+          <div class="asset-name-row">
+            <div class="asset-name">{{ item.name }}</div>
+            <span
+              v-if="activeType === 'character' && resolveLinkedCharacterId(item)"
+              class="tag asset-portrait-tag"
+              :class="portraitStatusClass(item)"
+              :title="portraitStatusTitle(item)"
+            >{{ portraitStatusLabel(item) }}</span>
+          </div>
           <div class="asset-meta dim">{{ dramaTitle(item.drama_id || item.dramaId) }}</div>
           <CharacterMediaStrip
             v-if="activeType === 'character' && resolveCharacterMedia(item)"
+            :char="portraitCharFromAsset(item)"
             :media="resolveCharacterMedia(item)"
             layout="outfits"
             compact
@@ -132,8 +141,83 @@
               </div>
             </div>
             <p v-if="!assetHasPrimaryImage(item)" class="dim asset-outfit-hint">请先上传或生成角色基准图</p>
-            <p v-else-if="!resolveCharacterOutfits(item).length" class="dim asset-outfit-hint">
-              暂无造型分组，可新建（如日常、宫装）并在组内追加上传
+            <p v-else class="dim asset-outfit-hint">
+              每张图可独立「认证人像」；通道2选用已认证图时自动走 asset://
+            </p>
+            <!-- 角色主图：无造型分组时也是唯一可认证图 -->
+            <div
+              v-if="assetHasPrimaryImage(item)"
+              class="asset-outfit-row asset-primary-portrait-row"
+            >
+              <div class="asset-outfit-row-main">
+                <span class="asset-outfit-name">角色主图</span>
+                <span class="tag asset-portrait-tag" :class="primaryPortraitStatusClass(item)">{{ primaryPortraitStatusLabel(item) }}</span>
+              </div>
+              <div class="asset-outfit-candidates">
+                <div
+                  class="asset-outfit-candidate"
+                  :class="{ 'is-certified': isPortraitActive(item) }"
+                >
+                  <button
+                    type="button"
+                    class="asset-outfit-candidate-thumb"
+                    title="角色主图"
+                    @click="openPrimaryImagePreview(item)"
+                  >
+                    <GridMediaImage :src="resolveCharacterPrimaryPath(item)" :alt="item.name || '主图'" />
+                    <span
+                      v-if="isPortraitActive(item)"
+                      class="asset-outfit-candidate-badge"
+                    >已认证</span>
+                    <span
+                      v-else-if="isPortraitProcessing(item)"
+                      class="asset-outfit-candidate-badge is-processing"
+                    >审核中</span>
+                  </button>
+                  <button
+                    v-if="!isPortraitActive(item)"
+                    type="button"
+                    class="btn btn-sm btn-primary asset-outfit-set-default"
+                    :disabled="isPortraitBusy(item)"
+                    @click="certifyPortrait(item)"
+                  >
+                    {{ isPortraitBusy(item) ? '认证中…' : (isPortraitFailed(item) || isPortraitPending(item) ? '重新认证' : '认证人像') }}
+                  </button>
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="btn btn-sm asset-outfit-set-default"
+                      :disabled="isPortraitBusy(item)"
+                      @click="recertifyPortrait(item)"
+                    >
+                      {{ isPortraitBusy(item) ? '认证中…' : '更新认证' }}
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-ghost asset-outfit-set-default"
+                      :disabled="isPortraitBusy(item)"
+                      @click="cancelPortrait(item)"
+                    >
+                      取消认证
+                    </button>
+                  </template>
+                  <button
+                    v-if="isPortraitProcessing(item)"
+                    type="button"
+                    class="btn btn-sm btn-ghost asset-outfit-set-default"
+                    :disabled="isPortraitBusy(item)"
+                    @click="refreshPortraitStatus(item)"
+                  >
+                    刷新状态
+                  </button>
+                </div>
+              </div>
+            </div>
+            <p
+              v-if="assetHasPrimaryImage(item) && !resolveCharacterOutfits(item).length"
+              class="dim asset-outfit-hint"
+            >
+              也可再建造型分组，对组内其它图分别认证
             </p>
             <div v-if="resolveCharacterOutfits(item).length" class="asset-outfit-list">
               <div
@@ -141,8 +225,14 @@
                 :key="`${item.id}:${outfit.outfit_id}`"
                 class="asset-outfit-row"
               >
-                <span class="asset-outfit-name">{{ outfit.label }}</span>
-                <span class="dim asset-outfit-count">{{ outfit.candidate_count || 0 }} 张</span>
+                <div class="asset-outfit-row-main">
+                  <span class="asset-outfit-name">{{ outfit.label }}</span>
+                  <span
+                    class="tag asset-portrait-tag"
+                    :class="outfitPortraitStatusClassLocal(outfit)"
+                  >{{ outfitPortraitStatusLabelLocal(outfit, item) }}</span>
+                  <span class="dim asset-outfit-count">{{ outfit.candidate_count || 0 }} 张</span>
+                </div>
                 <div class="asset-outfit-row-actions">
                   <label
                     class="btn btn-sm asset-outfit-upload-btn"
@@ -171,6 +261,69 @@
                   >
                     溶图
                   </button>
+                </div>
+                <div
+                  v-if="outfitCandidates(outfit).length"
+                  class="asset-outfit-candidates"
+                >
+                  <div
+                    v-for="candidate in outfitCandidates(outfit)"
+                    :key="`${outfit.outfit_id}:${candidate.id}`"
+                    class="asset-outfit-candidate"
+                    :class="{ 'is-certified': isCandidatePortraitActiveLocal(candidate) }"
+                  >
+                    <button
+                      type="button"
+                      class="asset-outfit-candidate-thumb"
+                      :title="candidate.label || '备选'"
+                      @click="openOutfitCandidatePreview(item, outfit, candidate)"
+                    >
+                      <GridMediaImage :src="candidate.url" :alt="candidate.label || outfit.label" />
+                      <span
+                        v-if="isCandidatePortraitActiveLocal(candidate)"
+                        class="asset-outfit-candidate-badge"
+                      >已认证</span>
+                      <span
+                        v-else-if="candidatePortraitStatusOf(candidate) === 'processing'"
+                        class="asset-outfit-candidate-badge is-processing"
+                      >审核中</span>
+                    </button>
+                    <button
+                      v-if="!isCandidatePortraitActiveLocal(candidate)"
+                      type="button"
+                      class="btn btn-sm btn-primary asset-outfit-set-default"
+                      :disabled="!candidate.url || isPortraitBusy(item, outfit.outfit_id, candidate.id)"
+                      @click="certifyPortrait(item, { outfitId: outfit.outfit_id, candidateId: candidate.id })"
+                    >
+                      {{ isPortraitBusy(item, outfit.outfit_id, candidate.id) ? '认证中…' : (isCandidatePortraitFailed(candidate) || isCandidatePortraitPending(candidate) ? '重新认证' : '认证人像') }}
+                    </button>
+                    <template v-else>
+                      <button
+                        type="button"
+                        class="btn btn-sm asset-outfit-set-default"
+                        :disabled="isPortraitBusy(item, outfit.outfit_id, candidate.id)"
+                        @click="recertifyPortrait(item, outfit.outfit_id, candidate.id)"
+                      >
+                        {{ isPortraitBusy(item, outfit.outfit_id, candidate.id) ? '认证中…' : '更新认证' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-ghost asset-outfit-set-default"
+                        :disabled="isPortraitBusy(item, outfit.outfit_id, candidate.id)"
+                        @click="cancelPortrait(item, outfit.outfit_id, candidate.id)"
+                      >
+                        取消认证
+                      </button>
+                    </template>
+                    <button
+                      v-if="candidatePortraitStatusOf(candidate) === 'processing'"
+                      type="button"
+                      class="btn btn-sm btn-ghost asset-outfit-set-default"
+                      @click="refreshPortraitStatus(item, outfit.outfit_id, candidate.id)"
+                    >
+                      刷新状态
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -317,7 +470,7 @@
 </template>
 
 <script setup>
-import { dramaAPI, assetAPI, characterAPI } from '~/composables/useApi'
+import { dramaAPI, assetAPI, characterAPI, portraitAPI } from '~/composables/useApi'
 import { ASSET_CATEGORIES, assetCategoryLabel } from '~/utils/asset-categories.js'
 import { mediaDisplayUrl, normalizeMediaPath, prefetchMediaUrlsInBackground, collectMediaPrefetchPaths } from '~/utils/media-url.js'
 import GridMediaImage from '~/components/GridMediaImage.vue'
@@ -379,6 +532,8 @@ const deletingImage = ref(false)
 const visibleCount = ref(GRID_PAGE_SIZE)
 const pendingCharOutfitUploadKeys = ref([])
 const pendingNewOutfitUploadIds = ref([])
+const pendingPortraitIds = ref([])
+const portraitPollTimers = new Map()
 const outfitImageModal = ref({
   open: false,
   charId: null,
@@ -522,6 +677,438 @@ function resolveLinkedCharacterId(item) {
     return fromSource
   }
   return null
+}
+
+function portraitStatusOf(item) {
+  return String(item?.seedance_asset_status ?? item?.seedanceAssetStatus ?? '').toLowerCase()
+}
+
+function hasPortraitAsset(item) {
+  return !!(item?.seedance_asset_id || item?.seedanceAssetId)
+}
+
+function isPortraitActive(item) {
+  return portraitStatusOf(item) === 'active' && hasPortraitAsset(item)
+}
+
+function isPortraitProcessing(item) {
+  return portraitStatusOf(item) === 'processing'
+}
+
+function isPortraitFailed(item) {
+  return portraitStatusOf(item) === 'failed'
+}
+
+function isPortraitPending(item) {
+  const s = portraitStatusOf(item)
+  return s === 'pending' || (hasPortraitAsset(item) && !s)
+}
+
+function primaryPortraitStatusLabel(item) {
+  if (isPortraitBusy(item) && isPortraitProcessing(item)) return '认证中'
+  if (isPortraitActive(item)) return '已认证'
+  if (isPortraitProcessing(item)) return '审核中'
+  if (isPortraitFailed(item)) return '认证失败'
+  if (isPortraitPending(item)) return '需重新认证'
+  return '未认证'
+}
+
+function primaryPortraitStatusClass(item) {
+  if (isPortraitActive(item)) return 'tag-success'
+  if (isPortraitProcessing(item) || isPortraitBusy(item)) return 'tag-accent'
+  if (isPortraitFailed(item)) return 'tag-error'
+  return ''
+}
+
+/** 卡片角标：任一造型定稿或主图已认证即显示已认证 */
+function portraitStatusLabel(item) {
+  const outfits = resolveCharacterOutfits(item)
+  if (outfits.some(o => isOutfitPortraitActiveLocal(o))) return '已认证'
+  if (outfits.some(o => isOutfitPortraitProcessing(o)) || isPortraitProcessing(item)) return '审核中'
+  if (isPortraitBusy(item) || outfits.some(o => isPortraitBusy(item, o.outfit_id))) return '认证中'
+  if (outfits.some(o => isOutfitPortraitFailed(o)) || isPortraitFailed(item)) return '认证失败'
+  if (outfits.some(o => isOutfitPortraitPending(o)) || isPortraitPending(item)) return '需重新认证'
+  if (isPortraitActive(item)) return '已认证'
+  return '未认证'
+}
+
+function portraitStatusClass(item) {
+  const label = portraitStatusLabel(item)
+  if (label === '已认证') return 'tag-success'
+  if (label === '审核中' || label === '认证中') return 'tag-accent'
+  if (label === '认证失败') return 'tag-error'
+  return ''
+}
+
+function portraitStatusTitle(item) {
+  const outfits = resolveCharacterOutfits(item)
+  const activeOutfit = outfits.find(o => isOutfitPortraitActiveLocal(o))
+  if (activeOutfit?.seedance_asset_id || activeOutfit?.seedanceAssetId) {
+    return `${activeOutfit.label} 定稿已认证：asset://${activeOutfit.seedance_asset_id || activeOutfit.seedanceAssetId}`
+  }
+  const id = item?.seedance_asset_id || item?.seedanceAssetId
+  if (isPortraitActive(item) && id) return `角色主图已认证：asset://${id}`
+  if (isPortraitPending(item)) return '主图已变更，请重新认证或取消以腾出配额'
+  return '对造型分组内每张图独立认证；通道2选用已认证图时走 asset://'
+}
+
+function outfitCandidates(outfit) {
+  const list = Array.isArray(outfit?.candidates) ? outfit.candidates : []
+  if (list.length) return list
+  const url = normalizeMediaPath(outfit?.url || '')
+  if (!url) return []
+  return [{ id: 'default', url, label: '备选', is_default: true }]
+}
+
+function openOutfitCandidatePreview(item, outfit, candidate) {
+  const raw = normalizeMediaPath(candidate?.url || '')
+  if (!raw) return
+  openImageViewer({
+    src: mediaDisplayUrl(raw),
+    title: `${item.name} · ${outfit.label} · ${candidate.label || '图片'}`,
+    rawPath: raw,
+    item,
+    canDelete: false,
+  })
+}
+
+function openPrimaryImagePreview(item) {
+  const raw = resolveCharacterPrimaryPath(item)
+  if (!raw) return
+  openImageViewer({
+    src: mediaDisplayUrl(raw),
+    title: `${item.name} · 角色主图`,
+    rawPath: raw,
+    item,
+    canDelete: false,
+  })
+}
+
+function isPortraitBusy(item, outfitId = null, candidateId = null) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) return false
+  const key = portraitPendingKey(charId, outfitId, candidateId)
+  return pendingPortraitIds.value.includes(key)
+}
+
+function portraitPendingKey(charId, outfitId = null, candidateId = null) {
+  if (outfitId && candidateId) return `${charId}:outfit:${outfitId}:cand:${candidateId}`
+  if (outfitId) return `${charId}:outfit:${outfitId}`
+  return String(charId)
+}
+
+function portraitCharFromAsset(item) {
+  const media = resolveCharacterMedia(item)
+  return {
+    id: resolveLinkedCharacterId(item),
+    name: item?.name,
+    image_url: media?.primary_url || item?.url,
+    imageUrl: media?.primary_url || item?.url,
+    local_path: item?.local_path || item?.localPath,
+    localPath: item?.local_path || item?.localPath,
+    seedance_asset_id: item?.seedance_asset_id || item?.seedanceAssetId,
+    seedance_asset_status: item?.seedance_asset_status || item?.seedanceAssetStatus,
+    seedanceAssetId: item?.seedance_asset_id || item?.seedanceAssetId,
+    seedanceAssetStatus: item?.seedance_asset_status || item?.seedanceAssetStatus,
+    character_media: media,
+    characterMedia: media,
+  }
+}
+
+function hasOutfitPortraitAsset(outfit) {
+  return !!(outfit?.seedance_asset_id || outfit?.seedanceAssetId)
+}
+
+function outfitPortraitStatusOf(outfit) {
+  return String(outfit?.seedance_asset_status ?? outfit?.seedanceAssetStatus ?? '').toLowerCase()
+}
+
+function isOutfitPortraitActiveLocal(outfit) {
+  if ((outfit?.candidates || []).some(isCandidatePortraitActiveLocal)) return true
+  const status = outfitPortraitStatusOf(outfit)
+  return status === 'active' && hasOutfitPortraitAsset(outfit)
+}
+
+function isOutfitPortraitProcessing(outfit) {
+  if ((outfit?.candidates || []).some(c => candidatePortraitStatusOf(c) === 'processing')) return true
+  return outfitPortraitStatusOf(outfit) === 'processing'
+}
+
+function isOutfitPortraitFailed(outfit) {
+  if ((outfit?.candidates || []).some(isCandidatePortraitFailed)) return true
+  return outfitPortraitStatusOf(outfit) === 'failed'
+}
+
+function isOutfitPortraitPending(outfit) {
+  if ((outfit?.candidates || []).some(isCandidatePortraitPending)) return true
+  const s = outfitPortraitStatusOf(outfit)
+  return s === 'pending' || (hasOutfitPortraitAsset(outfit) && !s)
+}
+
+function candidatePortraitStatusOf(candidate) {
+  return String(candidate?.seedance_asset_status ?? candidate?.seedanceAssetStatus ?? '').toLowerCase()
+}
+
+function isCandidatePortraitActiveLocal(candidate) {
+  const status = candidatePortraitStatusOf(candidate)
+  const assetId = candidate?.seedance_asset_id || candidate?.seedanceAssetId
+  return status === 'active' && !!assetId
+}
+
+function isCandidatePortraitFailed(candidate) {
+  return candidatePortraitStatusOf(candidate) === 'failed'
+}
+
+function isCandidatePortraitPending(candidate) {
+  const s = candidatePortraitStatusOf(candidate)
+  const assetId = candidate?.seedance_asset_id || candidate?.seedanceAssetId
+  return s === 'pending' || (!!assetId && !s)
+}
+
+function outfitPortraitStatusLabelLocal(outfit, item) {
+  if (isOutfitPortraitProcessing(outfit) && outfitCandidates(outfit).some(c => isPortraitBusy(item, outfit?.outfit_id, c.id))) {
+    return '认证中'
+  }
+  if (isOutfitPortraitActiveLocal(outfit)) return '已认证'
+  if (isOutfitPortraitProcessing(outfit)) return '审核中'
+  if (isOutfitPortraitFailed(outfit)) return '认证失败'
+  if (isOutfitPortraitPending(outfit)) return '需重新认证'
+  return '未认证'
+}
+
+function outfitPortraitStatusClassLocal(outfit) {
+  if (isOutfitPortraitActiveLocal(outfit)) return 'tag-success'
+  if (isOutfitPortraitProcessing(outfit)) return 'tag-accent'
+  if (isOutfitPortraitFailed(outfit)) return 'tag-error'
+  return ''
+}
+
+function patchAssetPortraitFields(item, patch, outfitId = null, candidateId = null) {
+  if (!item) return
+  if (!outfitId) {
+    Object.assign(item, patch)
+    if (patch.seedance_asset_id !== undefined) item.seedanceAssetId = patch.seedance_asset_id
+    if (patch.seedance_asset_group_id !== undefined) item.seedanceAssetGroupId = patch.seedance_asset_group_id
+    if (patch.seedance_asset_status !== undefined) item.seedanceAssetStatus = patch.seedance_asset_status
+    return
+  }
+  const media = item.character_media || item.characterMedia
+  if (!media) return
+  const outfits = media.outfit_previews || media.outfitPreviews || []
+  const target = outfits.find(o => o.outfit_id === outfitId || o.outfitId === outfitId)
+  if (!target) return
+  if (candidateId) {
+    const candidates = target.candidates || []
+    const cand = candidates.find(c => c.id === candidateId)
+    if (cand) {
+      if (patch.seedance_asset_id !== undefined) {
+        cand.seedance_asset_id = patch.seedance_asset_id
+        cand.seedanceAssetId = patch.seedance_asset_id
+      }
+      if (patch.seedance_asset_status !== undefined) {
+        cand.seedance_asset_status = patch.seedance_asset_status
+        cand.seedanceAssetStatus = patch.seedance_asset_status
+      }
+      if (patch.seedance_certified_url !== undefined) {
+        cand.seedance_certified_url = patch.seedance_certified_url
+      }
+    }
+  }
+  if (patch.seedance_asset_id !== undefined) {
+    target.seedance_asset_id = patch.seedance_asset_id
+    target.seedanceAssetId = patch.seedance_asset_id
+  }
+  if (patch.seedance_asset_status !== undefined) {
+    target.seedance_asset_status = patch.seedance_asset_status
+    target.seedanceAssetStatus = patch.seedance_asset_status
+  }
+  if (patch.seedance_asset_group_id !== undefined) {
+    item.seedance_asset_group_id = patch.seedance_asset_group_id
+    item.seedanceAssetGroupId = patch.seedance_asset_group_id
+  }
+}
+
+function applyOutfitListFromResponse(item, outfits) {
+  if (!item || !Array.isArray(outfits) || !outfits.length) return
+  const media = item.character_media || item.characterMedia
+  if (!media) return
+  const mapped = outfits.map(o => ({
+    outfit_id: o.outfit_id || o.outfitId,
+    label: o.label,
+    url: o.url,
+    candidate_count: Array.isArray(o.candidates) ? o.candidates.length : (o.candidate_count || 0),
+    seedance_asset_id: o.seedance_asset_id ?? o.seedanceAssetId ?? null,
+    seedance_asset_status: o.seedance_asset_status ?? o.seedanceAssetStatus ?? null,
+    seedance_certified_url: o.seedance_certified_url ?? o.seedanceCertifiedUrl ?? null,
+    candidates: (o.candidates || []).map(c => ({
+      id: c.id,
+      url: c.url,
+      label: c.label || '备选',
+      is_default: !!(c.is_default || c.isDefault)
+        || normalizeMediaPath(c.url) === normalizeMediaPath(o.url),
+      seedance_asset_id: c.seedance_asset_id ?? c.seedanceAssetId ?? null,
+      seedance_asset_status: c.seedance_asset_status ?? c.seedanceAssetStatus ?? null,
+      seedance_certified_url: c.seedance_certified_url ?? c.seedanceCertifiedUrl ?? null,
+    })),
+  }))
+  media.outfit_previews = mapped
+  media.outfitPreviews = mapped
+}
+
+async function certifyPortrait(item, {
+  force = false,
+  outfitId = null,
+  candidateId = null,
+  skipConfirm = false,
+} = {}) {
+  if (!skipConfirm) {
+    const tip = outfitId
+      ? '将提交该图到方舟虚拟人像审核，占用素材资产配额。确认？'
+      : '将提交角色主图到方舟审核，占用素材资产配额。确认？'
+    if (!confirm(tip)) return
+  }
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) {
+    toast.warning('未关联项目角色')
+    return
+  }
+  if (!outfitId && !assetHasPrimaryImage(item)) {
+    toast.warning('请先上传或生成角色基准图')
+    return
+  }
+  if (outfitId) {
+    const outfit = resolveCharacterOutfits(item).find(o => o.outfit_id === outfitId)
+    const candidate = candidateId
+      ? outfitCandidates(outfit).find(c => c.id === candidateId)
+      : null
+    if (candidateId && !candidate?.url) {
+      toast.warning('图片不存在')
+      return
+    }
+    if (!candidateId && !outfit?.url) {
+      toast.warning('请先上传造型图片')
+      return
+    }
+  }
+  const busyKey = portraitPendingKey(charId, outfitId, candidateId)
+  if (pendingPortraitIds.value.includes(busyKey)) return
+  pendingPortraitIds.value = [...pendingPortraitIds.value, busyKey]
+  patchAssetPortraitFields(item, { seedance_asset_status: 'processing' }, outfitId, candidateId)
+  try {
+    const res = await portraitAPI.syncAsset(charId, {
+      force,
+      ...(outfitId ? { outfit_id: outfitId } : {}),
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+    })
+    patchAssetPortraitFields(item, {
+      seedance_asset_id: res?.seedance_asset_id || null,
+      seedance_asset_group_id: res?.seedance_asset_group_id || null,
+      seedance_asset_status: res?.seedance_asset_status || 'processing',
+    }, outfitId, candidateId || res?.candidate_id)
+    applyOutfitListFromResponse(item, res?.outfits)
+    if (res?.skipped) {
+      toast.success('已在方舟素材库（跳过重复提交）')
+    } else if (res?.seedance_asset_status === 'active') {
+      toast.success('人像认证成功')
+    } else {
+      toast.success('已提交认证，审核中…')
+      startPortraitPoll(item, charId, outfitId, candidateId || res?.candidate_id)
+    }
+  } catch (e) {
+    patchAssetPortraitFields(item, { seedance_asset_status: 'failed' }, outfitId, candidateId)
+    toast.error(e?.message || '认证失败')
+  } finally {
+    pendingPortraitIds.value = pendingPortraitIds.value.filter(id => id !== busyKey)
+  }
+}
+
+async function recertifyPortrait(item, outfitId = null, candidateId = null) {
+  if (!confirm('将重新提交该图到方舟素材库（可能占用新的素材资产配额）。继续？')) return
+  await certifyPortrait(item, { force: true, outfitId, candidateId, skipConfirm: true })
+}
+
+async function cancelPortrait(item, outfitId = null, candidateId = null) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) return
+  if (!confirm('取消认证会删除方舟侧素材并腾出权益包配额。确定？')) return
+  const busyKey = portraitPendingKey(charId, outfitId, candidateId)
+  if (pendingPortraitIds.value.includes(busyKey)) return
+  pendingPortraitIds.value = [...pendingPortraitIds.value, busyKey]
+  try {
+    const res = await portraitAPI.cancelAsset(charId, {
+      ...(outfitId ? { outfit_id: outfitId } : {}),
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+    })
+    patchAssetPortraitFields(item, {
+      seedance_asset_id: null,
+      seedance_asset_group_id: res?.seedance_asset_group_id ?? null,
+      seedance_asset_status: null,
+    }, outfitId, candidateId)
+    applyOutfitListFromResponse(item, res?.outfits)
+    toast.success('已取消认证并释放配额')
+  } catch (e) {
+    toast.error(e?.message || '取消失败')
+  } finally {
+    pendingPortraitIds.value = pendingPortraitIds.value.filter(id => id !== busyKey)
+  }
+}
+
+async function refreshPortraitStatus(item, outfitId = null, candidateId = null) {
+  const charId = resolveLinkedCharacterId(item)
+  if (!charId) return
+  try {
+    const res = await portraitAPI.assetStatus(charId, {
+      ...(outfitId ? { outfit_id: outfitId } : {}),
+      ...(candidateId ? { candidate_id: candidateId } : {}),
+    })
+    patchAssetPortraitFields(item, {
+      seedance_asset_id: res?.seedance_asset_id || null,
+      seedance_asset_status: res?.seedance_asset_status || null,
+    }, outfitId, candidateId)
+    applyOutfitListFromResponse(item, res?.outfits)
+    if (res?.seedance_asset_status === 'active') toast.success('认证已通过')
+    else if (res?.seedance_asset_status === 'failed') toast.error(res?.failed_reason || '认证未通过')
+    else toast.message('仍在审核中')
+  } catch (e) {
+    toast.error(e?.message || '刷新失败')
+  }
+}
+
+function startPortraitPoll(item, charId, outfitId = null, candidateId = null) {
+  const key = portraitPendingKey(charId, outfitId, candidateId)
+  if (portraitPollTimers.has(key)) return
+  let tries = 0
+  const timer = setInterval(async () => {
+    tries += 1
+    try {
+      const res = await portraitAPI.assetStatus(charId, {
+        ...(outfitId ? { outfit_id: outfitId } : {}),
+        ...(candidateId ? { candidate_id: candidateId } : {}),
+      })
+      patchAssetPortraitFields(item, {
+        seedance_asset_id: res?.seedance_asset_id || null,
+        seedance_asset_status: res?.seedance_asset_status || null,
+      }, outfitId, candidateId)
+      applyOutfitListFromResponse(item, res?.outfits)
+      if (res?.seedance_asset_status === 'active') {
+        clearInterval(timer)
+        portraitPollTimers.delete(key)
+        toast.success('人像认证成功')
+      } else if (res?.seedance_asset_status === 'failed' || tries >= 40) {
+        clearInterval(timer)
+        portraitPollTimers.delete(key)
+        if (res?.seedance_asset_status === 'failed') {
+          toast.error(res?.failed_reason || '人像认证失败')
+        }
+      }
+    } catch {
+      if (tries >= 40) {
+        clearInterval(timer)
+        portraitPollTimers.delete(key)
+      }
+    }
+  }, 4000)
+  portraitPollTimers.set(key, timer)
 }
 
 function resolveCharacterPrimaryPath(item) {
@@ -684,6 +1271,8 @@ function resolveCharacterMedia(item) {
       ...media,
       preview_images: previewImages,
       outfit_previews: resolveOutfitPreviewsFromMedia(media),
+      seedance_asset_id: item?.seedance_asset_id || item?.seedanceAssetId || media.seedance_asset_id,
+      seedance_asset_status: item?.seedance_asset_status || item?.seedanceAssetStatus || media.seedance_asset_status,
     }
   }
   const url = item?.url || item?.local_path || item?.localPath
@@ -1012,6 +1601,11 @@ onMounted(() => {
     loadAssets({ silent: assets.value.length > 0 }),
   ])
 })
+
+onBeforeUnmount(() => {
+  for (const timer of portraitPollTimers.values()) clearInterval(timer)
+  portraitPollTimers.clear()
+})
 </script>
 
 <style scoped>
@@ -1127,9 +1721,22 @@ onMounted(() => {
   color: #fff;
 }
 .asset-body { padding: 10px; }
+.asset-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .asset-name { font-size: 13px; font-weight: 600; }
+.asset-portrait-tag { font-size: 10px; padding: 1px 6px; }
 .asset-meta { font-size: 11px; margin-top: 2px; }
 .asset-outfit-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.asset-primary-portrait-row {
+  margin-bottom: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border);
+  opacity: 0.92;
+}
 .asset-outfit-section-head {
   display: flex;
   align-items: center;
@@ -1156,9 +1763,17 @@ onMounted(() => {
 .asset-outfit-list { display: flex; flex-direction: column; gap: 4px; }
 .asset-outfit-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 6px;
   font-size: 11px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.asset-outfit-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .asset-outfit-name {
@@ -1169,6 +1784,68 @@ onMounted(() => {
   white-space: nowrap;
 }
 .asset-outfit-count { flex-shrink: 0; font-size: 10px; }
+.asset-outfit-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+.asset-outfit-candidate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 72px;
+}
+.asset-outfit-candidate-thumb {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-elevated, #111);
+  cursor: pointer;
+}
+.asset-outfit-candidate.is-certified .asset-outfit-candidate-thumb {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.35);
+}
+.asset-outfit-candidate-badge.is-processing {
+  background: rgba(180, 120, 20, 0.92);
+}
+.asset-outfit-default-label {
+  display: none;
+}
+.asset-outfit-candidate-thumb :deep(.grid-media-image),
+.asset-outfit-candidate-thumb :deep(img) {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.asset-outfit-candidate-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(15, 118, 110, 0.92);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.3;
+}
+.asset-outfit-set-default {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 10px;
+}
+.asset-outfit-default-label {
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+}
 .asset-outfit-upload-btn {
   flex-shrink: 0;
   cursor: pointer;

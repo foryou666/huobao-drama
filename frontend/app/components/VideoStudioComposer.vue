@@ -1,5 +1,9 @@
 <template>
-  <div class="studio-composer">
+  <div
+    ref="composerRootEl"
+    class="studio-composer"
+    :class="{ 'is-scroll-compact': scrollCompactActive }"
+  >
     <div class="composer-shell card">
       <div v-if="dramaLinked" class="composer-top-bar">
         <div class="composer-top-main">
@@ -64,7 +68,7 @@
             </button>
           </div>
         </div>
-        <span class="dim composer-project-hint">在弹窗中按分组选择参考图；上方可拖动调整顺序；在提示词里用 <kbd>@</kbd> 插入 <code>@图片N</code> / <code>@视频N</code> / <code>@音频N</code>（与即梦一致），上传素材不会再自动改写文案</span>
+        <span v-show="!scrollCompactActive" class="dim composer-project-hint">在弹窗中按分组选择参考图；上方可拖动调整顺序；在提示词里用 <kbd>@</kbd> 插入 <code>@图片N</code> / <code>@视频N</code> / <code>@音频N</code>，会原样带给上游；上传素材不会再自动改写文案</span>
       </div>
 
       <div class="composer-main">
@@ -123,6 +127,7 @@
               >
                 ×
               </button>
+              <span v-if="item.certified" class="composer-ref-card-cert" title="方舟虚拟人像已认证，通道2提交时使用认证资产">已认证</span>
               <span class="composer-ref-card-tag">{{ item.tagLabel }}</span>
             </div>
             <div
@@ -138,7 +143,7 @@
               <span class="composer-ref-card-tag">上传中</span>
             </div>
             <label
-              v-if="uploadedRefs.length + pendingUploads.length < maxImages"
+              v-if="stripImageCount + pendingUploads.length < maxImages"
               class="composer-ref-add-card"
               :title="videoRefUploadEnabled ? '上传参考图或视频' : '上传参考图'"
               @click.stop
@@ -154,6 +159,7 @@
               <span class="composer-ref-add-label">参考内容</span>
             </label>
             <span v-if="jimengLikeMode" class="composer-ref-hint dim">{{ jimengRefHint }}</span>
+            <span v-if="officialMode && officialRefHint" class="composer-ref-hint dim">{{ officialRefHint }}</span>
             <span v-if="trainingMode" class="composer-ref-hint dim">{{ trainingRefHint }}</span>
           </div>
 
@@ -165,6 +171,11 @@
               v-for="(video, vIndex) in uploadedVideoRefs"
               :key="video.path"
               class="composer-video-ref-chip"
+              role="button"
+              tabindex="0"
+              title="点击预览"
+              @click="openVideoPreview(video)"
+              @keydown.enter.prevent="openVideoPreview(video)"
             >
               <span class="composer-video-ref-icon" aria-hidden="true">▶</span>
               <span class="composer-video-ref-label">{{ video.label || (videoRefLabelKind === 'material' ? `参考素材${vIndex + 1}` : `参考视频${vIndex + 1}`) }}</span>
@@ -172,7 +183,7 @@
                 type="button"
                 class="composer-video-ref-remove"
                 title="移除"
-                @click="removeVideoRef(vIndex)"
+                @click.stop="removeVideoRef(vIndex)"
               >
                 ×
               </button>
@@ -193,7 +204,7 @@
             v-model="prompt"
             class="composer-input"
             :class="{ 'composer-input--with-refs': showRefStrip }"
-            :rows="isPromptComposerExpanded ? 6 : 2"
+            :rows="promptInputRows"
             :placeholder="mentionableRefItems.length ? '描述视频内容；输入 @ 可关联参考图/视频/音频…' : (dramaLinked ? '描述视频内容…' : '描述你想生成的视频画面、动作与镜头…')"
             @focus="onPromptFocus"
             @blur="onPromptBlur"
@@ -241,7 +252,7 @@
             </div>
 
             <div v-if="jimengLikeMode && jimengLikeModels.length" class="composer-pills composer-pills-official">
-              <span v-if="jimengMode && !xyqMode" class="composer-option-label">即梦模型</span>
+              <span v-if="jimengMode && !xyqMode && !cozeMode && !funshionMode && !xingyuemengMode" class="composer-option-label">即梦模型</span>
               <button
                 v-for="model in jimengLikeModels"
                 :key="model.id"
@@ -250,7 +261,7 @@
                 :class="{ active: fixedModel === model.id }"
                 @click="selectOfficialModel(model.id)"
               >
-                {{ xyqMode ? model.label : toSeedanceDisplayLabel(model.label) }}
+                {{ (xyqMode || cozeMode || funshionMode || xingyuemengMode) ? model.label : toSeedanceDisplayLabel(model.label) }}
               </button>
             </div>
 
@@ -268,7 +279,7 @@
               </button>
             </div>
 
-            <div v-if="officialMode && officialModels.length" class="composer-pills composer-pills-official">
+            <div v-if="officialMode && officialModels.length > 1" class="composer-pills composer-pills-official">
               <span class="composer-option-label">官方模型</span>
               <button
                 v-for="model in officialModels"
@@ -282,7 +293,36 @@
               </button>
             </div>
 
-            <div v-if="!officialMode && chengmengModels.length" class="composer-pills composer-pills-official">
+            <div v-if="officialMode" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">分辨率</span>
+              <button
+                v-for="item in effectiveOfficialResolutionChoices"
+                :key="item.id"
+                type="button"
+                class="composer-pill"
+                :class="{ active: resolution === item.id }"
+                :title="item.credit_cost_sample != null ? `约 ${item.credit_cost_sample} 积分` : ''"
+                @click="resolution = item.id"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+
+            <div v-if="funshionMode || xingyuemengMode" class="composer-pills composer-pills-official">
+              <span class="composer-option-label">清晰度</span>
+              <button
+                v-for="item in webChannelResolutionChoices"
+                :key="item.id"
+                type="button"
+                class="composer-pill"
+                :class="{ active: resolution === item.id }"
+                @click="setWebChannelResolution(item.id)"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+
+            <div v-if="!officialMode && chengmengModels.length && !hideChengmengModelSelect" class="composer-pills composer-pills-official">
               <span class="composer-option-label">模型</span>
               <button
                 v-for="model in chengmengModels"
@@ -412,11 +452,14 @@
           <button
             type="button"
             class="composer-submit"
-            :disabled="generating || !prompt.trim() || ((officialMode || grokMode || jimengLikeMode || trainingMode || aistarslabMode) && !fixedModel)"
+            :disabled="submitBusy || !prompt.trim() || ((officialMode || grokMode || jimengLikeMode || trainingMode || aistarslabMode || aigcccMode) && !fixedModel)"
             @click="submit"
           >
-            <span>{{ generating ? '生成中…' : (trainingMode ? '培训' : (xyqMode ? 'S通道5' : (jimengMode ? '通道4' : (grokMode ? 'Grok 生成' : (aistarslabMode ? '生成视频' : (officialMode ? '官方生成' : '生成视频')))))) }}</span>
-            <span v-if="displayCreditHint && !generating" class="composer-submit-cost">{{ displayCreditHint }}</span>
+            <span>{{ submitBusy ? '生成中…' : composerSubmitLabel }}</span>
+            <span v-if="creditHintParts && !submitBusy" class="composer-submit-cost">
+              <s v-if="creditHintParts.list" class="composer-submit-cost-list">{{ creditHintParts.list }}</s>
+              <span>{{ creditHintParts.text }}</span>
+            </span>
           </button>
         </div>
       </div>
@@ -442,6 +485,7 @@
       :open="voicePickerOpen"
       :voices="voiceAssets"
       :selected="binding.voice_refs"
+      :max="maxVoiceRefs"
       @close="voicePickerOpen = false"
       @confirm="onVoicePickerConfirm"
     />
@@ -482,13 +526,35 @@
         </div>
       </div>
     </div>
+
+    <div
+      v-if="videoPreview.open && videoPreview.src"
+      class="composer-image-preview"
+      @click.self="closeVideoPreview"
+    >
+      <div class="composer-image-preview-dialog card composer-video-preview-dialog">
+        <div class="composer-image-preview-head">
+          <span class="composer-image-preview-title">{{ videoPreview.title || '视频预览' }}</span>
+          <button type="button" class="btn btn-ghost btn-sm" @click="closeVideoPreview">关闭</button>
+        </div>
+        <div class="composer-image-preview-body composer-video-preview-body">
+          <video
+            :src="videoPreview.src"
+            controls
+            autoplay
+            playsinline
+            preload="metadata"
+          />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { toast } from 'vue-sonner'
-import { dramaAPI, uploadAPI, assetAPI } from '~/composables/useApi'
+import { dramaAPI, uploadAPI, assetAPI, videoAPI } from '~/composables/useApi'
 import { mediaDisplayUrl, mediaGridUrl, normalizeMediaPath, prefetchMediaUrls } from '~/utils/media-url.js'
 import { handlePasteImageUpload } from '~/utils/clipboard-image.js'
 import { startReferenceImageUpload } from '~/utils/reference-image-upload.js'
@@ -513,13 +579,17 @@ import {
   replaceMentionWithImageLabel,
   replaceMentionWithVideoRef,
   restoreStudioBindingsFromVideoItem,
+  restoreVoiceRefsFromVideoItem,
+  remapPromptImageIndicesByKeys,
   sceneDisplayLabel,
   toggleCharacterBinding,
   unbindCharacter,
+  unbindCharacterImage,
   unbindScene,
   unbindProp,
   validateStudioPrompt,
 } from '~/utils/studio-video-refs.js'
+import { mergeCharacterImageRefs } from '~/utils/character-image-variants.js'
 import { parseVoiceRefs, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
 import { formatRefLimitsHint, JIMENG_REF_LIMITS, TRAINING_REF_LIMITS, CHENGMENT_REF_LIMITS } from '~/constants/video-channels.js'
 import {
@@ -530,6 +600,7 @@ import {
 import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import VoiceLibraryPanel from '~/components/VoiceLibraryPanel.vue'
 import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
+import { validateSeedanceReferenceImageDimensions } from '~/utils/seedance-ref-image.js'
 
 const props = defineProps({
   generating: { type: Boolean, default: false },
@@ -543,24 +614,48 @@ const props = defineProps({
   jimengMode: { type: Boolean, default: false },
   /** 小云雀视频页：xyq.jianying.com Access Key API */
   xyqMode: { type: Boolean, default: false },
+  /** 扣子网页通道：Cookie / PAT → Coze Ark Seedance */
+  cozeMode: { type: Boolean, default: false },
+  funshionMode: { type: Boolean, default: false },
+  /** 星月梦视频页：xingyuemeng.com Bearer Token API */
+  xingyuemengMode: { type: Boolean, default: false },
   /** 豆包培训页：走 doubao.com Cookie API（通道5） */
   trainingMode: { type: Boolean, default: false },
   /** AIStartLab 视频页：走 OpenAPI Seedance 2.0 */
   aistarslabMode: { type: Boolean, default: false },
+  aigcccMode: { type: Boolean, default: false },
   /** 官方页可选模型列表 */
   officialModels: { type: Array, default: () => [] },
+  /** 通道2 分辨率选项（固定 480p / 720p） */
+  officialResolutionChoices: { type: Array, default: () => [] },
+  /** S通道8 清晰度选项（默认 720p） */
+  funshionResolutions: { type: Array, default: () => ['480p', '720p', '1080p'] },
+  funshionDefaultResolution: { type: String, default: '480p' },
+  /** S通道9 清晰度选项（默认 720p） */
+  xingyuemengResolutions: { type: Array, default: () => ['480p', '720p'] },
+  xingyuemengDefaultResolution: { type: String, default: '720p' },
   /** Grok 页可选模型列表 */
   grokModels: { type: Array, default: () => [] },
   /** 即梦页可选模型列表 */
   jimengModels: { type: Array, default: () => [] },
   /** 小云雀页可选模型列表 */
   xyqModels: { type: Array, default: () => [] },
+  /** 扣子页可选模型列表 */
+  cozeModels: { type: Array, default: () => [] },
+  /** S通道8 橙星页可选模型列表 */
+  funshionModels: { type: Array, default: () => [] },
+  /** S通道9 星月梦页可选模型列表 */
+  xingyuemengModels: { type: Array, default: () => [] },
   /** 培训页可选模型列表 */
   trainingModels: { type: Array, default: () => [] },
   /** 橙盟视频页可选模型列表 */
   chengmengModels: { type: Array, default: () => [] },
+  /** 线路选择已移到页面顶部时隐藏输入框内模型 pill */
+  hideChengmengModelSelect: { type: Boolean, default: false },
   /** AIStartLab 页可选模型列表 */
   aistarslabModels: { type: Array, default: () => [] },
+  /** 覆盖参考素材上限（如通道3按线路动态限制 { images, videos, audios }） */
+  refLimitsOverride: { type: Object, default: null },
   /** 固定官方 Seedance 配置 ID（视频生成官页面） */
   fixedConfigId: { type: [Number, null], default: null },
   /** 固定 Seedance 模型 ID */
@@ -571,6 +666,10 @@ const props = defineProps({
   creditCostHint: { type: String, default: '' },
   /** 按秒计费单价（官方 Seedance 页） */
   creditCostPerSecond: { type: Number, default: null },
+  /** 按秒计费划线标价（如通道4 Fast 促销前） */
+  creditCostPerSecondList: { type: Number, default: null },
+  /** 按秒计费单笔最低积分（通道4 VIP 短时长） */
+  creditCostMin: { type: Number, default: null },
   /** 按次计费单价（Grok 视频页） */
   creditCostFlat: { type: Number, default: null },
   /** 含参考视频时的积分倍率（如 1.5） */
@@ -587,31 +686,92 @@ const props = defineProps({
   persistDraft: { type: Boolean, default: true },
   /** 是否显示参考图/首尾帧切换（橙盟通道不支持首尾帧） */
   showRefModeToggle: { type: Boolean, default: true },
-  /** 是否显示音色选择（Grok / S通道5 不支持音色） */
+  /** 是否显示音色选择（Grok / 培训通道不支持音色） */
   showVoicePicker: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['generate', 'update:fixedModel'])
 
-const voicePickerEnabled = computed(() => props.showVoicePicker && !props.xyqMode && !props.grokMode && !props.trainingMode)
+const voicePickerEnabled = computed(() => props.showVoicePicker && !props.grokMode && !props.trainingMode)
 
-const jimengLikeMode = computed(() => props.jimengMode || props.xyqMode)
-const jimengLikeModels = computed(() => (props.xyqMode ? props.xyqModels : props.jimengModels))
-const xyqRefLimits = { images: 6, audios: 0, videos: 1 }
-const activeJimengLikeRefLimits = computed(() => (props.xyqMode ? xyqRefLimits : JIMENG_REF_LIMITS))
+const jimengLikeMode = computed(() => props.jimengMode || props.xyqMode || props.cozeMode || props.funshionMode || props.xingyuemengMode)
+const composerSubmitLabel = computed(() => {
+  if (props.trainingMode) return '培训'
+  if (props.xingyuemengMode) return 'S通道9'
+  if (props.funshionMode) return '通道8(梦工厂专用)'
+  if (props.cozeMode) return 'S通道7'
+  if (props.xyqMode) return 'S通道5'
+  if (props.jimengMode) return '通道4'
+  if (props.grokMode) return 'Grok 生成'
+  if (props.aigcccMode) return 'S通道6'
+  if (props.aistarslabMode) return '生成视频'
+  if (props.officialMode) return '官方生成'
+  return '生成视频'
+})
+const jimengLikeModels = computed(() => {
+  if (props.xingyuemengMode) return props.xingyuemengModels
+  if (props.funshionMode) return props.funshionModels
+  if (props.cozeMode) return props.cozeModels
+  if (props.xyqMode) return props.xyqModels
+  return props.jimengModels
+})
+const xyqRefLimits = { images: 9, audios: 3, videos: 3 }
+const activeOverrideRefLimits = computed(() => {
+  const override = props.refLimitsOverride
+  if (!override || typeof override !== 'object') return null
+  const maxTotalRaw = override.max_total ?? override.maxTotal
+  const images = Number(override.images)
+  const audios = Number(override.audios)
+  const videos = Number(override.videos)
+  if (![images, audios, videos].some(n => Number.isFinite(n) && n >= 0)) return null
+  return {
+    images: Number.isFinite(images) && images >= 0 ? images : xyqRefLimits.images,
+    audios: Number.isFinite(audios) && audios >= 0 ? audios : xyqRefLimits.audios,
+    videos: Number.isFinite(videos) && videos >= 0 ? videos : xyqRefLimits.videos,
+    max_total: Number.isFinite(Number(maxTotalRaw)) ? Number(maxTotalRaw) : null,
+  }
+})
+const activeJimengLikeRefLimits = computed(() => {
+  const override = props.refLimitsOverride
+  if (override && Number.isFinite(Number(override.images))) {
+    const maxTotalRaw = override.max_total ?? override.maxTotal
+    return {
+      images: Number(override.images),
+      audios: Number.isFinite(Number(override.audios)) ? Number(override.audios) : xyqRefLimits.audios,
+      videos: Number.isFinite(Number(override.videos)) ? Number(override.videos) : xyqRefLimits.videos,
+      max_total: Number.isFinite(Number(maxTotalRaw)) ? Number(maxTotalRaw) : null,
+    }
+  }
+  if (props.xyqMode || props.cozeMode || props.funshionMode || props.xingyuemengMode) return xyqRefLimits
+  return JIMENG_REF_LIMITS
+})
 
 const maxImages = computed(() => {
+  const overrideLimits = activeOverrideRefLimits.value
+  if (overrideLimits && (props.officialMode || props.aistarslabMode || props.aigcccMode)) {
+    return overrideLimits.images
+  }
+  const override = Number(props.refLimitsOverride?.images)
+  if (Number.isFinite(override) && override >= 0) return override
   if (props.grokMode) return 6
   if (props.trainingMode) return TRAINING_REF_LIMITS.images
   if (jimengLikeMode.value) return activeJimengLikeRefLimits.value.images
   if (isChengmengStudio.value) return CHENGMENT_REF_LIMITS.images
   return 9
 })
-const jimengRefHint = computed(() => (
-  jimengLikeMode.value
-    ? `参考上限：最多 ${activeJimengLikeRefLimits.value.images} 图 ${activeJimengLikeRefLimits.value.audios} 音 ${activeJimengLikeRefLimits.value.videos} 视频`
-    : ''
-))
+const jimengRefHint = computed(() => {
+  if (!jimengLikeMode.value) return ''
+  const limits = activeJimengLikeRefLimits.value
+  const base = `参考上限：最多 ${limits.images} 图 ${limits.audios} 音 ${limits.videos} 视频`
+  return limits.max_total != null ? `${base}（合计≤${limits.max_total}）` : base
+})
+const officialRefHint = computed(() => {
+  if (!props.officialMode) return ''
+  const limits = activeOverrideRefLimits.value
+  if (!limits) return ''
+  const base = `参考上限：最多 ${limits.images} 图 ${limits.audios} 音 ${limits.videos} 视频`
+  return limits.max_total != null ? `${base}（合计≤${limits.max_total}）` : base
+})
 const trainingRefHint = computed(() => (
   props.trainingMode
     ? `培训通道：可选 ${TRAINING_REF_LIMITS.images} 张参考图，生成后自动叠加培训标识`
@@ -624,11 +784,38 @@ const isChengmengStudio = computed(() =>
   && !props.grokMode
   && !jimengLikeMode.value
   && !props.trainingMode
-  && !props.aistarslabMode,
+  && !props.aistarslabMode
+  && !props.aigcccMode,
 )
-const videoRefUploadEnabled = computed(() => props.aistarslabMode || isChengmengStudio.value || jimengLikeMode.value)
+const videoRefUploadEnabled = computed(() =>
+  props.officialMode
+  || props.aistarslabMode
+  || props.aigcccMode
+  || isChengmengStudio.value
+  || jimengLikeMode.value,
+)
 const videoRefLabelKind = computed(() => (isChengmengStudio.value ? 'material' : 'video'))
-const maxVideoRefs = computed(() => (videoRefUploadEnabled.value ? MAX_VIDEO_REFS : 0))
+const maxVideoRefs = computed(() => {
+  if (!videoRefUploadEnabled.value) return 0
+  const overrideLimits = activeOverrideRefLimits.value
+  if (overrideLimits && (props.officialMode || props.aistarslabMode || props.aigcccMode)) {
+    return overrideLimits.videos
+  }
+  const override = Number(props.refLimitsOverride?.videos)
+  if (Number.isFinite(override) && override >= 0) return override
+  if (jimengLikeMode.value) return activeJimengLikeRefLimits.value.videos
+  return MAX_VIDEO_REFS
+})
+const maxVoiceRefs = computed(() => {
+  const overrideLimits = activeOverrideRefLimits.value
+  if (overrideLimits && (props.officialMode || props.aistarslabMode || props.aigcccMode)) {
+    return overrideLimits.audios
+  }
+  const override = Number(props.refLimitsOverride?.audios)
+  if (Number.isFinite(override) && override >= 0) return override
+  if (jimengLikeMode.value) return activeJimengLikeRefLimits.value.audios
+  return MAX_VOICE_REFS
+})
 const refContentAccept = computed(() => (
   videoRefUploadEnabled.value
     ? 'image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v'
@@ -637,11 +824,14 @@ const refContentAccept = computed(() => (
 const defaultAspectRatios = ['9:16', '16:9']
 const grokAspectRatios = ['2:3', '3:2', '1:1']
 const jimengAspectRatios = ['16:9', '9:16']
+const cozeAspectRatios = ['16:9', '9:16', '1:1']
 const trainingAspectRatios = ['9:16', '16:9']
 const trainingDurations = [5, 10]
 const durations = [10, 15]
 
 const prompt = ref('')
+const composerSubmitting = ref(false)
+const submitBusy = computed(() => props.generating || composerSubmitting.value)
 const uploadedRefs = ref([])
 const pendingUploads = ref([])
 const pendingVideoUploads = ref(0)
@@ -664,10 +854,35 @@ watch(
 )
 const aspectRatio = ref('9:16')
 const duration = ref(15)
+const resolution = ref('480p')
+
+const webChannelResolutionChoices = computed(() => {
+  const sourceList = props.xingyuemengMode
+    ? props.xingyuemengResolutions
+    : props.funshionResolutions
+  const list = Array.isArray(sourceList) && sourceList.length
+    ? sourceList
+    : (props.xingyuemengMode ? ['480p', '720p'] : ['480p', '720p'])
+  const normalized = [...new Set(list.map(id => String(id)))]
+  if (normalized.length < 2) {
+    for (const id of ['480p', '720p']) {
+      if (!normalized.includes(id)) normalized.push(id)
+    }
+  }
+  return normalized.map(id => ({ id, label: id }))
+})
+
+function setWebChannelResolution(id) {
+  const next = String(id || '').trim()
+  if (!next) return
+  resolution.value = next
+}
 
 const effectiveAspectRatios = computed(() => {
   if (props.grokMode) return grokAspectRatios
   if (props.trainingMode) return trainingAspectRatios
+  if (props.cozeMode) return cozeAspectRatios
+  if (props.funshionMode || props.xingyuemengMode) return cozeAspectRatios
   if (jimengLikeMode.value) return jimengAspectRatios
   return defaultAspectRatios
 })
@@ -686,6 +901,70 @@ const selectedTrainingModel = computed(() => {
   if (!props.trainingMode || !props.fixedModel) return null
   return props.trainingModels.find(item => item.id === props.fixedModel) || null
 })
+
+const selectedOfficialModel = computed(() => {
+  if (!props.officialMode || !props.fixedModel) return null
+  return props.officialModels.find(item => item.id === props.fixedModel) || null
+})
+
+/** 通道2 固定仅 480p / 720p，不依赖接口字段 */
+const OFFICIAL_RESOLUTION_CHOICES = [
+  { id: '480p', label: '480p' },
+  { id: '720p', label: '720p' },
+]
+
+const officialResolutionOptions = computed(() => {
+  if (!props.officialMode) return []
+  return OFFICIAL_RESOLUTION_CHOICES.map(item => item.id)
+})
+
+const effectiveOfficialResolutionChoices = computed(() => {
+  if (!props.officialMode) return []
+  const matrix = selectedOfficialModel.value?.credit_costs
+  return OFFICIAL_RESOLUTION_CHOICES.map((item) => {
+    const sampleSec = Number(duration.value) || 5
+    const sample = matrix?.[item.id]?.[sampleSec] ?? matrix?.[item.id]?.[String(sampleSec)]
+    return {
+      ...item,
+      credit_cost_sample: sample != null && Number.isFinite(Number(sample)) ? Number(sample) : null,
+    }
+  })
+})
+
+watch(
+  () => [props.officialMode, props.fixedModel],
+  () => {
+    if (!props.officialMode) return
+    const allowed = OFFICIAL_RESOLUTION_CHOICES.map(item => item.id)
+    if (!allowed.includes(resolution.value)) {
+      resolution.value = '480p'
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [
+    props.funshionMode,
+    props.xingyuemengMode,
+    props.funshionDefaultResolution,
+    props.xingyuemengDefaultResolution,
+    props.funshionResolutions,
+    props.xingyuemengResolutions,
+  ],
+  () => {
+    if (!props.funshionMode && !props.xingyuemengMode) return
+    const allowed = webChannelResolutionChoices.value.map(item => item.id)
+    const preferred = String(
+      props.xingyuemengMode
+        ? (props.xingyuemengDefaultResolution || '720p')
+        : (props.funshionDefaultResolution || '480p'),
+    )
+    if (allowed.includes(resolution.value)) return
+    resolution.value = allowed.includes(preferred) ? preferred : (allowed[0] || preferred)
+  },
+  { immediate: true },
+)
 
 watch(
   () => jimengLikeMode.value,
@@ -839,11 +1118,100 @@ const displayCreditHint = computed(() => {
     }
     return `${cost} 积分/次`
   }
-  const perSecond = props.creditCostPerSecond
+  if (props.officialMode) {
+    const model = selectedOfficialModel.value
+    const matrix = model?.credit_costs
+    const res = String(resolution.value || '')
+    const secs = Number(duration.value)
+    const cost = matrix?.[res]?.[secs] ?? matrix?.[res]?.[String(secs)]
+    if (cost != null && Number.isFinite(Number(cost))) {
+      return `${Number(cost)} 积分（${secs}s · ${res}）`
+    }
+  }
+  const perSecondBase = props.creditCostPerSecond
+  let perSecond = perSecondBase
+  if (props.officialMode && effectiveOfficialResolutionChoices.value.length) {
+    const choice = effectiveOfficialResolutionChoices.value.find(item => item.id === resolution.value)
+    if (choice?.credit_cost_per_second != null && Number.isFinite(Number(choice.credit_cost_per_second))) {
+      perSecond = Number(choice.credit_cost_per_second)
+    } else if (selectedOfficialModel.value?.credit_cost_per_second != null) {
+      perSecond = Number(selectedOfficialModel.value.credit_cost_per_second)
+    }
+  }
   if (perSecond != null && Number.isFinite(Number(perSecond))) {
-    return `${Number(perSecond)} 积分/s`
+    const rate = Number(perSecond)
+    const secs = Number(duration.value)
+    const mult = Number(props.referenceVideoMultiplier)
+    const modelId = String(props.fixedModel || '')
+    const seedance25RefDiscount = jimengLikeMode.value
+      && modelId.includes('seedance-2.5')
+      && uploadedVideoRefs.value.length > 0
+      && Number.isFinite(mult)
+      && mult > 0
+      && mult < 1
+    const jimengVipRefBump = jimengLikeMode.value
+      && modelId.includes('seedance-2.0')
+      && !modelId.includes('fast')
+      && !modelId.includes('2.5')
+      && uploadedVideoRefs.value.length > 0
+      && Number.isFinite(mult)
+      && mult > 1
+    const aistarslabRefBump = props.aistarslabMode
+      && uploadedVideoRefs.value.length > 0
+      && Number.isFinite(mult)
+      && mult > 1
+    const refMult = seedance25RefDiscount || jimengVipRefBump || aistarslabRefBump ? mult : 1
+    if (Number.isFinite(secs) && secs > 0) {
+      const total = Math.max(1, Math.round(rate * secs * refMult))
+      if (refMult !== 1) {
+        const pct = Math.round(refMult * 100)
+        if (refMult < 1) {
+          return `${total} 积分（${rate}×${secs}s · 参考视频${pct}%）`
+        }
+        const withRefRate = Math.round(rate * refMult)
+        return jimengVipRefBump
+          ? `${total} 积分（${withRefRate}×${secs}s · 含参考视频）`
+          : `${total} 积分（${rate}×${secs}s×${refMult}）`
+      }
+      return `${total} 积分（${rate}×${secs}s）`
+    }
+    return `${rate} 积分/秒`
+  }
+  if (props.xingyuemengMode) {
+    const model = selectedJimengModel.value
+    const matrix = model?.credit_costs
+    const res = String(resolution.value || '')
+    const secs = Number(duration.value)
+    const cost = matrix?.[res]?.[secs] ?? matrix?.[res]?.[String(secs)]
+    if (cost != null && Number.isFinite(Number(cost))) {
+      return `${Number(cost)} 积分（${secs}s · ${res}）`
+    }
   }
   return props.creditCostHint
+})
+
+/** 生成按钮积分展示：支持划线标价（如通道4 Fast 8折） */
+const creditHintParts = computed(() => {
+  const text = displayCreditHint.value
+  if (!text) return null
+  const listRate = Number(props.creditCostPerSecondList)
+  const saleRate = Number(props.creditCostPerSecond)
+  if (!(Number.isFinite(listRate) && listRate > 0 && Number.isFinite(saleRate) && listRate > saleRate)) {
+    return { list: null, text }
+  }
+  // 仅按秒计费文案带划线；flat / 矩阵价不走 list 单价
+  if (props.creditCostFlat != null && Number.isFinite(Number(props.creditCostFlat))) {
+    return { list: null, text }
+  }
+  const secs = Number(duration.value)
+  if (Number.isFinite(secs) && secs > 0 && String(text).includes('积分（')) {
+    const listTotal = Math.max(1, Math.round(listRate * secs))
+    return { list: String(listTotal), text }
+  }
+  if (String(text).includes('积分/秒')) {
+    return { list: String(Math.round(listRate)), text }
+  }
+  return { list: null, text }
 })
 const dramaId = ref('')
 const promptEl = ref(null)
@@ -851,6 +1219,7 @@ const mentionOpen = ref(false)
 const mentionQuery = ref('')
 const mentionStart = ref(0)
 const imagePreview = ref({ open: false, src: '', title: '' })
+const videoPreview = ref({ open: false, src: '', title: '' })
 const entityPickerOpen = ref(false)
 const entityPickerMode = ref('character')
 const referencePickerOpen = ref(false)
@@ -861,13 +1230,30 @@ const refDragIndex = ref(-1)
 const refDropIndex = ref(-1)
 const promptFocused = ref(false)
 const draftReady = ref(false)
+const composerRootEl = ref(null)
+const scrollCompact = ref(false)
 let persistDraftTimer = null
+let feedScrollEl = null
+
+const SCROLL_COMPACT_ON = 48
+const SCROLL_COMPACT_OFF = 10
 
 const dramaLinked = computed(() => !!dramaId.value)
 
-const isPromptComposerExpanded = computed(() =>
-  promptFocused.value || !!prompt.value.trim() || mentionOpen.value,
+const scrollCompactActive = computed(() =>
+  scrollCompact.value && !promptFocused.value && !mentionOpen.value,
 )
+
+const isPromptComposerExpanded = computed(() =>
+  promptFocused.value
+  || mentionOpen.value
+  || (!scrollCompactActive.value && !!prompt.value.trim()),
+)
+
+const promptInputRows = computed(() => {
+  if (scrollCompactActive.value) return 2
+  return isPromptComposerExpanded.value ? 6 : 2
+})
 
 const boundCharacters = computed(() =>
   projectChars.value.filter(char => (binding.character_ids || []).includes(char.id)),
@@ -888,7 +1274,7 @@ const boundProps = computed(() =>
 
 const boundPropCount = computed(() => boundProps.value.length)
 
-const boundVoices = computed(() => parseVoiceRefs(binding.voice_refs))
+const boundVoices = computed(() => parseVoiceRefs(binding.voice_refs, maxVoiceRefs.value))
 
 const boundVoiceCount = computed(() => boundVoices.value.length)
 
@@ -901,6 +1287,11 @@ const visualRefItems = computed(() =>
     uploadedRefs.value,
     gridUrl,
   ),
+)
+
+/** 条带上已就绪的参考图张数（角色/场景/道具/上传合计），用于 30 图等上限 */
+const stripImageCount = computed(() =>
+  visualRefItems.value.filter(item => item.path && !item.missing).length,
 )
 
 const showRefStrip = computed(() =>
@@ -934,11 +1325,23 @@ const mentionExtraItems = computed(() => {
   return [...videos, ...audios]
 })
 
-const mentionOptions = computed(() => buildMentionOptions(
-  visualRefItems.value.filter(item => item.path && !item.missing),
-  mentionQuery.value,
-  mentionExtraItems.value,
-))
+const mentionOptions = computed(() => {
+  const limits = jimengLikeMode.value
+    ? activeJimengLikeRefLimits.value
+    : (props.officialMode ? activeOverrideRefLimits.value : null)
+  const typeSum = limits
+    ? Number(limits.images || 0) + Number(limits.videos || 0) + Number(limits.audios || 0)
+    : 0
+  const mentionCap = (jimengLikeMode.value || (props.officialMode && limits))
+    ? (limits.max_total ?? (typeSum > 0 ? typeSum : 50))
+    : undefined
+  return buildMentionOptions(
+    visualRefItems.value.filter(item => item.path && !item.missing),
+    mentionQuery.value,
+    mentionExtraItems.value,
+    mentionCap,
+  )
+})
 
 function mentionOptionTag(option) {
   if (option?.audioIndex) return `@音频${option.audioIndex}`
@@ -958,6 +1361,7 @@ function collectDraftSnapshot() {
     prompt: prompt.value,
     aspectRatio: aspectRatio.value,
     duration: duration.value,
+    resolution: resolution.value,
     refMode: refMode.value,
     fixedModel: props.fixedModel || '',
     binding: {
@@ -1008,6 +1412,10 @@ async function restoreComposerDraft() {
   if (draft.duration != null) {
     duration.value = clampDuration(draft.duration)
   }
+  if (draft.resolution) {
+    const res = String(draft.resolution).trim().toLowerCase()
+    if (res) resolution.value = res
+  }
   if (draft.refMode && props.showRefModeToggle) {
     refMode.value = draft.refMode === 'first_last' ? 'first_last' : 'reference'
   }
@@ -1056,7 +1464,26 @@ async function restoreComposerDraft() {
   }
 
   if (draft.fixedModel && draft.fixedModel !== props.fixedModel) {
-    emit('update:fixedModel', draft.fixedModel)
+    const draftModel = String(draft.fixedModel)
+    const allowedLists = [
+      props.chengmengModels,
+      props.officialModels,
+      props.grokModels,
+      props.jimengModels,
+      props.xyqModels,
+      props.cozeModels,
+      props.funshionModels,
+      props.xingyuemengModels,
+      props.trainingModels,
+      props.aistarslabModels,
+    ].filter(list => Array.isArray(list) && list.length > 0)
+    const allowed = allowedLists.length
+      ? allowedLists.some(list => list.some(item => String(item?.id) === draftModel))
+      : true
+    // 有明确候选列表时才校验，避免把其它通道档位写进当前页
+    if (allowed) {
+      emit('update:fixedModel', draft.fixedModel)
+    }
   }
 
   const paths = [
@@ -1159,6 +1586,7 @@ function previewRefTitle(ref) {
 function openImagePreview(raw, title = '') {
   const src = displayUrl(raw)
   if (!src) return
+  closeVideoPreview()
   imagePreview.value = { open: true, src, title }
 }
 
@@ -1166,20 +1594,78 @@ function closeImagePreview() {
   imagePreview.value = { open: false, src: '', title: '' }
 }
 
+function openVideoPreview(video) {
+  const raw = video?.ossUrl || video?.path || video?.url
+  const src = displayUrl(raw)
+  if (!src) {
+    toast.warning('暂无法预览该视频')
+    return
+  }
+  closeImagePreview()
+  videoPreview.value = {
+    open: true,
+    src,
+    title: video?.label || '参考视频',
+  }
+}
+
+function closeVideoPreview() {
+  videoPreview.value = { open: false, src: '', title: '' }
+}
+
 function onPreviewKeydown(event) {
-  if (event.key === 'Escape' && imagePreview.value.open) closeImagePreview()
+  if (event.key !== 'Escape') return
+  if (imagePreview.value.open) closeImagePreview()
+  if (videoPreview.value.open) closeVideoPreview()
+}
+
+function syncScrollCompactFromFeed() {
+  if (!feedScrollEl) return
+  if (promptFocused.value || mentionOpen.value) {
+    scrollCompact.value = false
+    return
+  }
+  const top = feedScrollEl.scrollTop || 0
+  if (!scrollCompact.value && top >= SCROLL_COMPACT_ON) {
+    scrollCompact.value = true
+  } else if (scrollCompact.value && top <= SCROLL_COMPACT_OFF) {
+    scrollCompact.value = false
+  }
+}
+
+function bindFeedScrollCollapse() {
+  const root = composerRootEl.value
+  const page = root?.closest?.('.studio-page')
+  const feed = page?.querySelector?.('.studio-feed')
+  if (!feed || feed === feedScrollEl) return
+  unbindFeedScrollCollapse()
+  feedScrollEl = feed
+  feedScrollEl.addEventListener('scroll', syncScrollCompactFromFeed, { passive: true })
+  syncScrollCompactFromFeed()
+}
+
+function unbindFeedScrollCollapse() {
+  if (!feedScrollEl) return
+  feedScrollEl.removeEventListener('scroll', syncScrollCompactFromFeed)
+  feedScrollEl = null
 }
 
 onMounted(async () => {
   window.addEventListener('keydown', onPreviewKeydown)
   await nextTick()
+  bindFeedScrollCollapse()
   await restoreComposerDraft()
   draftReady.value = true
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onPreviewKeydown)
+  unbindFeedScrollCollapse()
   if (persistDraftTimer) clearTimeout(persistDraftTimer)
+})
+
+watch([promptFocused, mentionOpen], () => {
+  syncScrollCompactFromFeed()
 })
 
 watch(
@@ -1188,6 +1674,7 @@ watch(
     dramaId.value,
     aspectRatio.value,
     duration.value,
+    resolution.value,
     refMode.value,
     props.fixedModel,
     binding.character_ids,
@@ -1233,7 +1720,8 @@ async function loadProjectAssets(id) {
     return
   }
   try {
-    const drama = await dramaAPI.get(parsed)
+    // 视频工作室只需角色/场景/道具，跳过删除评估与集摘要（大项目可省十余秒）
+    const drama = await dramaAPI.get(parsed, { workbench: true })
     const sortByRecent = (a, b) => String(b?.updated_at || b?.updatedAt || '').localeCompare(String(a?.updated_at || a?.updatedAt || ''))
     projectChars.value = [...(drama?.characters || [])].sort(sortByRecent)
     projectScenes.value = [...(drama?.scenes || [])].sort(sortByRecent)
@@ -1288,7 +1776,7 @@ function openVoicePicker() {
 }
 
 function onVoicePickerConfirm(refs) {
-  binding.voice_refs = (refs || []).slice(0, MAX_VOICE_REFS)
+  binding.voice_refs = (refs || []).slice(0, maxVoiceRefs.value)
   syncPromptMediaHeader()
 }
 
@@ -1352,8 +1840,11 @@ function reorderVisualRefs(fromIndex, toIndex) {
   if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return
   const items = [...visualRefItems.value]
   if (fromIndex >= items.length || toIndex >= items.length) return
+  const oldKeys = items.map(item => item.key)
   const [moved] = items.splice(fromIndex, 1)
   items.splice(toIndex, 0, moved)
+  const newKeys = items.map(item => item.key)
+  prompt.value = remapPromptImageIndicesByKeys(prompt.value, oldKeys, newKeys)
   const reorderedUploads = applyRefStripOrderToBinding(binding, items, uploadedRefs.value)
   uploadedRefs.value = reorderedUploads
   syncUploadPaths()
@@ -1397,16 +1888,43 @@ function onRefDrop(index, event) {
   reorderVisualRefs(fromIndex, index)
 }
 
+function countPathsInImageRefs(refsMap) {
+  let n = 0
+  for (const value of Object.values(refsMap || {})) {
+    if (Array.isArray(value)) n += value.filter(Boolean).length
+    else if (value) n += 1
+  }
+  return n
+}
+
 function onEntityPickerConfirm(result) {
   if (result.mode === 'character') {
+    const nextRefs = mergeCharacterImageRefs(
+      binding.character_image_refs,
+      result.characterImageRefs || {},
+    )
+    const nextImageCount = countPathsInImageRefs(nextRefs)
+      + countPathsInImageRefs(binding.scene_image_refs)
+      + countPathsInImageRefs(binding.prop_image_refs)
+      + uploadedRefs.value.length
+    if (nextImageCount > maxImages.value) {
+      toast.warning(`最多 ${maxImages.value} 张参考图（当前选择将达到 ${nextImageCount} 张）`)
+      return
+    }
     for (const charId of result.characterIds || []) {
       bindCharacter(binding, charId, projectChars.value)
     }
-    binding.character_image_refs = {
-      ...(binding.character_image_refs || {}),
-      ...(result.characterImageRefs || {}),
-    }
+    binding.character_image_refs = nextRefs
   } else if (result.mode === 'scene') {
+    const nextSceneRefs = { ...(result.sceneImageRefs || {}) }
+    const nextImageCount = countPathsInImageRefs(binding.character_image_refs)
+      + countPathsInImageRefs(nextSceneRefs)
+      + countPathsInImageRefs(binding.prop_image_refs)
+      + uploadedRefs.value.length
+    if (nextImageCount > maxImages.value) {
+      toast.warning(`最多 ${maxImages.value} 张参考图（当前选择将达到 ${nextImageCount} 张）`)
+      return
+    }
     const prevIds = new Set(getBindingSceneIds(binding))
     const nextIds = new Set(result.sceneIds || [])
     for (const scene of projectScenes.value) {
@@ -1418,8 +1936,17 @@ function onEntityPickerConfirm(result) {
         unbindScene(binding, scene.id)
       }
     }
-    binding.scene_image_refs = { ...(result.sceneImageRefs || {}) }
+    binding.scene_image_refs = nextSceneRefs
   } else if (result.mode === 'prop') {
+    const nextPropRefs = { ...(result.propImageRefs || {}) }
+    const nextImageCount = countPathsInImageRefs(binding.character_image_refs)
+      + countPathsInImageRefs(binding.scene_image_refs)
+      + countPathsInImageRefs(nextPropRefs)
+      + uploadedRefs.value.length
+    if (nextImageCount > maxImages.value) {
+      toast.warning(`最多 ${maxImages.value} 张参考图（当前选择将达到 ${nextImageCount} 张）`)
+      return
+    }
     const prevIds = new Set(binding.prop_ids || [])
     const nextIds = new Set(result.propIds || [])
     for (const prop of projectProps.value) {
@@ -1431,7 +1958,7 @@ function onEntityPickerConfirm(result) {
         unbindProp(binding, prop.id)
       }
     }
-    binding.prop_image_refs = { ...(result.propImageRefs || {}) }
+    binding.prop_image_refs = nextPropRefs
   }
   syncPromptImageHeader()
 }
@@ -1471,7 +1998,9 @@ function canUnlinkRef(ref) {
 
 function unlinkRef(ref) {
   if (ref.source === 'character' && ref.charId) {
-    unbindCharacter(binding, ref.charId)
+    const char = projectChars.value.find(item => item.id === ref.charId)
+    if (ref.url) unbindCharacterImage(binding, ref.charId, ref.url, char)
+    else unbindCharacter(binding, ref.charId)
   } else if (ref.source === 'scene' || ref.sceneId) {
     unbindScene(binding, ref.sceneId)
   } else if (ref.source === 'prop' && ref.propId) {
@@ -1491,7 +2020,7 @@ function syncUploadPaths() {
 function addReferencePath(path, meta = {}) {
   const normalized = normalizeMediaPath(path)
   if (!normalized) return false
-  if (uploadedRefs.value.length >= maxImages.value) {
+  if (stripImageCount.value >= maxImages.value) {
     toast.warning(`最多 ${maxImages.value} 张参考图`)
     return false
   }
@@ -1513,11 +2042,11 @@ function addReferencePath(path, meta = {}) {
 function uploadImageFiles(files, { source = 'pick' } = {}) {
   startReferenceImageUpload({
     files,
-    maxRemain: maxImages.value - uploadedRefs.value.length - pendingUploads.value.length,
+    maxRemain: maxImages.value - stripImageCount.value - pendingUploads.value.length,
     pendingUploadsRef: pendingUploads,
     feedback: {
       source,
-      limitMessage: `最多上传 ${maxImages.value} 张参考图`,
+      limitMessage: `最多 ${maxImages.value} 张参考图`,
     },
     uploadOne: (file) => uploadAPI.image(file, dramaId.value ? Number(dramaId.value) : null),
     onSuccess: async ({ file, res }) => {
@@ -1779,10 +2308,32 @@ function applyFixedOfficialPayload(payload) {
     payload.xyq = true
     payload.provider = 'xyq_web'
     if (props.fixedModel) payload.model = props.fixedModel
-    // S通道5 不支持音频：提交前剔除，避免误带音色
-    if (Array.isArray(payload.content_refs)) {
-      payload.content_refs = payload.content_refs.filter(ref => ref?.type !== 'audio')
-    }
+    return payload
+  }
+  if (props.cozeMode) {
+    payload.coze = true
+    payload.provider = 'coze_web'
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
+  if (props.funshionMode) {
+    payload.funshion = true
+    payload.provider = 'funshion_web'
+    if (props.fixedModel) payload.model = props.fixedModel
+    const allowed = webChannelResolutionChoices.value.map(item => item.id)
+    payload.resolution = allowed.includes(resolution.value)
+      ? resolution.value
+      : (props.funshionDefaultResolution || '480p')
+    return payload
+  }
+  if (props.xingyuemengMode) {
+    payload.xingyuemeng = true
+    payload.provider = 'xingyuemeng_web'
+    if (props.fixedModel) payload.model = props.fixedModel
+    const allowed = webChannelResolutionChoices.value.map(item => item.id)
+    payload.resolution = allowed.includes(resolution.value)
+      ? resolution.value
+      : (props.xingyuemengDefaultResolution || '720p')
     return payload
   }
   if (props.jimengMode) {
@@ -1803,14 +2354,25 @@ function applyFixedOfficialPayload(payload) {
     if (props.fixedModel) payload.model = props.fixedModel
     return payload
   }
+  if (props.aigcccMode) {
+    payload.aigccc = true
+    if (props.fixedConfigId) payload.config_id = props.fixedConfigId
+    if (props.fixedModel) payload.model = props.fixedModel
+    return payload
+  }
   if (!props.officialMode && !props.fixedConfigId && !props.fixedModel) return payload
   if (props.officialMode) payload.official = true
   if (props.fixedConfigId) payload.config_id = props.fixedConfigId
   if (props.fixedModel) payload.model = props.fixedModel
-  const hasRefs = !!(payload.content_refs?.length || payload.reference_image_urls?.length || payload.image_url || payload.first_frame_url)
-  if ((props.officialMode || props.forceAdaptiveAspect) && hasRefs) {
-    payload.aspect_ratio = 'adaptive'
+  if (props.officialMode) {
+    const allowed = effectiveOfficialResolutionChoices.value.map(item => item.id)
+    if (allowed.length > 1 && allowed.includes(resolution.value)) {
+      payload.resolution = resolution.value
+    } else {
+      payload.resolution = '480p'
+    }
   }
+  // 有参考图时上游 API 由后端 adapter 强制 adaptive；此处保留用户选择的横竖屏供入库/占位展示
   return payload
 }
 
@@ -1818,13 +2380,20 @@ function selectOfficialModel(modelId) {
   emit('update:fixedModel', modelId)
 }
 
-function submit() {
+async function submit() {
+  if (props.generating || composerSubmitting.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
+
   const text = prompt.value.trim()
   if (!text) {
     toast.warning('请输入视频描述')
     return
   }
 
+  composerSubmitting.value = true
+  try {
   syncUploadPaths()
 
   const payload = {
@@ -1832,10 +2401,29 @@ function submit() {
     aspect_ratio: aspectRatio.value,
     drama_id: dramaId.value ? Number(dramaId.value) : undefined,
   }
+  if (props.officialMode) {
+    const allowed = effectiveOfficialResolutionChoices.value.map(item => item.id)
+    if (allowed.length > 1 && allowed.includes(resolution.value)) {
+      payload.resolution = resolution.value
+    } else {
+      payload.resolution = '480p'
+    }
+  }
+  if (props.funshionMode || props.xingyuemengMode) {
+    const allowed = webChannelResolutionChoices.value.map(item => item.id)
+    payload.resolution = allowed.includes(resolution.value)
+      ? resolution.value
+      : (props.xingyuemengMode
+        ? (props.xingyuemengDefaultResolution || '720p')
+        : (props.funshionDefaultResolution || '480p'))
+  }
 
   const hasStudioRefs = uploadedRefs.value.length > 0
     || uploadedVideoRefs.value.length > 0
     || (voicePickerEnabled.value && binding.voice_refs?.length > 0)
+
+  // Seedance 系通道（含通道1/2/3/4/5/7/8/9/培训）：提交前校验参考图尺寸
+  const needsSeedanceImageDimCheck = !props.grokMode && !props.aigcccMode
 
   if ((dramaLinked.value && refMode.value === 'reference') || (videoRefUploadEnabled.value && hasStudioRefs)) {
     ensureRefStripOrder()
@@ -1853,7 +2441,7 @@ function submit() {
       projectProps.value,
       uploadedRefs.value,
       uploadedVideoRefs.value,
-      { videoRefLabel: videoRefLabelKind.value },
+      { videoRefLabel: videoRefLabelKind.value, maxVoiceRefs: maxVoiceRefs.value },
     )
     let contentRefs = built.contentRefs
     if (props.xyqMode) {
@@ -1871,6 +2459,15 @@ function submit() {
         payload.reference_image_urls = imageUrls
       } else if (contentRefs.some(ref => ref.type === 'video' || ref.type === 'audio')) {
         payload.reference_mode = 'multiple'
+      }
+    }
+    if (needsSeedanceImageDimCheck) {
+      const dimError = await validateSeedanceReferenceImageDimensions(
+        (payload.content_refs || []).filter(ref => ref?.type === 'image'),
+      )
+      if (dimError) {
+        toast.error(dimError)
+        return
       }
     }
     emit('generate', applyFixedOfficialPayload(payload))
@@ -1908,7 +2505,18 @@ function submit() {
     })
   }
 
+  if (needsSeedanceImageDimCheck && images.length) {
+    const dimError = await validateSeedanceReferenceImageDimensions(images)
+    if (dimError) {
+      toast.error(dimError)
+      return
+    }
+  }
+
   emit('generate', applyFixedOfficialPayload(payload))
+  } finally {
+    composerSubmitting.value = false
+  }
 }
 
 function normalizeLoadedAspectRatio(value) {
@@ -1936,37 +2544,93 @@ function normalizeLoadedAspectRatio(value) {
   return ratio || '9:16'
 }
 
+async function enrichVideoItemForReuse(item) {
+  if (!item?.id) return item
+  const hasPayload = !!(item.reference_payload || item.referencePayload)
+  const hasAudios = Array.isArray(item.reference_audios) && item.reference_audios.length > 0
+  const hasVideos = Array.isArray(item.reference_videos) && item.reference_videos.length > 0
+  if (hasPayload || hasAudios || hasVideos) return item
+  try {
+    const row = await videoAPI.get(Number(item.id))
+    if (!row) return item
+    return {
+      ...item,
+      reference_payload: row.reference_payload ?? row.referencePayload ?? item.reference_payload ?? null,
+      reference_audios: item.reference_audios?.length
+        ? item.reference_audios
+        : undefined,
+      reference_videos: item.reference_videos?.length
+        ? item.reference_videos
+        : undefined,
+      prompt: item.prompt || row.prompt || '',
+      duration: item.duration ?? row.duration,
+      aspect_ratio: item.aspect_ratio || item.aspectRatio || row.aspect_ratio || row.aspectRatio,
+      resolution: item.resolution || row.resolution || null,
+      drama_id: item.drama_id ?? row.drama_id ?? row.dramaId,
+      reference_mode: item.reference_mode || item.referenceMode || row.reference_mode || row.referenceMode,
+    }
+  } catch {
+    return item
+  }
+}
+
 async function loadFromItem(item) {
   resetBinding()
   uploadedRefs.value = []
   uploadedVideoRefs.value = []
 
-  aspectRatio.value = normalizeLoadedAspectRatio(item?.aspect_ratio || item?.aspectRatio || '9:16')
+  const source = await enrichVideoItemForReuse(item)
+
+  aspectRatio.value = normalizeLoadedAspectRatio(source?.aspect_ratio || source?.aspectRatio || '9:16')
   duration.value = clampDuration(Number(
-    item?.duration
+    source?.duration
     || (props.trainingMode ? (selectedTrainingModel.value?.duration_default || 5)
       : (jimengLikeMode.value ? (selectedJimengModel.value?.duration_default || 5) : (props.grokMode ? (selectedGrokModel.value?.duration_default || 10) : 15))),
   ))
+  if (props.officialMode) {
+    const modelId = String(source?.model || '').trim()
+    if (modelId) {
+      const allowed = Array.isArray(props.officialModels) && props.officialModels.length
+        ? props.officialModels.some(item => String(item?.id) === modelId)
+        : true
+      if (allowed && modelId !== props.fixedModel) {
+        emit('update:fixedModel', modelId)
+      }
+    }
+    const allowed = effectiveOfficialResolutionChoices.value.map(item => String(item.id))
+    const res = String(source?.resolution || '').trim().toLowerCase()
+    if (allowed.length > 1 && allowed.includes(res)) {
+      resolution.value = res
+    } else {
+      resolution.value = allowed[0] || '480p'
+    }
+  } else {
+    const res = String(source?.resolution || '').trim().toLowerCase()
+    if (res) resolution.value = res
+  }
 
-  const mode = item?.reference_mode || item?.referenceMode
+  const mode = source?.reference_mode || source?.referenceMode
   refMode.value = props.showRefModeToggle && mode === 'first_last' ? 'first_last' : 'reference'
 
-  if (item?.drama_id) {
-    dramaId.value = String(item.drama_id)
+  if (source?.drama_id) {
+    dramaId.value = String(source.drama_id)
     persistDramaPreference(dramaId.value)
     await loadProjectAssets(dramaId.value)
   }
 
-  prompt.value = String(item?.prompt || '')
+  prompt.value = String(source?.prompt || '')
 
   restoreStudioBindingsFromVideoItem(
-    item,
+    source,
     binding,
     projectChars.value,
     projectScenes.value,
     projectProps.value,
     {
       normalizePath: normalizeMediaPath,
+      restoreVoices: voicePickerEnabled.value,
+      voiceAssets: voiceAssets.value,
+      maxVoiceRefs: maxVoiceRefs.value,
       addUpload: (path, meta = {}) => {
         const normalized = normalizeMediaPath(path)
         if (!normalized) return false
@@ -1983,7 +2647,12 @@ async function loadFromItem(item) {
     },
   )
 
-  const payloadRaw = item?.reference_payload || item?.referencePayload
+  if (voicePickerEnabled.value && !(binding.voice_refs?.length)) {
+    const voices = restoreVoiceRefsFromVideoItem(source, voiceAssets.value, maxVoiceRefs.value)
+    if (voices.length) binding.voice_refs = voices
+  }
+
+  const payloadRaw = source?.reference_payload || source?.referencePayload
   if (payloadRaw) {
     try {
       const refs = typeof payloadRaw === 'string' ? JSON.parse(payloadRaw) : payloadRaw
@@ -1996,8 +2665,8 @@ async function loadFromItem(item) {
         }
       }
     } catch { /* ignore */ }
-  } else if (Array.isArray(item?.reference_videos)) {
-    for (const ref of item.reference_videos) {
+  } else if (Array.isArray(source?.reference_videos)) {
+    for (const ref of source.reference_videos) {
       const path = normalizeMediaPath(ref.path || ref.url)
       if (!path) continue
       addVideoPath(path, { label: ref.label || null })
@@ -2027,6 +2696,7 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   z-index: 20;
   padding: 0 20px 20px;
   background: linear-gradient(to top, var(--bg-base) 70%, transparent);
+  transition: padding 0.22s ease;
 }
 
 .composer-shell {
@@ -2038,6 +2708,7 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   background: var(--bg-surface);
   backdrop-filter: blur(16px);
   box-shadow: var(--shadow-card);
+  transition: padding 0.22s ease;
 }
 
 .composer-top-bar {
@@ -2047,6 +2718,50 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   margin-bottom: 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
+  transition: margin-bottom 0.22s ease, padding-bottom 0.22s ease, gap 0.22s ease;
+}
+
+.studio-composer.is-scroll-compact {
+  padding-bottom: 12px;
+}
+
+.studio-composer.is-scroll-compact .composer-shell {
+  padding: 8px 12px;
+}
+
+.studio-composer.is-scroll-compact .composer-top-bar {
+  gap: 4px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+}
+
+.studio-composer.is-scroll-compact .composer-bound-summary {
+  max-height: 28px;
+  overflow: hidden;
+}
+
+.studio-composer.is-scroll-compact .composer-ref-stack {
+  min-height: 52px;
+  padding-top: 8px;
+}
+
+.studio-composer.is-scroll-compact .composer-ref-card {
+  width: 44px;
+  height: 44px;
+}
+
+.studio-composer.is-scroll-compact .composer-input-wrap,
+.studio-composer.is-scroll-compact .composer-input-wrap.is-prompt-expanded {
+  min-height: 0;
+}
+
+.studio-composer.is-scroll-compact .composer-input,
+.studio-composer.is-scroll-compact .composer-input-wrap.is-prompt-expanded .composer-input {
+  min-height: 44px;
+  max-height: 72px;
+  resize: none;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .composer-top-main {
@@ -2213,6 +2928,21 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   pointer-events: none;
 }
 
+.composer-ref-card-cert {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 2;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.92);
+  color: #fff;
+  pointer-events: none;
+}
+
 .composer-ref-card-pending .composer-ref-card-thumb {
   cursor: default;
   pointer-events: none;
@@ -2337,6 +3067,12 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   border: 1px solid var(--border);
   background: var(--bg-base);
   font-size: 12px;
+  cursor: pointer;
+}
+
+.composer-video-ref-chip:hover {
+  border-color: rgba(47, 109, 246, 0.4);
+  background: rgba(47, 109, 246, 0.06);
 }
 
 .composer-video-ref-icon {
@@ -2799,6 +3535,15 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   font-size: 10px;
   font-weight: 500;
   opacity: 0.88;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.composer-submit-cost-list {
+  opacity: 0.65;
+  text-decoration: line-through;
+  font-weight: 400;
 }
 
 .composer-submit:disabled {
@@ -2882,6 +3627,17 @@ defineExpose({ loadFromItem, clearPrompt, clearDraft })
   max-height: calc(100vh - 160px);
   object-fit: contain;
   border-radius: 8px;
+}
+
+.composer-video-preview-dialog {
+  width: min(960px, 100%);
+}
+
+.composer-video-preview-body video {
+  width: 100%;
+  max-height: calc(100vh - 160px);
+  border-radius: 8px;
+  background: #000;
 }
 
 .composer-voice-library-overlay {

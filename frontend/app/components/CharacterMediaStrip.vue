@@ -33,6 +33,7 @@
           <img :src="displaySrc(baselinePreview.url)" alt="基准" loading="lazy" decoding="async" />
 
           <span class="char-media-chip-label">基准</span>
+          <span v-if="baselineCertified" class="char-media-portrait-badge" title="方舟虚拟人像已认证，通道2提交时使用认证资产">已认证</span>
 
         </button>
 
@@ -41,6 +42,7 @@
           <img :src="displaySrc(baselinePreview.url)" alt="基准" loading="lazy" decoding="async" />
 
           <span class="char-media-chip-label">基准</span>
+          <span v-if="baselineCertified" class="char-media-portrait-badge" title="方舟虚拟人像已认证，通道2提交时使用认证资产">已认证</span>
 
         </div>
 
@@ -74,6 +76,8 @@
 
               <img :src="displaySrc(outfit.url)" :alt="outfit.label" loading="lazy" decoding="async" />
 
+              <span v-if="isOutfitPortraitActive(outfit)" class="char-media-portrait-badge">已认证</span>
+
               <span v-if="outfit.candidate_count > 1" class="char-outfit-count">{{ outfit.candidate_count }}</span>
 
             </div>
@@ -97,6 +101,8 @@
             <div class="char-outfit-card-cover">
 
               <img :src="displaySrc(outfit.url)" :alt="outfit.label" loading="lazy" decoding="async" />
+
+              <span v-if="isOutfitPortraitActive(outfit)" class="char-media-portrait-badge">已认证</span>
 
               <span v-if="outfit.candidate_count > 1" class="char-outfit-count">{{ outfit.candidate_count }}</span>
 
@@ -200,7 +206,7 @@
 
           :class="chipClass(img)"
 
-          :title="img.label || img.tag || characterImageTagLabel(img)"
+          :title="chipTitle(img)"
 
           @click="emitPreview(img)"
 
@@ -209,6 +215,7 @@
           <img :src="displaySrc(img.url)" :alt="img.tag || characterImageTagLabel(img, { short: true })" loading="lazy" decoding="async" />
 
           <span class="char-media-chip-label">{{ img.tag || characterImageTagLabel(img, { short: true }) }}</span>
+          <span v-if="imageCertified(img)" class="char-media-portrait-badge">已认证</span>
 
         </button>
 
@@ -222,13 +229,14 @@
 
           :class="chipClass(img)"
 
-          :title="img.label || img.tag || characterImageTagLabel(img)"
+          :title="chipTitle(img)"
 
         >
 
           <img :src="displaySrc(img.url)" :alt="img.tag || characterImageTagLabel(img, { short: true })" loading="lazy" decoding="async" />
 
           <span class="char-media-chip-label">{{ img.tag || characterImageTagLabel(img, { short: true }) }}</span>
+          <span v-if="imageCertified(img)" class="char-media-portrait-badge">已认证</span>
 
         </div>
 
@@ -263,6 +271,7 @@ import {
 } from '~/utils/character-image-variants.js'
 
 import { mediaDisplayUrl } from '~/utils/media-url.js'
+import { isCharacterPortraitActive, isCertifiedPortraitImage, isOutfitPortraitActive } from '~/utils/portrait-status.js'
 
 
 
@@ -412,6 +421,43 @@ const showBaseline = computed(() => {
 
 })
 
+const baselineCertified = computed(() => {
+  const source = portraitCharSource.value
+  if (!source || !baselinePreview.value?.url) return false
+  return isCertifiedPortraitImage(source, baselinePreview.value.url)
+})
+
+function imageCertified(img) {
+  const source = portraitCharSource.value
+  if (!source || !img?.url) return false
+  return isCertifiedPortraitImage(source, img.url)
+}
+
+function chipTitle(img) {
+  if (imageCertified(img)) return '方舟虚拟人像已认证，通道2提交时使用认证资产'
+  if (img?.variant === 'primary' || img?.source === 'primary' || img?.tag_type === 'primary') {
+    return isCharacterPortraitActive(portraitCharSource.value)
+      ? '基准图'
+      : '基准图（未认证虚拟人像）'
+  }
+  return img?.label || img?.tag || '造型定稿（可单独认证虚拟人像）'
+}
+
+const portraitCharSource = computed(() => {
+  if (props.char) return props.char
+  if (!props.media) return null
+  return {
+    image_url: props.media.primary_url || props.media.primaryUrl,
+    imageUrl: props.media.primary_url || props.media.primaryUrl,
+    seedance_asset_id: props.media.seedance_asset_id || props.media.seedanceAssetId,
+    seedance_asset_status: props.media.seedance_asset_status || props.media.seedanceAssetStatus,
+    seedanceAssetId: props.media.seedance_asset_id || props.media.seedanceAssetId,
+    seedanceAssetStatus: props.media.seedance_asset_status || props.media.seedanceAssetStatus,
+    character_media: props.media,
+    characterMedia: props.media,
+  }
+})
+
 
 
 const summaryTags = computed(() => {
@@ -479,11 +525,9 @@ function chipClass(img) {
 
 
 function outfitTitle(outfit) {
-
   const extra = outfit.candidate_count > 1 ? `（${outfit.candidate_count}张备选）` : ''
-
-  return `${outfit.label}${extra}`
-
+  const cert = isOutfitPortraitActive(outfit) ? ' ·已认证' : ''
+  return `${outfit.label}${extra}${cert}`
 }
 
 function isOutfitActive(outfit) {
@@ -849,27 +893,33 @@ function onOutfitClick(outfit) {
 }
 
 .char-media-chip {
-
+  position: relative;
   display: flex;
-
   flex-direction: column;
-
   gap: 2px;
-
   width: 52px;
-
   padding: 0;
-
   border: 1px solid var(--border);
-
   border-radius: 6px;
-
   overflow: hidden;
-
   background: transparent;
-
   cursor: default;
+  align-items: center;
+}
 
+.char-media-portrait-badge {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.92);
+  color: #fff;
+  font-weight: 700;
+  pointer-events: none;
 }
 
 .char-media-strip-root:not(.readonly) .char-media-chip,

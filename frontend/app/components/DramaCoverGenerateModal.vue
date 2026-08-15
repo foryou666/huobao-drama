@@ -39,33 +39,67 @@
             </label>
           </div>
         </div>
-        <section v-if="completedCandidates.length || candidatesLoading" class="section">
+        <section v-if="hasAnyPickableImages || galleryLoading" class="section">
           <div class="section-head">
-            <span class="section-title">已生成候选</span>
-            <span class="dim">3:4 / 4:3 可分别选不同图</span>
+            <span class="section-title">选取原图</span>
+            <div class="source-tabs">
+              <button
+                type="button"
+                class="source-tab"
+                :class="{ active: gallerySource === 'cover' }"
+                :disabled="busy"
+                @click="setGallerySource('cover')"
+              >
+                封面候选 {{ completedCoverCandidates.length }}
+              </button>
+              <button
+                type="button"
+                class="source-tab"
+                :class="{ active: gallerySource === 'studio' }"
+                :disabled="busy"
+                @click="setGallerySource('studio')"
+              >
+                图片生成 {{ completedStudioImages.length }}
+              </button>
+            </div>
             <div class="section-actions">
-              <button type="button" class="btn btn-sm" :disabled="busy || candidatesLoading" @click="loadCandidates">
-                {{ candidatesLoading ? '加载中…' : '刷新' }}
+              <button type="button" class="btn btn-sm" :disabled="busy || galleryLoading" @click="refreshActiveGallery">
+                {{ galleryLoading ? '加载中…' : '刷新' }}
               </button>
             </div>
           </div>
-          <div v-if="candidatesLoading && !completedCandidates.length" class="dim empty-hint">加载已生成封面…</div>
+          <p v-if="gallerySource === 'studio'" class="dim empty-hint studio-scope-hint">
+            从本项目图片生成记录中挑选，再裁切为 3:4 / 4:3 封面
+            <button
+              type="button"
+              class="btn btn-sm inline-scope"
+              :disabled="busy || studioLoading"
+              @click="toggleStudioScope"
+            >
+              {{ studioScope === 'drama' ? '改为全部我的' : '仅本项目' }}
+            </button>
+          </p>
+          <div v-if="galleryLoading && !activeGalleryItems.length" class="dim empty-hint">加载图片…</div>
+          <div v-else-if="!activeGalleryItems.length" class="dim empty-hint">
+            {{ gallerySource === 'studio' ? '暂无可用图片生成记录' : '暂无封面候选，可 AI 生成或从图片生成选取' }}
+          </div>
           <div v-else class="candidate-grid">
             <div
-              v-for="item in visibleCandidates"
-              :key="`view-cand-${item.id}`"
+              v-for="item in visibleGalleryItems"
+              :key="`view-cand-${gallerySource}-${item.id}`"
               class="candidate-card"
               :class="{ selected: isCandidateAssigned(item) }"
             >
               <GridMediaImage
                 class="candidate-thumb"
                 :src="candidateDisplaySrc(item)"
-                :alt="`候选 #${item.id}`"
+                :alt="`图片 #${item.id}`"
                 placeholder="无图"
               />
               <span class="candidate-meta">
                 #{{ item.id }}
                 <span v-if="item.aspect_ratio" class="dim"> · {{ item.aspect_ratio }}</span>
+                <span v-if="item.source_label" class="dim"> · {{ item.source_label }}</span>
               </span>
               <div class="candidate-actions">
                 <button
@@ -91,16 +125,24 @@
           </div>
         </section>
         <div class="dialog-foot">
-          <span class="dim">每次生成 1 张；3:4 与 4:3 可各选一张再裁切</span>
+          <span class="dim">可从封面候选或图片生成选取，再裁切为 3:4 / 4:3</span>
           <div class="foot-actions">
             <button
-              v-if="completedCandidates.length"
               type="button"
               class="btn"
               :disabled="busy"
-              @click="goGallery"
+              @click="goGallery('studio')"
             >
-              全部已生成 {{ completedCandidates.length }}
+              从图片生成选取
+            </button>
+            <button
+              v-if="hasAnyPickableImages"
+              type="button"
+              class="btn"
+              :disabled="busy"
+              @click="goGallery()"
+            >
+              全部可选 {{ activeGalleryItems.length }}
             </button>
             <button
               v-if="hasCropSource"
@@ -257,17 +299,20 @@
 
           <section class="section">
             <div class="section-head">
-              <span class="section-title">已生成 {{ completedCandidates.length }}</span>
-              <span class="dim">3:4 / 4:3 分别点选</span>
+              <span class="section-title">封面候选 {{ completedCoverCandidates.length }}</span>
+              <span class="dim">也可去「图片生成」选图</span>
               <div class="section-actions">
+                <button type="button" class="btn btn-sm" :disabled="busy" @click="goGallery('studio')">
+                  从图片生成选取
+                </button>
                 <button type="button" class="btn btn-sm" :disabled="busy || candidatesLoading" @click="loadCandidates">
                   {{ candidatesLoading ? '加载中…' : '刷新' }}
                 </button>
               </div>
             </div>
-            <div v-if="candidatesLoading && !completedCandidates.length" class="dim empty-hint">加载已生成封面…</div>
-            <div v-else-if="!completedCandidates.length && !generatingCandidate" class="dim empty-hint">
-              暂无已生成封面，点下方竖版 / 横版生成后会出现在这里
+            <div v-if="candidatesLoading && !completedCoverCandidates.length" class="dim empty-hint">加载已生成封面…</div>
+            <div v-else-if="!completedCoverCandidates.length && !generatingCandidate" class="dim empty-hint">
+              暂无封面候选；可生成，或点「从图片生成选取」
             </div>
             <div v-else class="candidate-grid">
               <div
@@ -281,7 +326,7 @@
                 <span class="candidate-meta dim">生成中… {{ ratio === '16:9' ? '横版 16:9' : '竖版 9:16' }}</span>
               </div>
               <div
-                v-for="item in visibleCandidates"
+                v-for="item in completedCoverCandidates.slice(0, candidateVisibleCount)"
                 :key="item.id"
                 class="candidate-card"
                 :class="{ selected: isCandidateAssigned(item) }"
@@ -319,13 +364,13 @@
               </div>
             </div>
             <button
-              v-if="completedCandidates.length > candidateVisibleCount"
+              v-if="completedCoverCandidates.length > candidateVisibleCount"
               type="button"
               class="btn btn-sm candidate-more"
               :disabled="busy"
               @click="candidateVisibleCount += 24"
             >
-              显示更多（还有 {{ completedCandidates.length - candidateVisibleCount }}）
+              显示更多（还有 {{ completedCoverCandidates.length - candidateVisibleCount }}）
             </button>
           </section>
         </template>
@@ -335,6 +380,9 @@
           <div class="foot-actions">
             <button type="button" class="btn" :disabled="busy" @click="goUploadBoth">
               上传封面
+            </button>
+            <button type="button" class="btn" :disabled="busy" @click="goGallery('studio')">
+              从图片生成选取
             </button>
             <button
               v-if="hasCropSource"
@@ -375,11 +423,53 @@
           <span class="dim">·</span>
           <span>4:3 {{ assignedLabel('4:3') }}</span>
         </div>
-        <div v-if="!completedCandidates.length" class="dim empty-hint">暂无已生成封面，请先生成</div>
+        <div class="source-tabs gallery-tabs">
+          <button
+            type="button"
+            class="source-tab"
+            :class="{ active: gallerySource === 'cover' }"
+            :disabled="busy"
+            @click="setGallerySource('cover')"
+          >
+            封面候选 {{ completedCoverCandidates.length }}
+          </button>
+          <button
+            type="button"
+            class="source-tab"
+            :class="{ active: gallerySource === 'studio' }"
+            :disabled="busy"
+            @click="setGallerySource('studio')"
+          >
+            图片生成 {{ completedStudioImages.length }}
+          </button>
+          <button
+            v-if="gallerySource === 'studio'"
+            type="button"
+            class="btn btn-sm"
+            :disabled="busy || studioLoading"
+            @click="toggleStudioScope"
+          >
+            {{ studioScope === 'drama' ? '改为全部我的' : '仅本项目' }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-sm"
+            :disabled="busy || galleryLoading"
+            @click="refreshActiveGallery"
+          >
+            {{ galleryLoading ? '加载中…' : '刷新' }}
+          </button>
+        </div>
+        <div v-if="galleryLoading && !activeGalleryItems.length" class="dim empty-hint">加载图片…</div>
+        <div v-else-if="!activeGalleryItems.length" class="dim empty-hint">
+          {{ gallerySource === 'studio'
+            ? (studioScope === 'drama' ? '本项目暂无图片生成记录，可切换「全部我的」' : '暂无可用图片生成记录')
+            : '暂无封面候选，可切换到「图片生成」或 AI 生成' }}
+        </div>
         <div v-else class="candidate-grid gallery">
           <div
-            v-for="item in visibleCandidates"
-            :key="item.id"
+            v-for="item in visibleGalleryItems"
+            :key="`${gallerySource}-${item.id}`"
             class="candidate-card"
             :class="{ selected: isCandidateAssigned(item) }"
           >
@@ -392,12 +482,13 @@
               <GridMediaImage
                 class="candidate-thumb"
                 :src="candidateDisplaySrc(item)"
-                :alt="`候选 #${item.id}`"
+                :alt="`图片 #${item.id}`"
                 placeholder="无图"
               />
               <span class="candidate-meta">
                 #{{ item.id }}
                 <span v-if="item.aspect_ratio" class="dim"> · {{ item.aspect_ratio }}</span>
+                <span v-if="item.source_label" class="dim"> · {{ item.source_label }}</span>
               </span>
             </button>
             <div class="candidate-actions">
@@ -423,13 +514,13 @@
           </div>
         </div>
         <button
-          v-if="completedCandidates.length > candidateVisibleCount"
+          v-if="activeGalleryItems.length > candidateVisibleCount"
           type="button"
           class="btn btn-sm candidate-more"
           :disabled="busy"
           @click="candidateVisibleCount += 24"
         >
-          显示更多（还有 {{ completedCandidates.length - candidateVisibleCount }}）
+          显示更多（还有 {{ activeGalleryItems.length - candidateVisibleCount }}）
         </button>
         <div class="dialog-foot">
           <span class="dim">3:4 与 4:3 可各选不同图，再进入裁切</span>
@@ -473,13 +564,22 @@
               <span v-else-if="item.status === 'empty'" class="dim">可上传</span>
               <span v-else class="ok">可裁切</span>
               <button
-                v-if="item.status !== 'processing' && completedCandidates.length"
+                v-if="item.status !== 'processing' && hasAnyPickableImages"
                 type="button"
                 class="upload-btn inline"
                 :disabled="busy"
-                @click="pickCandidateForRatio(item.aspect_ratio)"
+                @click="pickCandidateForRatio(item.aspect_ratio, 'cover')"
               >
-                从已生成选
+                从封面候选
+              </button>
+              <button
+                v-if="item.status !== 'processing'"
+                type="button"
+                class="upload-btn inline"
+                :disabled="busy"
+                @click="pickCandidateForRatio(item.aspect_ratio, 'studio')"
+              >
+                从图片生成
               </button>
               <label
                 v-if="item.status !== 'processing'"
@@ -550,9 +650,9 @@
             type="button"
             class="btn"
             :disabled="busy"
-            @click="step = completedCandidates.length ? 'gallery' : (hasSavedCover ? 'view' : 'select')"
+            @click="step = hasAnyPickableImages ? 'gallery' : (hasSavedCover ? 'view' : 'select')"
           >
-            {{ completedCandidates.length ? '返回已生成' : (hasSavedCover ? '返回查看' : '返回重选') }}
+            {{ hasAnyPickableImages ? '返回选图' : (hasSavedCover ? '返回查看' : '返回重选') }}
           </button>
           <button
             type="button"
@@ -616,9 +716,15 @@ const generatingRatios = computed(() =>
 )
 const generatingCandidate = computed(() => generatingRatios.value.length > 0)
 const candidates = ref([])
+const studioImages = ref([])
 const selectedCandidateId = ref(null)
 const candidatesLoading = ref(false)
+const studioLoading = ref(false)
 const candidateVisibleCount = ref(24)
+/** 图库来源：封面 AI 候选 / 图片生成台账 */
+const gallerySource = ref('cover')
+/** studio 范围：本项目 / 全部我的 */
+const studioScope = ref('drama')
 /** 从裁切页回来为某一比例单独换图 */
 const assignRatioTarget = ref(null)
 const galleryReturnToCrop = ref(false)
@@ -627,6 +733,9 @@ const cropperRefs = reactive({})
 const savedCovers = ref({ '3:4': null, '4:3': null })
 
 const hasSavedCover = computed(() => !!(savedCovers.value['3:4'] || savedCovers.value['4:3']))
+const galleryLoading = computed(() =>
+  gallerySource.value === 'studio' ? studioLoading.value : candidatesLoading.value,
+)
 
 const selectedCharacters = computed(() =>
   characters.value.filter(ch => selectedCharIds.value.includes(ch.id)),
@@ -644,33 +753,52 @@ const focusedSelectedScene = computed(() => {
   return selectedScenes.value.find(sc => sc.id === focusedSceneId.value) || selectedScenes.value[0] || null
 })
 
-const completedCandidates = computed(() =>
+const completedCoverCandidates = computed(() =>
   candidates.value.filter(item => {
     if (item.status !== 'completed') return false
     return !!(candidatePath(item) || candidateDisplaySrc(item))
   }),
 )
-const visibleCandidates = computed(() =>
-  completedCandidates.value.slice(0, candidateVisibleCount.value),
+const completedStudioImages = computed(() =>
+  studioImages.value.filter(item => {
+    if (item.status !== 'completed') return false
+    return !!(candidatePath(item) || candidateDisplaySrc(item))
+  }),
+)
+/** @deprecated 兼容旧引用：封面候选 */
+const completedCandidates = completedCoverCandidates
+
+const activeGalleryItems = computed(() =>
+  gallerySource.value === 'studio' ? completedStudioImages.value : completedCoverCandidates.value,
+)
+const visibleGalleryItems = computed(() =>
+  activeGalleryItems.value.slice(0, candidateVisibleCount.value),
+)
+const hasAnyPickableImages = computed(() =>
+  completedCoverCandidates.value.length > 0 || completedStudioImages.value.length > 0,
 )
 
 const dialogTitle = computed(() => {
   if (step.value === 'view') return '封面查看'
-  if (step.value === 'gallery') return '已生成封面'
+  if (step.value === 'gallery') {
+    return gallerySource.value === 'studio' ? '从图片生成选取' : '已生成封面'
+  }
   if (step.value === 'crop') return '裁切封面'
   return hasSavedCover.value ? '重新生成封面' : '生成封面'
 })
 
 const dialogSub = computed(() => {
-  if (step.value === 'view') return '查看已保存封面，或生成/挑选候选图裁切'
+  if (step.value === 'view') return '查看已保存封面，或从封面候选 / 图片生成中挑选裁切'
   if (step.value === 'gallery') {
     if (galleryReturnToCrop.value && assignRatioTarget.value) {
       return `为 ${assignRatioTarget.value} 选择一张图`
     }
-    return '3:4 与 4:3 可分别选不同图，再进入裁切'
+    return gallerySource.value === 'studio'
+      ? '从图片生成记录中挑选原图，再裁切为封面'
+      : '3:4 与 4:3 可分别选不同图，再进入裁切'
   }
   if (step.value === 'crop') return '两个比例可来自不同原图；可分别裁切后保存'
-  return '每次生成 1 张短剧海报；3:4 / 4:3 可各选一张裁切'
+  return '每次生成 1 张短剧海报；也可从图片生成记录选取裁切'
 })
 
 function buildDefaultCoverPrompt() {
@@ -725,7 +853,7 @@ const hasCropSource = computed(() =>
 const footHint = computed(() => {
   const chars = selectedCharIds.value.length
   const scs = selectedSceneIds.value.length
-  return `角色 ${chars} · 场景 ${scs} · 已生成 ${completedCandidates.value.length}`
+  return `角色 ${chars} · 场景 ${scs} · 封面候选 ${completedCoverCandidates.value.length} · 图片生成 ${completedStudioImages.value.length}`
 })
 
 function assignedGenerationId(ratio) {
@@ -800,18 +928,41 @@ function goSelect() {
   step.value = 'select'
 }
 
-function goGallery() {
+function goGallery(source) {
+  if (source === 'studio' || source === 'cover') gallerySource.value = source
   assignRatioTarget.value = null
   galleryReturnToCrop.value = false
   if (!cropItems.value.length) cropItems.value = ratioOptions.map(emptyCropItem)
+  candidateVisibleCount.value = 24
   step.value = 'gallery'
+  if (gallerySource.value === 'studio' && !studioImages.value.length) void loadStudioImages()
 }
 
-function pickCandidateForRatio(ratio) {
+function pickCandidateForRatio(ratio, source) {
+  if (source === 'studio' || source === 'cover') gallerySource.value = source
   assignRatioTarget.value = ratio === '4:3' ? '4:3' : '3:4'
   galleryReturnToCrop.value = true
   if (!cropItems.value.length) cropItems.value = seedCropItems(true)
+  candidateVisibleCount.value = 24
   step.value = 'gallery'
+  if (gallerySource.value === 'studio' && !studioImages.value.length) void loadStudioImages()
+}
+
+function setGallerySource(source) {
+  gallerySource.value = source === 'studio' ? 'studio' : 'cover'
+  candidateVisibleCount.value = 24
+  if (gallerySource.value === 'studio' && !studioImages.value.length) void loadStudioImages()
+}
+
+function toggleStudioScope() {
+  studioScope.value = studioScope.value === 'drama' ? 'all' : 'drama'
+  candidateVisibleCount.value = 24
+  void loadStudioImages()
+}
+
+async function refreshActiveGallery() {
+  if (gallerySource.value === 'studio') await loadStudioImages()
+  else await loadCandidates()
 }
 
 function cancelGalleryPick() {
@@ -859,7 +1010,13 @@ function candidatePath(item) {
 
 /** 展示用：优先 https 远程图，避免等 OSS resolve 时一直「无图」 */
 function candidateDisplaySrc(item) {
-  const remote = String(item?.image_url || item?.imageUrl || '').trim()
+  const remote = String(
+    item?.display_image_url
+    || item?.displayImageUrl
+    || item?.image_url
+    || item?.imageUrl
+    || '',
+  ).trim()
   if (remote.startsWith('http://') || remote.startsWith('https://')) return remote
   const local = candidatePath(item)
   return mediaDisplayUrl(local) || local || remote
@@ -867,6 +1024,33 @@ function candidateDisplaySrc(item) {
 
 function candidateSrc(item) {
   return candidateDisplaySrc(item) || ''
+}
+
+function studioSourceLabel(imageType) {
+  const t = String(imageType || '').trim()
+  if (!t || t === 'studio') return '工作台'
+  if (t === 'drama_cover_candidate' || t === 'drama_cover') return '封面'
+  if (t === 'character' || t.startsWith('character')) return '角色'
+  if (t === 'scene' || t.startsWith('scene')) return '场景'
+  if (t === 'grid') return '宫格'
+  return t
+}
+
+function normalizeStudioItem(row) {
+  return {
+    id: row.id,
+    status: row.status || 'completed',
+    aspect_ratio: row.aspect_ratio || row.aspectRatio || null,
+    size: row.size || null,
+    local_path: row.local_path || row.localPath || null,
+    path: row.local_path || row.localPath || row.path || null,
+    image_url: row.display_image_url || row.image_url || row.imageUrl || null,
+    display_image_url: row.display_image_url || row.displayImageUrl || null,
+    prompt: row.prompt || null,
+    image_type: row.image_type || row.imageType || null,
+    source_label: studioSourceLabel(row.image_type || row.imageType),
+    created_at: row.created_at || row.createdAt || null,
+  }
 }
 
 async function loadCandidates() {
@@ -883,6 +1067,33 @@ async function loadCandidates() {
     toast.error(err?.message || '加载已生成封面失败')
   } finally {
     candidatesLoading.value = false
+  }
+}
+
+async function loadStudioImages() {
+  if (!props.dramaId && studioScope.value === 'drama') return
+  studioLoading.value = true
+  try {
+    const params = {
+      status: 'completed',
+      limit: 80,
+    }
+    if (studioScope.value === 'drama') {
+      params.drama_id = props.dramaId
+      params.mine_only = false
+    } else {
+      params.mine_only = true
+    }
+    const res = await imageAPI.ledger(params)
+    const items = Array.isArray(res?.items) ? res.items : (Array.isArray(res) ? res : [])
+    studioImages.value = items.map(normalizeStudioItem)
+    candidateVisibleCount.value = Math.max(24, candidateVisibleCount.value)
+    const paths = studioImages.value.map(candidatePath).filter(Boolean)
+    if (paths.length) void prefetchMediaUrls(paths)
+  } catch (err) {
+    toast.error(err?.message || '加载图片生成记录失败')
+  } finally {
+    studioLoading.value = false
   }
 }
 
@@ -1113,12 +1324,15 @@ async function loadData() {
     generatingByRatio['9:16'] = false
     generatingByRatio['16:9'] = false
     candidateVisibleCount.value = 24
+    gallerySource.value = 'cover'
+    studioScope.value = 'drama'
+    studioImages.value = []
     assignRatioTarget.value = null
     galleryReturnToCrop.value = false
     cropItems.value = ratioOptions.map(emptyCropItem)
 
-    // 先拉候选图，避免被项目详情接口拖慢后「看不到已生成」
-    await loadCandidates()
+    // 先拉封面候选 + 图片生成，避免被项目详情接口拖慢后「看不到已生成」
+    await Promise.all([loadCandidates(), loadStudioImages()])
 
     // workbench=1：跳过全集删除评估/摘要扫描
     const drama = await dramaAPI.get(props.dramaId, { workbench: true })
@@ -1141,10 +1355,18 @@ async function loadData() {
       '4:3': fromDrama['4:3'] || savedCovers.value['4:3'],
     }
 
-    // 有已生成候选时优先展示列表（含神仙室友等历史双张），便于点选裁切
-    if (completedCandidates.value.length) step.value = 'gallery'
-    else if (hasSavedCover.value) step.value = 'view'
-    else step.value = 'select'
+    // 有可选图时优先进选图；若仅有图片生成则默认打开该页签
+    if (completedCoverCandidates.value.length) {
+      gallerySource.value = 'cover'
+      step.value = 'gallery'
+    } else if (completedStudioImages.value.length) {
+      gallerySource.value = 'studio'
+      step.value = 'gallery'
+    } else if (hasSavedCover.value) {
+      step.value = 'view'
+    } else {
+      step.value = 'select'
+    }
   } catch (err) {
     toast.error(err?.message || '加载失败')
   } finally {
@@ -1191,12 +1413,13 @@ async function startGenerate(ratioInput = '9:16') {
 
     toast.info(`正在生成${label}封面…`)
     await pollOne(generationId)
-    await loadCandidates()
+    await Promise.all([loadCandidates(), loadStudioImages()])
     selectedCandidateId.value = generationId
-    const justDone = completedCandidates.value.find(c => c.id === generationId)
+    gallerySource.value = 'cover'
+    const justDone = completedCoverCandidates.value.find(c => c.id === generationId)
     if (justDone) assignCandidateToRatio(justDone, cropSlot)
     if (step.value === 'select' || step.value === 'gallery') {
-      step.value = completedCandidates.value.length ? 'gallery' : 'select'
+      step.value = completedCoverCandidates.value.length ? 'gallery' : 'select'
     }
     toast.success(`${label}生成完成，可点选裁切`)
   } catch (err) {
@@ -1312,6 +1535,39 @@ watch([selectedCharIds, selectedSceneIds], () => {
 }
 .section-title { font-weight: 700; }
 .section-actions { margin-left: auto; display: flex; gap: 6px; }
+.source-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.source-tabs.gallery-tabs {
+  margin: 0 0 12px;
+}
+.source-tab {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.source-tab.active {
+  border-color: rgba(96, 140, 255, 0.9);
+  background: rgba(96, 140, 255, 0.18);
+  color: #dce7ff;
+}
+.studio-scope-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.inline-scope {
+  margin-left: 0;
+}
 .pick-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));

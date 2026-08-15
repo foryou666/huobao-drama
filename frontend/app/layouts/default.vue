@@ -5,12 +5,12 @@
       <div class="header-left">
         <button class="brand" @click="navigateTo('/')">
           <div class="brand-mark">
-            <img v-if="showBrandImage" :src="brandLogo" alt="红果短剧" class="brand-logo" @error="showBrandImage = false" />
-            <span v-else class="brand-fallback">红</span>
+            <img v-if="showBrandImage" :src="brandLogo" alt="影光工场" class="brand-logo" @error="showBrandImage = false" />
+            <span v-else class="brand-fallback">影</span>
           </div>
           <div class="brand-text">
-            <span class="brand-name">红果短剧</span>
-            <span class="brand-sub">Hongguo Shorts</span>
+            <span class="brand-name">影光工场</span>
+            <span class="brand-sub">Yingguang Studio</span>
           </div>
         </button>
       </div>
@@ -70,7 +70,6 @@
               @click="videoMenuOpen = false"
             >
               <span class="nav-dropdown-item-label">{{ item.label }}</span>
-              <span v-if="item.refHint" class="nav-dropdown-item-ref">{{ item.refHint }}</span>
             </NuxtLink>
           </div>
         </div>
@@ -106,7 +105,6 @@
               @click="toolboxMenuOpen = false"
             >
               <span class="nav-dropdown-item-label">{{ item.label }}</span>
-              <span v-if="item.refHint" class="nav-dropdown-item-ref">{{ item.refHint }}</span>
             </NuxtLink>
           </div>
         </div>
@@ -198,7 +196,6 @@
             </div>
           </div>
           <span class="user-name">{{ user.display_name || user.username }}</span>
-          <span v-if="isAdmin" class="tag tag-accent">管理员</span>
           <button type="button" class="btn btn-ghost btn-sm" @click="logout">退出</button>
         </div>
         <div class="film-strip">
@@ -239,7 +236,12 @@ const isCreditsRoute = computed(() => {
   return rechargeEnabled.value && route.path === '/recharge'
 })
 
-const videoNavItems = computed(() => buildVideoNavItems(true))
+const videoNavItems = computed(() => buildVideoNavItems({
+  includeJimeng: true,
+  includeXyq: true,
+  includeCoze: true,
+  isAdmin: isAdmin.value,
+}))
 const toolboxNavItems = computed(() => buildToolboxNavItems({ isAdmin: isAdmin.value }))
 const isToolboxRoute = computed(() => toolboxNavItems.value.some(
   item => route.path === item.to || route.path.startsWith(item.to + '/'),
@@ -438,6 +440,9 @@ onUnmounted(() => {
   left: 0;
   z-index: 100;
   min-width: 220px;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   border-radius: calc(var(--radius) + 2px);
   border: 1px solid var(--border);

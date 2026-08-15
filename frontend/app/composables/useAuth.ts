@@ -25,6 +25,7 @@ export function useAuth() {
         display_name: me.display_name || me.username,
         role: me.role,
         credits_balance: me.credits_balance,
+        can_use_funshion: !!me.can_use_funshion,
       }
       syncFromUserPayload(me)
     } catch {

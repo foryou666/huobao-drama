@@ -7,6 +7,52 @@
       </div>
     </header>
 
+    <div
+      class="tts-server-banner"
+      :class="{
+        online: serverState === 'online',
+        offline: serverState === 'offline' || serverState === 'unconfigured',
+        checking: serverState === 'checking',
+      }"
+      role="status"
+    >
+      <div class="tts-server-banner-icon" aria-hidden="true">
+        <svg v-if="serverState === 'online'" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2v4" />
+          <path d="M12 18v4" />
+          <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+          <path d="M4.9 4.9l2.8 2.8" />
+          <path d="M16.3 16.3l2.8 2.8" />
+          <path d="M2 12h4" />
+          <path d="M18 12h4" />
+          <path d="M4.9 19.1l2.8-2.8" />
+          <path d="M16.3 7.7l2.8-2.8" />
+        </svg>
+        <svg v-else-if="serverState === 'checking'" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="9" opacity="0.35" />
+          <path d="M21 12a9 9 0 0 0-9-9" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.4 18.4A9 9 0 0 1 5.6 5.6" />
+          <path d="M9.2 4.3A9 9 0 0 1 19.7 14.8" />
+          <circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none" />
+          <path d="M4 4l16 16" />
+        </svg>
+      </div>
+      <div class="tts-server-banner-copy">
+        <strong class="tts-server-banner-title">{{ serverBannerTitle }}</strong>
+        <span class="tts-server-banner-detail">{{ serverBannerDetail }}</span>
+      </div>
+      <button
+        type="button"
+        class="btn btn-sm tts-server-banner-refresh"
+        :disabled="serverChecking"
+        @click="checkServerStatus(true)"
+      >
+        {{ serverChecking ? '检测中…' : '重新检测' }}
+      </button>
+    </div>
+
     <div class="tts-feed">
       <div v-if="loading && !items.length" class="studio-empty card dim">加载中…</div>
       <div v-else-if="!items.length" class="studio-empty card">
@@ -146,8 +192,8 @@
           <button type="button" class="btn btn-sm" :disabled="loading" @click="reload">
             {{ loading ? '刷新中…' : '刷新' }}
           </button>
-          <button type="button" class="btn btn-primary" :disabled="generating || !canGenerate" @click="generate">
-            {{ generating ? '生成中…' : '生成配音' }}
+          <button type="button" class="btn btn-primary" :disabled="generating || !canGenerate || !serverOnline" @click="generate">
+            {{ !serverOnline ? '服务器未开机' : generating ? '生成中…' : '生成配音' }}
           </button>
         </div>
       </div>
@@ -165,7 +211,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onUnmounted, defineAsyncComponent } from 'vue'
 import { ttsAPI, dramaAPI, assetAPI, uploadAPI } from '~/composables/useApi'
 import { NARRATION_VOICE_PRESETS } from '~/constants/narration-voices.js'
 import { TTS_EMOTION_MODES, TTS_EMOTION_VECTOR_LABELS, TTS_EMOTION_QUICK_PRESETS } from '~/constants/tts-studio.js'
@@ -201,6 +247,27 @@ const emotionVector = ref({
   happy: 0, angry: 0, sad: 0, afraid: 0, disgusted: 0, melancholic: 0, surprised: 0, calm: 0,
 })
 
+/** checking | online | offline | unconfigured */
+const serverState = ref('checking')
+const serverLabel = ref('正在检测 TTS 服务器状态…')
+const serverDetail = ref('')
+const serverChecking = ref(false)
+let serverPollTimer = null
+
+const serverOnline = computed(() => serverState.value === 'online')
+const serverBannerTitle = computed(() => {
+  if (serverState.value === 'online') return '当前 TTS 服务器已开机，正常使用'
+  if (serverState.value === 'checking') return '正在检测 TTS 服务器状态…'
+  if (serverState.value === 'unconfigured') return '当前 TTS 服务器未配置，暂停使用'
+  return '当前 TTS 服务器已关机'
+})
+const serverBannerDetail = computed(() => {
+  if (serverState.value === 'online') return serverDetail.value || '可正常生成配音'
+  if (serverState.value === 'checking') return '请稍候'
+  if (serverState.value === 'unconfigured') return serverDetail.value || '请联系管理员配置 IndexTTS2'
+  return '如需使用配音功能，请向管理员申请开机。'
+})
+
 const selectedPreset = computed(() =>
   voicePresets.find(p => p.voice_id === selectedPresetId.value) || null,
 )
@@ -213,6 +280,26 @@ const emotionWeightLabel = computed(() => {
 const canGenerate = computed(() =>
   text.value.trim().length > 0 && (selectedAssetVoice.value || selectedUploadVoice.value || selectedPresetId.value),
 )
+
+async function checkServerStatus(force = false) {
+  if (serverChecking.value && !force) return
+  serverChecking.value = true
+  if (serverState.value !== 'online' && serverState.value !== 'offline' && serverState.value !== 'unconfigured') {
+    serverState.value = 'checking'
+  }
+  try {
+    const res = await ttsAPI.status({ force })
+    serverState.value = res?.state || (res?.online ? 'online' : 'offline')
+    serverLabel.value = res?.label || serverBannerTitle.value
+    serverDetail.value = res?.detail || ''
+  } catch (err) {
+    serverState.value = 'offline'
+    serverLabel.value = '当前 TTS 服务器已关机。如需使用配音功能，请向管理员申请开机。'
+    serverDetail.value = err?.message || '无法获取服务器状态'
+  } finally {
+    serverChecking.value = false
+  }
+}
 
 function formatSec(sec) {
   const n = Number(sec)
@@ -341,6 +428,10 @@ function buildPayload() {
 }
 
 async function generate() {
+  if (!serverOnline.value) {
+    toast.error('当前 TTS 服务器已关机。如需使用配音功能，请向管理员申请开机。')
+    return
+  }
   generating.value = true
   try {
     const row = await ttsAPI.generate(buildPayload())
@@ -348,12 +439,15 @@ async function generate() {
     toast.success('配音已生成')
   } catch (err) {
     toast.error(err?.message || '生成失败')
+    void checkServerStatus(true)
   } finally {
     generating.value = false
   }
 }
 
 onMounted(async () => {
+  void checkServerStatus(true)
+  serverPollTimer = setInterval(() => { void checkServerStatus(false) }, 60_000)
   try {
     await ensureDramasLoaded()
     await loadVoices()
@@ -363,6 +457,13 @@ onMounted(async () => {
     toast.error(err?.message || '页面初始化失败')
   }
 })
+
+onUnmounted(() => {
+  if (serverPollTimer) {
+    clearInterval(serverPollTimer)
+    serverPollTimer = null
+  }
+})
 </script>
 
 <style scoped>
@@ -370,6 +471,90 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   min-height: 100%;
+}
+
+.tts-server-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 0 24px 16px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  border: 2px solid transparent;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.tts-server-banner.online {
+  background: rgba(46, 160, 67, 0.16);
+  border-color: rgba(46, 160, 67, 0.65);
+  color: #1b7a32;
+}
+
+.tts-server-banner.offline {
+  background: rgba(220, 50, 50, 0.14);
+  border-color: rgba(220, 50, 50, 0.7);
+  color: #b42318;
+}
+
+.tts-server-banner.checking {
+  background: rgba(180, 140, 40, 0.14);
+  border-color: rgba(180, 140, 40, 0.55);
+  color: #8a6a12;
+}
+
+.tts-server-banner-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.tts-server-banner.online .tts-server-banner-icon {
+  color: #1b7a32;
+  box-shadow: 0 0 0 3px rgba(46, 160, 67, 0.25);
+}
+
+.tts-server-banner.offline .tts-server-banner-icon {
+  color: #b42318;
+  box-shadow: 0 0 0 3px rgba(220, 50, 50, 0.25);
+}
+
+.tts-server-banner.checking .tts-server-banner-icon {
+  color: #8a6a12;
+  animation: tts-spin 1s linear infinite;
+}
+
+.tts-server-banner-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tts-server-banner-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.tts-server-banner-detail {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.tts-server-banner-refresh {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+@keyframes tts-spin {
+  to { transform: rotate(360deg); }
 }
 
 .tts-feed {

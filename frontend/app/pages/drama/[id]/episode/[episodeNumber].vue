@@ -1042,6 +1042,18 @@
 
           <!-- Sub: Characters -->
           <div v-if="prodTab === 'chars'" class="prod-content">
+            <div v-if="!hasProjectAssets" class="asset-import-banner card">
+              <div class="asset-import-copy">
+                <strong>还没有项目资产</strong>
+                <p class="dim">导入本集剧本后可自动提取角色、场景、道具文字设定。</p>
+              </div>
+              <div class="asset-import-actions">
+                <button type="button" class="btn btn-primary" :disabled="assistantRunning" @click="openExtractAssetsModal">
+                  导入剧本提取资产
+                </button>
+                <button type="button" class="btn btn-sm" @click="openManualEntity('character')">手动添加角色</button>
+              </div>
+            </div>
             <div class="prod-section-bar">
               <span class="dim" style="font-size:12px">{{ charSearchKeyword.trim() ? `${filteredVisualChars.length} / ${visualChars.length}` : visualChars.length }} 个需生成形象角色</span>
               <input v-model="charSearchKeyword" class="input entity-search-input" placeholder="按名字搜索角色…" />
@@ -1051,7 +1063,9 @@
               <span v-if="lockedImageConfigProvider && !imageReferenceSupported" class="tag tag-warn">当前图片模型不支持参考图生图</span>
               <span v-if="chars.length > visualChars.length" class="tag">旁白仅保留声音</span>
               <div class="ml-auto flex gap-1">
-                <button class="btn btn-sm" :disabled="assistantRunning" @click="openExtractAssetsModal">提取资产</button>
+                <button class="btn btn-sm" :disabled="assistantRunning" @click="openExtractAssetsModal">
+                  {{ hasProjectAssets ? '提取资产' : '导入剧本提取资产' }}
+                </button>
                 <button class="btn btn-sm" @click="openManualEntity('character')">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   添加角色
@@ -1089,14 +1103,14 @@
                 v-if="!chars.length"
                 type="button"
                 class="card asset-card asset-empty-card"
-                @click="openManualEntity('character')"
+                @click="openExtractAssetsModal"
               >
                 <div class="asset-empty-cover">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
                 </div>
                 <div class="asset-body">
-                  <div class="asset-name">暂无角色卡片</div>
-                  <div class="asset-meta dim">用上方「提取资产」或「添加角色」开始</div>
+                  <div class="asset-name">导入剧本提取资产</div>
+                  <div class="asset-meta dim">粘贴或选用本集剧本，自动提取角色 / 场景 / 道具</div>
                 </div>
               </button>
               <div v-for="c in filteredVisualChars" :key="c.id" class="card asset-card">
@@ -2609,7 +2623,7 @@
     <div v-if="extractAssetsModalOpen" class="overlay" @click.self="extractAssetsModalOpen = false">
       <div class="card import-script-dialog storyboard-prompt-dialog">
         <div class="image-viewer-head">
-          <div class="image-viewer-title">确认提取资产</div>
+          <div class="image-viewer-title">{{ hasProjectAssets ? '确认提取资产' : '导入剧本提取资产' }}</div>
           <button class="btn btn-ghost btn-icon" @click="extractAssetsModalOpen = false">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -2800,7 +2814,7 @@
       :initial-prompt="videoPromptEditor.initialPrompt"
       :video-model-label="lockedVideoConfigLabel"
       :context-lines="videoPromptEditor.contextLines"
-      :prompt-send-limit="isChengmengVideoActive ? CHENGMENT_PROMPT_MAX_LENGTH : null"
+      :prompt-send-limit="null"
       :prompt-reference-image-count="videoPromptEditorReferenceImageCount"
       @close="closeVideoPromptEditor"
       @saved="onVideoPromptEditorSaved"
@@ -2851,6 +2865,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import {
   Users, MapPin, Video, ImageIcon, Layers, Mic2, FileText, FolderKanban, Clapperboard, Download, Loader2, Sparkles, Music,
 } from 'lucide-vue-next'
@@ -2873,8 +2888,9 @@ import VoiceAssetPickerModal from '~/components/VoiceAssetPickerModal.vue'
 import { parseVoiceRefs, formatVoiceDuration, MAX_VOICE_REFS } from '~/utils/voice-refs.js'
 import { buildOrderedVideoContentRefs, buildPromptOrderedDisplayItems, validatePromptImageRefs, formatPromptImageRefIssues, assignDisplayImageIndices } from '~/utils/video-ref-order.js'
 import { removePromptImageLabel } from '~/utils/studio-video-refs.js'
-import { CHENGMENT_PROMPT_MAX_LENGTH, countChengmengReferenceAudios, countChengmengReferenceImages, estimateChengmengPromptLength, formatVideoPromptOverLimitMessage } from '~/utils/chengmeng-prompt.js'
+import { countChengmengReferenceImages } from '~/utils/chengmeng-prompt.js'
 import { mediaDisplayUrl, mediaGridUrl, prefetchMediaUrls, prefetchMediaUrlsInBackground, normalizeMediaPath } from '~/utils/media-url.js'
+import { directorPanoramaQueryValue } from '~/utils/director-panorama-url.js'
 import { buildVideoDownloadFilename, downloadMediaFile } from '~/utils/download-media.js'
 import { toSeedanceDisplayLabel } from '~/utils/seedance-display.js'
 import { CHARACTER_IMAGE_TRANSFORMS, supportsImageReference, imageReferenceSupportHint, resolveImageConfigModel } from '~/utils/character-image-transforms.js'
@@ -2989,7 +3005,7 @@ const importText = ref('')
 const importLoading = ref(false)
 const generateLoading = ref(false)
 const clipMoveLoading = ref(false)
-const panel = ref('script')
+const panel = ref('production')
 const pageLoading = ref(true)
 const pageError = ref('')
 const episodeSetupOpen = ref(false)
@@ -3164,10 +3180,12 @@ function directorDeskHref(sb) {
   if (sceneId) {
     const scene = scenes.value.find(s => s.id === sceneId)
     const img = scene ? resolveSceneImageForStoryboard(scene, sb) : ''
-    if (img) params.set('scene_image', mediaDisplayUrl(img))
+    const sceneQuery = directorPanoramaQueryValue(img)
+    if (sceneQuery) params.set('scene_image', sceneQuery)
   }
   const blocking = sb.blocking_image || sb.blockingImage
-  if (blocking) params.set('blocking_image', mediaDisplayUrl(blocking))
+  const blockingQuery = directorPanoramaQueryValue(blocking)
+  if (blockingQuery) params.set('blocking_image', blockingQuery)
   return `/director?${params.toString()}`
 }
 function frameTimerKey(id, frameType) { return `frame:${id}:${frameType}` }
@@ -4465,6 +4483,9 @@ const shotVidCount = computed(() => sbs.value.filter(s => s.video_url || s.video
 const visualCharTotal = computed(() => visualChars.value.length)
 
 const dramaProps = computed(() => drama.value?.props || [])
+const hasProjectAssets = computed(() =>
+  chars.value.length > 0 || scenes.value.length > 0 || dramaProps.value.length > 0,
+)
 
 const prodTabDefs = computed(() => [
   { id: 'chars', label: '角色形象', icon: Users, badge: visualCharTotal.value ? `${charImgCount.value}/${visualCharTotal.value}` : '' },
@@ -5060,15 +5081,19 @@ async function refresh(options = {}) {
       prodTab.value = preservedProdTab === 'shots' ? 'videos' : preservedProdTab
     } else if (preservedPanel === 'export') {
       panel.value = 'export'
-    } else {
+    } else if (preservedPanel === 'script') {
       panel.value = 'script'
-      if (preservedScriptStep <= 4 && preservedScriptStep >= 0 && preservedPanel === 'script') {
+      if (preservedScriptStep <= 4 && preservedScriptStep >= 0) {
         scriptStep.value = preservedScriptStep
       } else if (epHasSbs) scriptStep.value = 4
       else if (epHasScript && chars.value.some(c => c.voice_style || c.voiceStyle)) scriptStep.value = 3
       else if (epHasScript && chars.value.length) scriptStep.value = 2
       else if (epHasScript || epHasContent) scriptStep.value = 1
       else scriptStep.value = 0
+    } else {
+      // 默认进入资产页（角色形象）
+      panel.value = 'production'
+      prodTab.value = 'chars'
     }
   } catch (e) {
     pageError.value = e.message || '加载失败'
@@ -6175,12 +6200,9 @@ function getBlockingVideoPromptSnippet(sb) {
 async function copyBlockingVideoSnippet(sb) {
   const text = getBlockingVideoPromptSnippet(sb)
   if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success('已复制站位说明，可粘贴到 video_prompt 首行')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制站位说明，可粘贴到 video_prompt 首行')
+  else toast.error('复制失败')
 }
 
 function getBlockingVideoImageIndex(sb) {
@@ -6480,15 +6502,6 @@ async function genVid(sb) {
     return
   }
   const contentRefs = buildVideoContentRefs(sb)
-  if (isChengmengVideoActive.value) {
-    const imageCount = countChengmengReferenceImages(contentRefs)
-    const audioCount = countChengmengReferenceAudios(contentRefs)
-    const sendLength = estimateChengmengPromptLength(prompt, imageCount, 0, audioCount)
-    if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
-      toast.error(formatVideoPromptOverLimitMessage(sendLength))
-      return
-    }
-  }
   const params = {
     storyboard_id: sb.id,
     drama_id: dramaId,
@@ -6789,7 +6802,7 @@ onMounted(() => {
 })
 
 watch(() => route.params.episodeNumber, () => {
-  panel.value = 'script'
+  panel.value = 'production'
   prodTab.value = 'chars'
   scriptStep.value = 0
   episode.value = null
@@ -7916,6 +7929,37 @@ watch(() => route.params.episodeNumber, () => {
 /* Production content */
 .prod-content { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
 .prod-section-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.asset-import-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-1));
+}
+.asset-import-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.asset-import-copy strong {
+  font-size: 14px;
+  color: var(--text-0);
+}
+.asset-import-copy p {
+  margin: 0;
+  font-size: 12px;
+}
+.asset-import-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
 .prod-video-model-pills {
   display: inline-flex;
   align-items: center;

@@ -1,47 +1,27 @@
 const NODE_W = 268
-const COL_GAP = 200
-const ROW_GAP = 18
-const PAD_X = 100
-const PAD_Y = 80
+const COL_GAP = 160
+const PAD_X = 80
+const PAD_Y = 72
 
 const NODE_HEIGHT = {
-  segment: 280,
-  extract: 180,
-  asset: 290,
-  tts: 150,
+  segment: 200,
+  extract: 160,
+  /** 角色/场景/道具缩略图集中在一个区域，避免竖向铺开 */
+  'asset-group': 300,
+  tts: 140,
+  'grok-group': 180,
   grok: 300,
   export: 140,
 }
 
 function nodeHeight(type) {
-  if (type.startsWith('asset-')) return NODE_HEIGHT.asset
   return NODE_HEIGHT[type] || 160
 }
 
-function stackColumn(items, x, startY) {
-  let y = startY
-  return items.map(item => {
-    const h = nodeHeight(item.type)
-    const placed = { ...item, x, y, w: NODE_W, h }
-    y += h + ROW_GAP
-    return placed
-  })
-}
-
-function columnHeight(nodes) {
-  if (!nodes.length) return nodeHeight('asset')
-  const last = nodes[nodes.length - 1]
-  return last.y + last.h - nodes[0].y
-}
-
-function centerColumn(nodes, targetCenterY) {
-  if (!nodes.length) return nodes
-  const h = columnHeight(nodes)
-  const top = targetCenterY - h / 2
-  const offset = top - nodes[0].y
-  return nodes.map(n => ({ ...n, y: n.y + offset }))
-}
-
+/**
+ * 画布列顺序：提取 → 资产定稿(集中) → 旁白分段 → TTS → 画面 → 导出
+ * 资产不再各占一卡，避免缩放才能看全貌。
+ */
 export function buildNarrationCanvasGraph({
   segments = [],
   analysis = {},
@@ -50,68 +30,82 @@ export function buildNarrationCanvasGraph({
 }) {
   const edges = []
   const items = assetReadiness?.items || []
+  const readyCount = Number(assetReadiness?.ready_count || items.filter(i => i.has_image).length)
+  const totalCount = Number(assetReadiness?.total || items.length)
+  const generating = items.some(i => i.image_status === 'generating')
+
+  const extractNode = {
+    id: 'extract',
+    type: 'extract',
+    title: '角色 / 场景 / 道具',
+    subtitle: [
+      analysis.characters?.length ? `${analysis.characters.length} 角色` : '',
+      analysis.scenes?.length ? `${analysis.scenes.length} 场景` : '',
+      analysis.props?.length ? `${analysis.props.length} 道具` : '',
+    ].filter(Boolean).join(' · ') || '点击此节点 → 从剧本提取',
+    stageDone: (analysis.characters?.length || 0) + (analysis.scenes?.length || 0) > 0,
+    data: { analysis },
+  }
+
+  const assetGroup = items.length
+    ? {
+        id: 'asset-group',
+        type: 'asset-group',
+        title: '资产定稿',
+        subtitle: totalCount
+          ? `${readyCount}/${totalCount} 已定稿 · 点击管理`
+          : '抽取后在此集中生图',
+        stageDone: totalCount > 0 && readyCount === totalCount,
+        status: generating ? 'generating' : (readyCount ? 'completed' : 'draft'),
+        data: {
+          items,
+          ready: readyCount,
+          total: totalCount,
+          thumbs: items.slice(0, 12).map(item => ({
+            id: `${item.type}-${item.id}`,
+            name: item.name,
+            type: item.type,
+            imageUrl: item.image_url || null,
+            ready: !!item.has_image,
+            status: item.image_status,
+          })),
+        },
+      }
+    : null
 
   const segmentNode = {
     id: 'segment',
     type: 'segment',
     title: '旁白分段',
-    subtitle: `${segments.length} 段原文`,
+    subtitle: segments.length ? `${segments.length} 段原文` : '提取资产后再分段',
     stageDone: segments.length > 0,
     data: { segments },
   }
-
-  const extractNode = {
-    id: 'extract',
-    type: 'extract',
-    title: '实体抽取',
-    subtitle: [
-      analysis.characters?.length ? `${analysis.characters.length} 角色` : '',
-      analysis.scenes?.length ? `${analysis.scenes.length} 场景` : '',
-      analysis.props?.length ? `${analysis.props.length} 道具` : '',
-    ].filter(Boolean).join(' · ') || '待抽取',
-    stageDone: (analysis.characters?.length || 0) + (analysis.scenes?.length || 0) > 0,
-    data: { analysis },
-  }
-
-  const assetNodes = items.map(item => ({
-    id: `asset-${item.type}-${item.id}`,
-    type: `asset-${item.type}`,
-    title: item.name,
-    subtitle: item.type === 'character' ? '角色三视图' : item.type === 'scene' ? '场景定稿' : '道具定稿',
-    stageDone: item.has_image,
-    status: item.image_status,
-    imageUrl: item.image_url,
-    data: { item },
-  }))
 
   const ttsDone = segments.some(s => s.tts_audio_url || s.status === 'tts_done')
   const ttsNode = {
     id: 'tts',
     type: 'tts',
     title: 'TTS 朗读',
-    subtitle: ttsDone ? '旁白音频已合成' : 'IndexTTS2',
+    subtitle: ttsDone ? '旁白音频已合成' : 'RunningHub IndexTTS2',
     stageDone: ttsDone,
     data: {},
   }
 
-  const grokNodes = segments.map(seg => {
-    const refs = seg.content_refs || []
-    const ttsSec = Number(seg.tts_duration_sec) || 0
-    const durHint = ttsSec > 0
-      ? (seg.duration_mismatch ? `旁白 ${ttsSec.toFixed(0)}s · 需 ${seg.shots_needed || '?'} 镜` : `旁白 ${ttsSec.toFixed(0)}s`)
-      : (seg.video_prompt?.slice(0, 48) || '待生成画面')
-    return {
-      id: `grok-${seg.id}`,
-      type: 'grok',
-      title: `镜头 ${seg.segment_index + 1}`,
-      subtitle: durHint,
-      stageDone: seg.status === 'completed',
-      status: seg.status,
-      imageUrl: seg.video_url && seg.status === 'completed' ? seg.video_url : null,
-      videoUrl: seg.video_url && seg.status === 'completed' ? seg.video_url : null,
-      data: { seg, refCount: refs.length },
-    }
-  })
+  const grokDone = segments.filter(s => s.status === 'completed' || !!(s.video_url || s.videoUrl || s.video_path || s.videoPath)).length
+  const grokBusy = segments.some(s => s.status === 'generating')
+  const mismatch = segments.filter(s => s.duration_mismatch).length
+  const grokGroup = {
+    id: 'grok-group',
+    type: 'grok-group',
+    title: '画面镜头',
+    subtitle: segments.length
+      ? `${grokDone}/${segments.length} 已生成${mismatch ? ` · ${mismatch} 段偏长` : ''}`
+      : '待分段',
+    stageDone: segments.length > 0 && grokDone === segments.length,
+    status: grokBusy ? 'generating' : (grokDone ? 'completed' : 'draft'),
+    data: { segments, done: grokDone, total: segments.length },
+  }
 
   const exportNode = {
     id: 'export',
@@ -122,84 +116,33 @@ export function buildNarrationCanvasGraph({
     data: {},
   }
 
-  const assetH = columnHeight(assetNodes.map(n => ({ y: 0, h: nodeHeight(n.type) })))
-  const grokH = columnHeight(grokNodes.map(n => ({ y: 0, h: nodeHeight(n.type) })))
-  const canvasCenterY = PAD_Y + Math.max(assetH, grokH, nodeHeight('segment')) / 2
+  const pipeline = [extractNode]
+  if (assetGroup) pipeline.push(assetGroup)
+  pipeline.push(segmentNode, ttsNode, grokGroup, exportNode)
+
+  const maxH = Math.max(...pipeline.map(n => nodeHeight(n.type)))
+  const centerY = PAD_Y + maxH / 2
 
   let colX = PAD_X
-
-  const segmentP = {
-    ...segmentNode,
-    x: colX,
-    y: canvasCenterY - nodeHeight('segment') / 2,
-    w: NODE_W,
-    h: nodeHeight('segment'),
-  }
-  colX += NODE_W + COL_GAP
-
-  const extractP = {
-    ...extractNode,
-    x: colX,
-    y: canvasCenterY - nodeHeight('extract') / 2,
-    w: NODE_W,
-    h: nodeHeight('extract'),
-  }
-  colX += NODE_W + COL_GAP
-  edges.push({ from: 'segment', to: 'extract' })
-
-  let stackedAssets = stackColumn(assetNodes, colX, PAD_Y)
-  stackedAssets = centerColumn(stackedAssets, canvasCenterY)
-  colX += NODE_W + COL_GAP
-
-  for (const asset of stackedAssets) {
-    edges.push({ from: 'extract', to: asset.id })
+  const placed = []
+  for (const node of pipeline) {
+    const h = nodeHeight(node.type)
+    placed.push({
+      ...node,
+      x: colX,
+      y: centerY - h / 2,
+      w: NODE_W,
+      h,
+    })
+    colX += NODE_W + COL_GAP
   }
 
-  const ttsP = {
-    ...ttsNode,
-    x: colX,
-    y: canvasCenterY - nodeHeight('tts') / 2,
-    w: NODE_W,
-    h: nodeHeight('tts'),
-  }
-  colX += NODE_W + COL_GAP
-
-  let stackedGrok = stackColumn(grokNodes, colX, PAD_Y)
-  stackedGrok = centerColumn(stackedGrok, canvasCenterY)
-  colX += NODE_W + COL_GAP
-
-  const exportP = {
-    ...exportNode,
-    x: colX,
-    y: canvasCenterY - nodeHeight('export') / 2,
-    w: NODE_W,
-    h: nodeHeight('export'),
+  for (let i = 0; i < placed.length - 1; i++) {
+    edges.push({ from: placed[i].id, to: placed[i + 1].id })
   }
 
-  for (const grok of stackedGrok) {
-    const seg = grok.data.seg
-    const meta = (analysis.segment_meta || []).find(m => m.segment_index === seg.segment_index)
-    edges.push({ from: 'segment', to: grok.id })
-    edges.push({ from: 'tts', to: grok.id })
-
-    for (const cid of meta?.character_ids || []) {
-      const aid = `asset-character-${cid}`
-      if (stackedAssets.some(a => a.id === aid)) edges.push({ from: aid, to: grok.id })
-    }
-    if (meta?.scene_id) {
-      const sid = `asset-scene-${meta.scene_id}`
-      if (stackedAssets.some(a => a.id === sid)) edges.push({ from: sid, to: grok.id })
-    }
-    for (const pid of meta?.prop_ids || []) {
-      const pidn = `asset-prop-${pid}`
-      if (stackedAssets.some(a => a.id === pidn)) edges.push({ from: pidn, to: grok.id })
-    }
-    edges.push({ from: grok.id, to: 'export' })
-  }
-
-  const allNodes = [segmentP, extractP, ...stackedAssets, ttsP, ...stackedGrok, exportP]
-  const minY = Math.min(...allNodes.map(n => n.y)) - PAD_Y / 2
-  const normalizedNodes = allNodes.map(n => ({ ...n, y: n.y - minY }))
+  const minY = Math.min(...placed.map(n => n.y)) - PAD_Y / 2
+  const normalizedNodes = placed.map(n => ({ ...n, y: n.y - minY }))
   const maxX = Math.max(...normalizedNodes.map(n => n.x + n.w)) + PAD_X
   const maxY = Math.max(...normalizedNodes.map(n => n.y + n.h)) + PAD_Y
 

@@ -159,6 +159,7 @@
             <p class="studio-card-prompt">{{ previewPrompt(item.prompt) }}</p>
             <div class="studio-card-meta">
               <span v-if="item.is_pinned" class="tag tag-accent">置顶</span>
+              <span v-if="channelLabel(item)" class="tag tag-accent">{{ channelLabel(item) }}</span>
               <span class="mono dim">#{{ item.id }}</span>
               <span v-if="item.is_manual" class="tag">手动</span>
               <span v-if="item.drama_title" class="dim">{{ item.drama_title }}</span>
@@ -209,7 +210,10 @@
         <div class="studio-detail-head">
           <div>
             <h3>图片详情 #{{ detailItem.id }}</h3>
-            <p class="dim">{{ formatTime(detailItem.created_at) }}</p>
+            <p class="dim">
+              {{ formatTime(detailItem.created_at) }}
+              <template v-if="channelLabel(detailItem)"> · {{ channelLabel(detailItem) }}</template>
+            </p>
             <p v-if="operatorLabel(detailItem)" class="studio-detail-operator">操作人 {{ operatorLabel(detailItem) }}</p>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="detailItem = null">关闭</button>
@@ -346,7 +350,9 @@ import ImageStudioComposer from '~/components/ImageStudioComposer.vue'
 import AddGeneratedImageToEntityModal from '~/components/AddGeneratedImageToEntityModal.vue'
 import { formatImageGenerationError } from '~/utils/image-generation-error.js'
 import { aspectRatioFromImageItem } from '~/utils/studio-image-aspect-preference.js'
+import { studioImageModelLabel } from '~/utils/studio-image-model-preference.js'
 import { sanitizeUserFacingProviderError } from '~/utils/provider-error-sanitize.js'
+import { copyText } from '~/utils/copy-text.js'
 
 const route = useRoute()
 const { isAdmin } = useAuth()
@@ -376,7 +382,7 @@ const pinningId = ref(null)
 const pageDragDepth = ref(0)
 const pageDragOver = computed(() => pageDragDepth.value > 0)
 let pollTimer = null
-const LEDGER_CACHE_PREFIX = 'studio-image-ledger-v1'
+const LEDGER_CACHE_PREFIX = 'studio-image-ledger-v2'
 const DRAMA_CACHE_KEY = 'studio-image-dramas-lite-v1'
 
 function ledgerCacheKey() {
@@ -535,6 +541,10 @@ function cardRatioClass(item) {
   return ratio === '16:9' ? 'ratio-landscape' : 'ratio-portrait'
 }
 
+function channelLabel(item) {
+  return studioImageModelLabel(item?.model, item?.provider)
+}
+
 function previewPrompt(text) {
   const value = String(text || '').trim()
   if (!value) return '无提示词'
@@ -602,12 +612,9 @@ function referenceModifyDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function imageDownloadName(item) {
@@ -845,10 +852,17 @@ async function onGenerate(payload) {
   const startedAt = Date.now()
   try {
     const generation = await imageAPI.generate(payload)
-    toast.success('图片任务已提交')
-    prependSubmittedItem(generation)
+    const items = Array.isArray(generation?.items) && generation.items.length
+      ? generation.items
+      : [generation]
+    toast.success(items.length > 1 ? `已提交 ${items.length} 张图片任务` : '图片任务已提交')
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (items[i]) prependSubmittedItem(items[i])
+    }
     await reload()
-    void pollGeneration(generation?.id)
+    for (const item of items) {
+      void pollGeneration(item?.id)
+    }
     startPolling()
   } catch (err) {
     toast.error(formatImageGenerationError(err?.message || '生成失败'))

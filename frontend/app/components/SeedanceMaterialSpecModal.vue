@@ -12,7 +12,7 @@
         <section class="seedance-spec-card seedance-spec-card--text">
           <h3>文本 · 提示词建议</h3>
           <ul>
-            <li>建议提示词控制在 <strong>2000 字</strong>以内。</li>
+            <li>建议提示词控制在 <strong>2000 字</strong>以内（非硬性上限；橙盟 API 文档未规定字数限制）。</li>
             <li>文本过长会导致信息分散，模型可能忽略部分细节，仅关注重点内容，从而使生成视频缺少预期元素。</li>
           </ul>
         </section>

@@ -39,10 +39,14 @@ export type DirectorDeskBlockingLayoutPayload = {
 }
 
 const MESSAGE_SESSION = 'storyai:director-desk-session'
+const MESSAGE_LOAD_STATE = 'storyai:director-desk-load-state'
+const MESSAGE_STATE_CHANGED = 'storyai:director-desk-state-changed'
 const MESSAGE_PANORAMA = 'storyai:director-desk-panorama'
 const MESSAGE_BLOCKING_LAYOUT = 'storyai:director-desk-blocking-layout'
 const MESSAGE_CAPTURES = 'storyai:director-desk-captures-sent'
 const MESSAGE_PANORAMA_REMOVED = 'storyai:director-desk-panorama-removed'
+const MESSAGE_PANORAMA_USER_IMPORTED = 'storyai:director-desk-panorama-user-imported'
+const MESSAGE_TOAST = 'storyai:director-desk-toast'
 const MESSAGE_READY = 'storyai:director-desk-ready'
 const MESSAGE_CLOSE = 'storyai:director-desk-close'
 
@@ -78,6 +82,17 @@ export function postDirectorDeskSession(
   )
 }
 
+export function postDirectorDeskLoadState(
+  iframe: HTMLIFrameElement | null | undefined,
+  state: unknown,
+) {
+  if (!state || typeof state !== 'object') return
+  iframe?.contentWindow?.postMessage(
+    { type: MESSAGE_LOAD_STATE, payload: { state } },
+    hostOrigin(),
+  )
+}
+
 export function postDirectorDeskPanorama(
   iframe: HTMLIFrameElement | null | undefined,
   payload: DirectorDeskPanoramaPayload,
@@ -102,6 +117,9 @@ export function postDirectorDeskBlockingLayout(
 export type DirectorDeskHostHandlers = {
   onCaptures?: (captures: DirectorDeskCaptureItem[]) => void
   onPanoramaRemoved?: (payload: { edgeId: string; sourceNodeId: string }) => void
+  onPanoramaUserImported?: () => void
+  onToast?: (payload: { level?: string; message: string }) => void
+  onStateChanged?: (state: unknown) => void
   onReady?: () => void
   onClose?: () => void
 }
@@ -118,10 +136,31 @@ export function bindDirectorDeskHostListener(handlers: DirectorDeskHostHandlers)
       handlers.onClose?.()
       return
     }
+    if (type === MESSAGE_STATE_CHANGED) {
+      const state = event.data?.payload?.state
+      if (state && typeof state === 'object') {
+        handlers.onStateChanged?.(state)
+      }
+      return
+    }
     if (type === MESSAGE_CAPTURES) {
       const captures = event.data?.payload?.captures
       if (Array.isArray(captures) && captures.length) {
         handlers.onCaptures?.(captures)
+      }
+      return
+    }
+    if (type === MESSAGE_PANORAMA_USER_IMPORTED) {
+      handlers.onPanoramaUserImported?.()
+      return
+    }
+    if (type === MESSAGE_TOAST) {
+      const message = String(event.data?.payload?.message || '').trim()
+      if (message) {
+        handlers.onToast?.({
+          level: String(event.data?.payload?.level || ''),
+          message,
+        })
       }
       return
     }

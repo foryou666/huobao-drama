@@ -1,4 +1,4 @@
-/* === 红果短剧 Studio — Cinematic Editorial === */
+/* === 影光工场 Studio — Cinematic Editorial === */
 /* Google Fonts: Noto Serif SC (headings) + DM Sans (body) */
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Noto+Serif+SC:wght@400;500;600;700&display=swap');
 
@@ -204,6 +204,7 @@ select.input { appearance: none; cursor: pointer; background-image: url("data:im
   letter-spacing: 0.02em; font-family: var(--font-body);
 }
 .tag-accent { background: var(--accent-bg); color: var(--accent-text); font-weight: 700; }
+.tag-muted { background: rgba(128, 128, 128, 0.22); color: #9aa3b2; font-weight: 600; }
 .tag-success { background: var(--accent-bg); color: var(--accent-text); font-weight: 700; }
 .tag-error { background: var(--error-bg); color: var(--error); }
 .tag-info { background: var(--info-bg); color: var(--info); }
@@ -255,6 +256,18 @@ select.input { appearance: none; cursor: pointer; background-image: url("data:im
 }
 
 /* 视频详情弹层：避免 aspect-ratio + overflow:hidden 裁切原生控制条 */
+.studio-detail.card {
+  background: #ffffff;
+  color: #121212;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+}
+.studio-detail.card .dim,
+.studio-detail.card .studio-detail-operator {
+  color: #4a5568;
+}
+.studio-detail.card .studio-detail-head h3 {
+  color: #121212;
+}
 .studio-detail .studio-detail-media {
   aspect-ratio: unset !important;
   overflow: visible;
@@ -272,6 +285,11 @@ select.input { appearance: none; cursor: pointer; background-image: url("data:im
   object-fit: contain;
   display: block;
   background: #000;
+}
+/* 失败/无视频占位：深色底必须用浅色字 */
+.studio-detail .studio-detail-empty {
+  color: rgba(255, 255, 255, 0.88) !important;
+  line-height: 1.5;
 }
 
 /* === Animations === */

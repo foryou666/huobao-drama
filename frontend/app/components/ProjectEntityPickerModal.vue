@@ -30,6 +30,10 @@
             :placeholder="item.label.slice(0, 1)"
           />
           <div v-else class="entity-picker-thumb-empty">{{ item.label.slice(0, 1) }}</div>
+          <span
+            v-if="mode === 'character' && (item.portraitStatus === '已认证' || item.portraitStatus === '含已认证图')"
+            class="entity-picker-item-cert"
+          >{{ item.portraitStatus === '已认证' ? '已认证' : '含认证' }}</span>
           <span class="entity-picker-name">{{ item.label }}</span>
           <span v-if="item.sub" class="entity-picker-tag dim">{{ item.sub }}</span>
         </button>
@@ -39,7 +43,7 @@
         <div class="entity-picker-media-head">
           <span class="entity-picker-media-title">选择参考图</span>
           <span class="dim entity-picker-media-hint">
-            {{ mode === 'scene' ? '按视角分组，点击切换场景参考图' : mode === 'prop' ? '按视角分组，点击切换道具参考图' : '按服装分组，点击可展开备选造型' }}
+            {{ mode === 'scene' ? '按视角分组，点击切换场景参考图' : mode === 'prop' ? '按视角分组，点击切换道具参考图' : '可多选形态图；绿色「已认证」表示该图已入库（基准或造型定稿均可认证）' }}
           </span>
         </div>
         <div v-if="mode === 'character'" class="entity-picker-media-list">
@@ -48,7 +52,17 @@
             :key="`char-media:${char.id}`"
             class="entity-picker-media-segment"
           >
-            <span class="entity-picker-media-name">{{ char.name }}</span>
+            <span class="entity-picker-media-name">
+              {{ char.name }}
+              <span
+                v-if="portraitStatusLabel(char) === '已认证' || characterHasAnyCertifiedPortrait(char)"
+                class="entity-picker-portrait-badge"
+              >{{ portraitStatusLabel(char) === '已认证' ? '基准已认证' : '含已认证图' }}</span>
+              <span
+                v-else
+                class="entity-picker-portrait-hint dim"
+              >{{ portraitStatusLabel(char) }} · 基准/造型均可认证</span>
+            </span>
             <CharacterMediaStrip
               :char="char"
               layout="outfits"
@@ -61,6 +75,9 @@
               :is-active="(url) => isCharImageActive(char.id, url)"
               @preview="(img) => onCharImagePick(char.id, img.url)"
             />
+            <p class="dim entity-picker-portrait-note">
+              基准图与各套服装定稿均可单独认证；绿色「已认证」表示该图已入库，通道2将使用认证资产。
+            </p>
           </div>
         </div>
         <div v-else-if="mode === 'scene'" class="entity-picker-media-list">
@@ -117,11 +134,12 @@
 </template>
 
 <script setup>
-import { resolveCharacterImageUrl, listCharacterOutfitPreviews } from '~/utils/character-image-variants.js'
+import { resolveCharacterImageUrl, listCharacterOutfitPreviews, normalizeCharacterImageRefList } from '~/utils/character-image-variants.js'
 import { listSceneImages } from '~/utils/scene-image-variants.js'
 import { listPropImages } from '~/utils/prop-image-variants.js'
 import { buildSceneMediaFromImages, summarizePropMedia } from '~/utils/entity-view-media.js'
 import { normalizeMediaPath } from '~/utils/media-url.js'
+import { portraitStatusLabel, characterHasAnyCertifiedPortrait } from '~/utils/portrait-status.js'
 import GridMediaImage from '~/components/GridMediaImage.vue'
 import CharacterMediaStrip from '~/components/CharacterMediaStrip.vue'
 import EntityViewMediaStrip from '~/components/EntityViewMediaStrip.vue'
@@ -198,10 +216,14 @@ const items = computed(() => {
     const outfitCount = listCharacterOutfitPreviews(char).length
     const role = char.role || ''
     const outfitHint = outfitCount > 0 ? `${outfitCount}套服装` : ''
+    const portraitHint = characterHasAnyCertifiedPortrait(char)
+      ? (portraitStatusLabel(char) === '已认证' ? '已认证' : '含已认证图')
+      : portraitStatusLabel(char)
     return {
       id: char.id,
       label: char.name || `角色#${char.id}`,
-      sub: [role, outfitHint].filter(Boolean).join(' · '),
+      sub: [role, outfitHint, portraitHint].filter(Boolean).join(' · '),
+      portraitStatus: portraitHint,
       thumb: resolveCharacterImageUrl(char, {}),
     }
   })
@@ -293,8 +315,8 @@ function getSceneMedia(scene) {
 function isCharImageActive(charId, url) {
   const char = (props.characters || []).find(item => item.id === charId)
   const normalized = normalizeMediaPath(url)
-  const selected = pendingCharImageRefs.value[charId]
-  if (selected) return normalizeMediaPath(selected) === normalized
+  const selected = normalizeCharacterImageRefList(pendingCharImageRefs.value[charId])
+  if (selected.length) return selected.includes(normalized)
   return normalizeMediaPath(resolveCharacterImageUrl(char, {})) === normalized
 }
 
@@ -310,10 +332,23 @@ function isSceneImageActive(sceneId, url) {
 function onCharImagePick(charId, url) {
   const char = (props.characters || []).find(item => item.id === charId)
   const normalized = normalizeMediaPath(url)
+  if (!normalized) return
   const primary = normalizeMediaPath(resolveCharacterImageUrl(char, {}))
   const next = { ...pendingCharImageRefs.value }
-  if (!normalized || primary === normalized) delete next[charId]
-  else next[charId] = normalized
+  let list = normalizeCharacterImageRefList(next[charId])
+  // 尚未显式选图时，当前默认视为已选原图；再点其他形态则追加，保留原图
+  if (!list.length && primary) list = [primary]
+
+  const idx = list.indexOf(normalized)
+  if (idx >= 0) {
+    if (list.length <= 1) return
+    list.splice(idx, 1)
+  } else {
+    list.push(normalized)
+  }
+
+  if (list.length === 1 && list[0] === primary) delete next[charId]
+  else next[charId] = list.length === 1 ? list[0] : list
   pendingCharImageRefs.value = next
 }
 
@@ -379,13 +414,13 @@ function onItemClick(item) {
   }
   const idx = pendingCharIds.value.indexOf(item.id)
   if (idx >= 0) {
-    pendingCharIds.value = []
-    pendingCharImageRefs.value = {}
+    pendingCharIds.value.splice(idx, 1)
+    const next = { ...pendingCharImageRefs.value }
+    delete next[item.id]
+    pendingCharImageRefs.value = next
     return
   }
-  pendingCharIds.value = [item.id]
-  const savedRef = pendingCharImageRefs.value[item.id]
-  pendingCharImageRefs.value = savedRef ? { [item.id]: savedRef } : {}
+  pendingCharIds.value.push(item.id)
 }
 
 function close() {
@@ -483,6 +518,22 @@ function confirm() {
   background: var(--bg-2);
   cursor: pointer;
   text-align: left;
+  position: relative;
+}
+
+.entity-picker-item-cert {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.92);
+  color: #fff;
+  pointer-events: none;
 }
 
 .entity-picker-item.selected {
@@ -593,6 +644,31 @@ function confirm() {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-2);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.entity-picker-portrait-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #0f5132;
+  background: rgba(25, 135, 84, 0.18);
+  border: 1px solid rgba(25, 135, 84, 0.35);
+}
+
+.entity-picker-portrait-hint {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.entity-picker-portrait-note {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .entity-picker-media-segment :deep(.char-outfit-grid),

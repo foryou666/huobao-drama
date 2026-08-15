@@ -131,6 +131,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import { Loader2 } from 'lucide-vue-next'
+import { copyText } from '~/utils/copy-text.js'
 import { mediaDisplayUrl } from '~/utils/media-url.js'
 import {
   BLOCKING_ZONES,
@@ -178,12 +179,9 @@ const videoPromptSnippet = computed(() =>
 async function copyVideoSnippet() {
   const text = videoPromptSnippet.value
   if (!text) return
-  try {
-    await navigator.clipboard.writeText(text)
-    toast.success('已复制站位说明，可粘贴到 video_prompt 首行')
-  } catch {
-    toast.error('复制失败，请手动选中下方文本')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制站位说明，可粘贴到 video_prompt 首行')
+  else toast.error('复制失败，请手动选中下方文本')
 }
 
 function normalizePath(raw) {

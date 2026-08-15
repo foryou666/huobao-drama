@@ -7,10 +7,18 @@ import {
   formatPromptImageRefIssues,
   findCandidateForPromptLabel,
 } from './video-ref-order.js'
-import { resolveCharacterImageUrl, listCharacterImages } from './character-image-variants.js'
+import {
+  resolveCharacterImageUrl,
+  resolveCharacterImageUrls,
+  normalizeCharacterImageRefList,
+  labelForCharacterImage,
+  mergeCharacterImageRefs,
+  listCharacterImages,
+} from './character-image-variants.js'
 import { resolveSceneImageUrl, listSceneImages } from './scene-image-variants.js'
 import { resolvePropImageUrl } from './prop-image-variants.js'
-import { parseVoiceRefs, formatVoicePromptLabel } from './voice-refs.js'
+import { parseVoiceRefs, formatVoicePromptLabel, voiceRefFromAsset, MAX_VOICE_REFS } from './voice-refs.js'
+import { isCertifiedPortraitImage } from './portrait-status.js'
 
 export {
   validatePromptImageRefs,
@@ -75,8 +83,13 @@ export function bindingToStoryboard(binding) {
   }
 }
 
-export function createStudioHelpers(binding, dramaProps = []) {
+export function createStudioHelpers(binding, dramaProps = [], options = {}) {
+  const maxVoiceRefsRaw = options?.maxVoiceRefs
+  const maxVoiceRefs = Number.isFinite(Number(maxVoiceRefsRaw)) && Number(maxVoiceRefsRaw) >= 0
+    ? Math.floor(Number(maxVoiceRefsRaw))
+    : MAX_VOICE_REFS
   return {
+    maxVoiceRefs,
     getRefs: (sb) => {
       const raw = sb?.reference_images || sb?.referenceImages
       if (!raw) return []
@@ -162,6 +175,42 @@ export function replaceMentionWithAudioRef(prompt, mentionStart, cursorEnd, inde
   const needsSep = before.trim() && !/[，,。\n\s@]$/.test(before.slice(-1))
   const text = `${before}${needsSep ? ' ' : ''}${snippet}${after}`
   return { text, cursor: before.length + (needsSep ? 1 : 0) + snippet.length }
+}
+
+/**
+ * 参考图条带顺序变化时，同步改写提示词里的 @图片N / 图片N。
+ * oldToNew: Map 或 Record，旧序号 → 新序号（1-based）。
+ */
+export function remapPromptImageIndices(prompt, oldToNew) {
+  const map = oldToNew instanceof Map
+    ? oldToNew
+    : new Map(Object.entries(oldToNew || {}).map(([k, v]) => [Number(k), Number(v)]))
+  if (!map.size) return String(prompt || '')
+
+  let text = String(prompt || '')
+  // 先换成占位符，避免 1↔2 互换时互相覆盖
+  text = text.replace(/(@?(?:图片|图))\s*(\d+)/gi, (match, prefix, numStr) => {
+    const oldIdx = Number(numStr)
+    if (!Number.isFinite(oldIdx) || !map.has(oldIdx)) return match
+    return `\0IMGREF:${prefix}:${oldIdx}\0`
+  })
+  text = text.replace(/\0IMGREF:(@?(?:图片|图)):(\d+)\0/gi, (_, prefix, numStr) => {
+    const next = map.get(Number(numStr))
+    return `${prefix}${next}`
+  })
+  return text
+}
+
+/** 根据条带 key 顺序变化，生成图片序号映射并改写提示词 */
+export function remapPromptImageIndicesByKeys(prompt, oldKeys, newKeys) {
+  const oldToNew = new Map()
+  ;(oldKeys || []).forEach((key, oldIdx) => {
+    if (!key) return
+    const newIdx = (newKeys || []).indexOf(key)
+    if (newIdx < 0) return
+    oldToNew.set(oldIdx + 1, newIdx + 1)
+  })
+  return remapPromptImageIndices(prompt, oldToNew)
 }
 
 export function buildVideoMentionItems(uploadedVideoRefs, options = {}) {
@@ -276,8 +325,8 @@ export function buildPromptAudioSnippet(index, label) {
 }
 
 /** 按绑定音色顺序生成「音频1是A的声音，音频2是B的声音。」前缀 */
-export function buildStudioPromptAudioHeader(voiceRefs, preservedLabels) {
-  const voices = parseVoiceRefs(voiceRefs)
+export function buildStudioPromptAudioHeader(voiceRefs, preservedLabels, max = MAX_VOICE_REFS) {
+  const voices = parseVoiceRefs(voiceRefs, max)
   if (!voices.length) return ''
   return voices
     .map((voice, index) => {
@@ -351,6 +400,7 @@ export function applyStudioPromptMediaHeader(prompt, binding, chars, scenes, pro
   const audioHeader = buildStudioPromptAudioHeader(
     binding?.voice_refs ?? binding?.voiceRefs,
     options?.preservedAudioLabels ?? preservedFromPrompt?.preservedAudioLabels,
+    options?.maxVoiceRefs ?? MAX_VOICE_REFS,
   )
   const headers = [imageHeader, videoHeader, audioHeader].filter(Boolean).join('')
   if (!headers) return body
@@ -424,6 +474,7 @@ export function ensureRefStripOrderKeys(binding, items) {
 /** 按参考图栏顺序写回 character_ids / scene_ids / 上传图列表 */
 export function applyRefStripOrderToBinding(binding, orderedItems, uploadedRefs) {
   const charIds = []
+  const charImageRefs = {}
   const sceneIds = []
   const propIds = []
   const uploads = []
@@ -433,7 +484,14 @@ export function applyRefStripOrderToBinding(binding, orderedItems, uploadedRefs)
 
   for (const item of orderedItems || []) {
     if (item.kind === 'linked' && item.ref?.source === 'character' && item.ref.charId != null) {
-      charIds.push(item.ref.charId)
+      const charId = item.ref.charId
+      if (!charIds.includes(charId)) charIds.push(charId)
+      const path = normalizeStripPath(item.path || item.ref.url)
+      if (path) {
+        const list = normalizeCharacterImageRefList(charImageRefs[charId])
+        if (!list.includes(path)) list.push(path)
+        charImageRefs[charId] = list.length === 1 ? list[0] : list
+      }
     } else if (item.kind === 'linked' && item.ref?.source === 'scene' && item.ref.sceneId != null) {
       sceneIds.push(item.ref.sceneId)
     } else if (item.kind === 'linked' && item.ref?.source === 'prop' && item.ref.propId != null) {
@@ -445,6 +503,7 @@ export function applyRefStripOrderToBinding(binding, orderedItems, uploadedRefs)
   }
 
   binding.character_ids = charIds
+  binding.character_image_refs = charImageRefs
   binding.scene_ids = sceneIds
   binding.scene_id = sceneIds[0] ?? null
   binding.prop_ids = propIds
@@ -452,7 +511,7 @@ export function applyRefStripOrderToBinding(binding, orderedItems, uploadedRefs)
   return uploads
 }
 
-/** 参考图栏：每个绑定角色/场景/上传图只显示一次，不随 @ 重复扩增 */
+/** 参考图栏：同一角色可出现多张形态图（人形态/蛇形态等） */
 export function buildStudioRefStripItems(binding, chars, scenes, props, uploadedRefs, previewUrl) {
   const items = []
   const seenPaths = new Set()
@@ -461,22 +520,51 @@ export function buildStudioRefStripItems(binding, chars, scenes, props, uploaded
   for (const charId of binding.character_ids || []) {
     const char = (chars || []).find(item => item.id === charId)
     if (!char) continue
-    const path = normalizeStripPath(resolveCharacterImageUrl(char, binding.character_image_refs || {}))
-    if (path) seenPaths.add(path)
-    items.push({
-      key: `char:${charId}`,
-      kind: 'linked',
-      ref: {
+    const urls = resolveCharacterImageUrls(char, binding.character_image_refs || {})
+    if (!urls.length) {
+      items.push({
         key: `char:${charId}`,
-        source: 'character',
-        charId,
-        label: char.name,
-        url: path || null,
-      },
-      path,
-      preview: path ? toPreview(path) : '',
-      missing: !path,
-      tagLabel: char.name,
+        kind: 'linked',
+        ref: {
+          key: `char:${charId}`,
+          source: 'character',
+          charId,
+          label: char.name,
+          url: null,
+        },
+        path: '',
+        preview: '',
+        missing: true,
+        tagLabel: char.name,
+      })
+      continue
+    }
+    urls.forEach((rawPath, index) => {
+      const path = normalizeStripPath(rawPath)
+      if (path) seenPaths.add(path)
+      const baseLabel = urls.length > 1
+        ? labelForCharacterImage(char, path)
+        : char.name
+      const certified = isCertifiedPortraitImage(char, path)
+      const label = certified ? `${baseLabel} ·已认证` : baseLabel
+      const key = `char:${charId}:${path || index}`
+      items.push({
+        key,
+        kind: 'linked',
+        ref: {
+          key,
+          source: 'character',
+          charId,
+          label: baseLabel,
+          url: path || null,
+          certified,
+        },
+        path,
+        preview: path ? toPreview(path) : '',
+        missing: !path,
+        certified,
+        tagLabel: label,
+      })
     })
   }
 
@@ -571,11 +659,13 @@ export function buildStudioContentRefs(binding, prompt, chars, scenes, props, up
 
   const videoRefs = (uploadedVideoRefs || [])
     .map((item, index) => {
+      const oss = String(item?.ossUrl || '').trim()
       const path = normalizeStripPath(item?.path)
-      if (!path) return null
+      const url = (oss.startsWith('http://') || oss.startsWith('https://')) ? oss : path
+      if (!url) return null
       return {
         type: 'video',
-        url: path,
+        url,
         role: 'reference_video',
         label: item.label || `参考视频${index + 1}`,
       }
@@ -583,7 +673,9 @@ export function buildStudioContentRefs(binding, prompt, chars, scenes, props, up
     .filter(Boolean)
 
   const sb = bindingToStoryboard(binding)
-  const helpers = createStudioHelpers(binding, props)
+  const helpers = createStudioHelpers(binding, props, {
+    maxVoiceRefs: options?.maxVoiceRefs ?? MAX_VOICE_REFS,
+  })
   const fullRefs = buildOrderedVideoContentRefs(sb, finalPrompt, chars, scenes, helpers)
   const audioRefs = fullRefs.filter(ref => ref.type !== 'image')
 
@@ -605,7 +697,8 @@ export function validateStudioPrompt(prompt, binding, chars, scenes, props = [],
   })
 }
 
-const MENTION_LIMITS = { strip: 12 }
+/** @ 菜单条数上限：覆盖 S 2.5 合计 50（30 图 + 10 视频 + 10 音频） */
+const MENTION_LIMITS = { strip: 50 }
 
 function matchesMentionQuery(q, ...parts) {
   if (!q) return true
@@ -619,13 +712,19 @@ function stripItemToMention(item) {
     const source = item.ref.source || 'linked'
     const label = item.ref.label || item.ref.promptLabel || item.tagLabel
     if (!label) return null
+    const certified = !!(item.certified || item.ref.certified)
+    let sub = source === 'character' ? '角色' : source === 'scene' ? '场景' : source === 'prop' ? '道具' : '参考图'
+    if (source === 'character') {
+      sub = certified ? '角色 ·已认证' : '角色'
+    }
     return {
       type: source,
       key: item.key,
       path: item.path,
       label,
       promptLabel: label,
-      sub: source === 'character' ? '角色' : source === 'scene' ? '场景' : source === 'prop' ? '道具' : '参考图',
+      sub,
+      certified,
       thumb: item.preview || item.path,
     }
   }
@@ -650,10 +749,13 @@ function stripItemToMention(item) {
 }
 
 /** @ 菜单：参考图栏图片 + 可选参考视频/音频（序号与条上顺序一致，插入 @图片N / @视频N / @音频N） */
-export function buildMentionOptions(stripItems, query, extraItems = []) {
+export function buildMentionOptions(stripItems, query, extraItems = [], limit = MENTION_LIMITS.strip) {
   const q = String(query || '').trim().toLowerCase()
   const items = []
   let imageIndex = 0
+  const maxItems = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.floor(Number(limit))
+    : MENTION_LIMITS.strip
 
   for (const item of stripItems || []) {
     const mention = stripItemToMention(item)
@@ -675,7 +777,7 @@ export function buildMentionOptions(stripItems, query, extraItems = []) {
     items.push(item)
   }
 
-  return items.slice(0, MENTION_LIMITS.strip)
+  return items.slice(0, maxItems)
 }
 
 export function bindCharacter(binding, charId, chars) {
@@ -684,7 +786,10 @@ export function bindCharacter(binding, charId, chars) {
   binding.character_ids = [...ids]
 
   const char = chars.find(item => item.id === charId)
-  const url = resolveCharacterImageUrl(char, binding.character_image_refs)
+  const existing = normalizeCharacterImageRefList(binding.character_image_refs?.[charId])
+  if (existing.length) return
+
+  const url = resolveCharacterImageUrl(char, {})
   if (url && char) {
     binding.character_image_refs = {
       ...(binding.character_image_refs || {}),
@@ -697,6 +802,22 @@ export function unbindCharacter(binding, charId) {
   binding.character_ids = (binding.character_ids || []).filter(id => id !== charId)
   const refs = { ...(binding.character_image_refs || {}) }
   delete refs[charId]
+  binding.character_image_refs = refs
+}
+
+/** 移除角色的某一张形态图；若已无图则解绑角色 */
+export function unbindCharacterImage(binding, charId, imageUrl, char) {
+  const normalized = normalizeStripPath(imageUrl)
+  const list = normalizeCharacterImageRefList(binding.character_image_refs?.[charId])
+  const primary = normalizeStripPath(resolveCharacterImageUrl(char, {}))
+  let next = list.length ? [...list] : (primary ? [primary] : [])
+  if (normalized) next = next.filter(url => url !== normalized)
+  if (!next.length) {
+    unbindCharacter(binding, charId)
+    return
+  }
+  const refs = { ...(binding.character_image_refs || {}) }
+  refs[charId] = next.length === 1 ? next[0] : next
   binding.character_image_refs = refs
 }
 
@@ -744,9 +865,59 @@ export function setCharacterImageRef(binding, charId, url, char) {
   const refs = { ...(binding.character_image_refs || {}) }
   const normalized = normalizeStripPath(url)
   const primary = normalizeStripPath(resolveCharacterImageUrl(char, {}))
-  if (!normalized || primary === normalized) delete refs[charId]
-  else refs[charId] = normalized
+  if (!normalized || primary === normalized) {
+    // 显式选原图时，若已有多形态则保留原图为唯一；否则清除覆盖
+    const current = normalizeCharacterImageRefList(refs[charId])
+    if (current.length > 1 && normalized) {
+      refs[charId] = normalized
+    } else {
+      delete refs[charId]
+    }
+  } else {
+    refs[charId] = normalized
+  }
   binding.character_image_refs = refs
+}
+
+/** 切换/追加角色形态图（同一角色可多选） */
+export function toggleCharacterImageRef(binding, charId, url, char) {
+  const refs = { ...(binding.character_image_refs || {}) }
+  const normalized = normalizeStripPath(url)
+  if (!normalized) return
+  const primary = normalizeStripPath(resolveCharacterImageUrl(char, {}))
+  let list = normalizeCharacterImageRefList(refs[charId])
+  if (!list.length && primary) list = [primary]
+
+  const idx = list.indexOf(normalized)
+  if (idx >= 0) {
+    if (list.length <= 1) return
+    list.splice(idx, 1)
+  } else {
+    list.push(normalized)
+  }
+
+  if (list.length === 1 && list[0] === primary) delete refs[charId]
+  else refs[charId] = list.length === 1 ? list[0] : list
+  binding.character_image_refs = refs
+}
+
+/** 复用历史任务时追加角色参考图（不注入默认原图，保留多图顺序） */
+export function appendCharacterImageRef(binding, charId, url) {
+  const normalized = normalizeStripPath(url)
+  if (!normalized || !Number.isFinite(Number(charId))) return
+  const id = Number(charId)
+  const refs = { ...(binding.character_image_refs || {}) }
+  const list = normalizeCharacterImageRefList(refs[id])
+  if (!list.includes(normalized)) list.push(normalized)
+  refs[id] = list.length === 1 ? list[0] : list
+  binding.character_image_refs = refs
+  if (!(binding.character_ids || []).includes(id)) {
+    binding.character_ids = [...(binding.character_ids || []), id]
+  }
+}
+
+export function characterStripKey(charId, path) {
+  return `char:${charId}:${normalizeStripPath(path)}`
 }
 
 export function setSceneImageRef(binding, sceneId, url, scene) {
@@ -760,9 +931,9 @@ export function setSceneImageRef(binding, sceneId, url, scene) {
 
 export function isCharacterImageRefSelected(binding, charId, url, char) {
   const normalized = normalizeStripPath(url)
-  const selected = binding.character_image_refs?.[charId]
-  if (selected) return normalizeStripPath(selected) === normalized
-  return normalizeStripPath(resolveCharacterImageUrl(char, binding.character_image_refs || {})) === normalized
+  const selected = normalizeCharacterImageRefList(binding.character_image_refs?.[charId])
+  if (selected.length) return selected.includes(normalized)
+  return normalizeStripPath(resolveCharacterImageUrl(char, {})) === normalized
 }
 
 export function isSceneImageRefSelected(binding, sceneId, url, scene) {
@@ -855,12 +1026,27 @@ function entityPathsIncludePath(entityPaths, path) {
 function buildStudioLabelCandidates(chars, scenes, props) {
   const candidates = []
   for (const char of chars || []) {
-    candidates.push({
-      key: `char:${char.id}`,
-      source: 'character',
-      charId: char.id,
-      label: char.name,
-    })
+    const images = listCharacterImages(char)
+    if (!images.length) {
+      candidates.push({
+        key: `char:${char.id}`,
+        source: 'character',
+        charId: char.id,
+        label: char.name,
+      })
+      continue
+    }
+    for (const img of images) {
+      const path = normalizeStripPath(img?.url)
+      if (!path) continue
+      candidates.push({
+        key: characterStripKey(char.id, path),
+        source: 'character',
+        charId: char.id,
+        label: labelForCharacterImage(char, path),
+        path,
+      })
+    }
   }
   for (const prop of props || []) {
     candidates.push({
@@ -911,10 +1097,10 @@ function matchStudioEntityByPath(path, chars, scenes, props, usedKeys) {
   if (!norm) return null
 
   for (const char of chars || []) {
-    const key = `char:${char.id}`
+    const key = characterStripKey(char.id, norm)
     if (usedKeys?.has(key)) continue
     if (entityPathsIncludePath(collectStudioEntityImagePaths(char, 'character'), norm)) {
-      return { key, source: 'character', charId: char.id }
+      return { key, source: 'character', charId: char.id, path: norm }
     }
   }
   for (const prop of props || []) {
@@ -934,11 +1120,95 @@ function matchStudioEntityByPath(path, chars, scenes, props, usedKeys) {
   return null
 }
 
+function collectImageRefsFromVideoItem(item) {
+  if (Array.isArray(item?.reference_images) && item.reference_images.length) {
+    return item.reference_images
+      .map(ref => ({
+        path: ref?.path || ref?.url || ref?.display_url,
+        label: ref?.label || null,
+        display_url: ref?.display_url || null,
+      }))
+      .filter(ref => ref.path)
+  }
+  return parseVideoItemContentRefs(item)
+    .filter(ref => ref?.type === 'image' && ref.role !== 'first_frame' && ref.role !== 'last_frame')
+    .map(ref => ({
+      path: ref.url || ref.path,
+      label: ref.label || null,
+      display_url: null,
+    }))
+    .filter(ref => ref.path)
+}
+
+function parseVideoItemContentRefs(item) {
+  const payloadRaw = item?.reference_payload || item?.referencePayload
+  if (!payloadRaw) return []
+  try {
+    const refs = typeof payloadRaw === 'string' ? JSON.parse(payloadRaw) : payloadRaw
+    return Array.isArray(refs) ? refs : []
+  } catch {
+    return []
+  }
+}
+
+function collectAudioRefsFromVideoItem(item) {
+  if (Array.isArray(item?.reference_audios) && item.reference_audios.length) {
+    return item.reference_audios
+      .map(ref => ({
+        path: normalizeStripPath(ref?.path || ref?.url),
+        label: ref?.label || ref?.name || null,
+      }))
+      .filter(ref => ref.path)
+  }
+  return parseVideoItemContentRefs(item)
+    .filter(ref => ref?.type === 'audio')
+    .map(ref => ({
+      path: normalizeStripPath(ref.url || ref.path),
+      label: ref.label || null,
+    }))
+    .filter(ref => ref.path)
+}
+
+function voiceNameFromAudioLabel(label) {
+  const raw = String(label || '').trim()
+  if (!raw) return '音色'
+  return raw.replace(/的声音$/u, '').trim() || '音色'
+}
+
+/** 从历史视频记录恢复音色绑定（参考音频） */
+export function restoreVoiceRefsFromVideoItem(item, voiceAssets = [], max = MAX_VOICE_REFS) {
+  const limit = Number.isFinite(Number(max)) && Number(max) >= 0 ? Math.floor(Number(max)) : MAX_VOICE_REFS
+  const assets = Array.isArray(voiceAssets) ? voiceAssets : []
+  const seen = new Set()
+  const result = []
+  for (const ref of collectAudioRefsFromVideoItem(item)) {
+    const path = normalizeStripPath(ref.path)
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    const asset = assets.find((entry) => {
+      const assetPath = normalizeStripPath(entry?.local_path || entry?.localPath || entry?.url)
+      return assetPath && assetPath === path
+    })
+    const voice = asset
+      ? voiceRefFromAsset(asset)
+      : {
+          asset_id: null,
+          path,
+          name: voiceNameFromAudioLabel(ref.label),
+          duration: null,
+        }
+    if (!voice?.path) continue
+    result.push(voice)
+    if (result.length >= limit) break
+  }
+  return result
+}
+
 /** 从历史视频记录恢复角色/场景/道具绑定与上传参考图 */
 export function restoreStudioBindingsFromVideoItem(item, binding, chars, scenes, props, callbacks) {
   const normalizePath = callbacks?.normalizePath || normalizeStripPath
   const addUpload = callbacks?.addUpload
-  const refs = item?.reference_images || []
+  const refs = collectImageRefsFromVideoItem(item)
   const promptLabels = parsePromptImageLabels(String(item?.prompt || ''))
   const labelByIndex = new Map(promptLabels.map(entry => [entry.index, entry.label]))
   const candidates = buildStudioLabelCandidates(chars, scenes, props)
@@ -951,26 +1221,41 @@ export function restoreStudioBindingsFromVideoItem(item, binding, chars, scenes,
     if (!path) continue
 
     const label = resolveReuseRefLabel(ref, idx, labelByIndex)
-    let matched = label ? findCandidateForPromptLabel(label, candidates, usedKeys) : null
-    if (!matched) matched = matchStudioEntityByPath(path, chars, scenes, props, usedKeys)
+    // 优先按路径匹配，保证与历史 content_refs 顺序一致；同一角色多图可并存
+    let matched = matchStudioEntityByPath(path, chars, scenes, props, usedKeys)
+    if (!matched && label) {
+      matched = findCandidateForPromptLabel(label, candidates, usedKeys)
+    }
 
     if (matched?.source === 'character' && matched.charId != null) {
+      // 路径匹配时 matched.path === 历史路径；按标签匹配时优先用角色当前图，避免旧路径失效
+      const bindPath = matched.path || path
+      const stripKey = characterStripKey(matched.charId, bindPath)
       usedKeys.add(matched.key)
-      bindCharacter(binding, matched.charId, chars)
-      const char = (chars || []).find(entry => entry.id === matched.charId)
-      setCharacterImageRef(binding, matched.charId, path, char)
-      stripOrderKeys.push(`char:${matched.charId}`)
+      usedKeys.add(stripKey)
+      appendCharacterImageRef(binding, matched.charId, bindPath)
+      stripOrderKeys.push(stripKey)
     } else if (matched?.source === 'scene' && matched.sceneId != null) {
       usedKeys.add(matched.key)
-      bindScene(binding, matched.sceneId, scenes)
       const scene = (scenes || []).find(entry => entry.id === matched.sceneId)
-      setSceneImageRef(binding, matched.sceneId, path, scene)
+      if (!(getBindingSceneIds(binding).includes(matched.sceneId))) {
+        bindScene(binding, matched.sceneId, scenes)
+      }
+      const onEntity = entityPathsIncludePath(collectStudioEntityImagePaths(scene, 'scene'), path)
+      const bindPath = onEntity
+        ? path
+        : (normalizeStripPath(resolveSceneImageUrl(scene, 'hero') || resolveSceneStripPath(scene)) || path)
+      setSceneImageRef(binding, matched.sceneId, bindPath, scene)
       stripOrderKeys.push(`scene:${matched.sceneId}`)
     } else if (matched?.source === 'prop' && matched.propId != null) {
       usedKeys.add(matched.key)
       bindProp(binding, matched.propId, props)
       const prop = (props || []).find(entry => entry.id === matched.propId)
-      setPropImageRef(binding, matched.propId, path, prop)
+      const onEntity = entityPathsIncludePath(collectStudioEntityImagePaths(prop, 'prop'), path)
+      const bindPath = onEntity
+        ? path
+        : (normalizeStripPath(resolvePropImageUrl(prop, {})) || path)
+      setPropImageRef(binding, matched.propId, bindPath, prop)
       stripOrderKeys.push(`prop:${matched.propId}`)
     } else if (typeof addUpload === 'function') {
       addUpload(path, { label: label || null, preview: ref.display_url || null })
@@ -980,6 +1265,11 @@ export function restoreStudioBindingsFromVideoItem(item, binding, chars, scenes,
 
   if (stripOrderKeys.length) {
     binding.ref_strip_order = stripOrderKeys
+  }
+
+  if (callbacks?.restoreVoices !== false && binding) {
+    const voices = restoreVoiceRefsFromVideoItem(item, callbacks?.voiceAssets, callbacks?.maxVoiceRefs)
+    if (voices.length) binding.voice_refs = voices
   }
 }
 

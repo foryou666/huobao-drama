@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="studio-page">
     <header class="studio-header">
       <div class="studio-header-copy">
@@ -215,6 +215,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
 import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
@@ -355,6 +356,8 @@ function normalizeItem(row) {
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
     reference_images: row.reference_images || [],
+    reference_videos: row.reference_videos || [],
+    reference_audios: row.reference_audios || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
@@ -473,12 +476,9 @@ async function reuseDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function videoDownloadName(item) {
@@ -618,11 +618,15 @@ async function loadTrainingOptions() {
 }
 
 async function onGenerate(payload) {
+  if (generating.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
   if (!selectedModel.value) {
     toast.error('请选择模型')
     return
   }
-  await loadTrainingOptions()
+  if (!serviceAvailable.value) await loadTrainingOptions()
   if (!serviceAvailable.value) {
     toast.error(sessionConfigured.value
       ? '豆包培训通道暂时不可用（Session 无效或今日额度已用完），请稍后再试或联系管理员'
@@ -630,7 +634,6 @@ async function onGenerate(payload) {
     return
   }
   generating.value = true
-  const startedAt = Date.now()
   try {
     const generation = await videoAPI.generate({
       ...payload,
@@ -648,10 +651,7 @@ async function onGenerate(payload) {
     toast.error(formatVideoGenerationError(err?.message || '生成失败'))
     await reload()
   } finally {
-    const elapsed = Date.now() - startedAt
-    setTimeout(() => {
-      generating.value = false
-    }, Math.max(0, 1000 - elapsed))
+    generating.value = false
   }
 }
 
@@ -702,6 +702,10 @@ function stopPolling() {
 }
 
 onMounted(() => {
+  if (!isAdmin.value) {
+    navigateTo('/videos', { replace: true })
+    return
+  }
   const cached = restoreVideoLedgerCache(videoLedgerCacheKey())
   if (cached?.items?.length) {
     items.value = cached.items.map(normalizeItem)

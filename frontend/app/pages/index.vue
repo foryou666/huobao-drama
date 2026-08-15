@@ -6,12 +6,15 @@
         <h1 class="page-title">短剧项目</h1>
         <p class="page-desc">{{ dramas.length }} 个项目</p>
       </div>
-      <button class="btn btn-primary" @click="showCreate = true">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-        新建项目
-      </button>
+      <div class="page-head-actions">
+        <button class="btn" @click="showImport = true">导入剧本</button>
+        <button class="btn btn-primary" @click="showCreate = true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          新建项目
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -43,14 +46,25 @@
           <div class="cover-top">
             <div class="episode-badge">
               <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
-              {{ d.episodes?.length || 0 }} 集
+              {{ isNarrationProject(d) ? '解说漫' : `${d.episodes?.length || 0} 集` }}
             </div>
-            <span v-if="d.is_shared_project" class="tag tag-accent share-badge">共享</span>
+            <span v-if="isNarrationProject(d)" class="tag tag-accent share-badge">解说</span>
+            <span v-else-if="d.is_shared_project" class="tag tag-accent share-badge">共享</span>
             <span
               v-else-if="d.shared_teams?.length"
               class="tag share-badge share-owned-badge"
               :title="d.shared_teams.map(t => t.team_name).join('、')"
             >已共享 {{ d.shared_teams.length }}</span>
+          </div>
+
+          <div class="cover-overlay" :class="{ 'is-empty': !coverSrc(d) }">
+            <button
+              type="button"
+              class="cover-gen-btn"
+              @click.stop="openCoverModal(d)"
+            >
+              {{ coverSrc(d) ? '封面查看' : '生成封面' }}
+            </button>
           </div>
 
           <div v-if="d.can_manage_drama" class="card-actions" @click.stop>
@@ -74,10 +88,10 @@
               </svg>
             </button>
             <button
-              v-if="d.can_delete"
+              v-if="canShowDelete(d)"
               class="btn btn-ghost btn-icon card-action card-delete"
               @click="delDrama(d)"
-              title="删除空项目"
+              :title="isNarrationProject(d) ? '删除解说漫' : '删除空项目'"
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/>
@@ -110,8 +124,16 @@
             </div>
           </div>
           <div class="card-footer-actions">
-            <button type="button" class="card-link-btn" @click.stop="openDramaCanvas(d)">画布</button>
-            <button type="button" class="card-link-btn" @click.stop="navigateTo(`/assets?drama_id=${d.id}&type=voice`)">音色库</button>
+            <button
+              v-if="isNarrationProject(d)"
+              type="button"
+              class="card-link-btn"
+              @click.stop="openDrama(d)"
+            >解说工作流</button>
+            <template v-else>
+              <button type="button" class="card-link-btn" @click.stop="openDramaCanvas(d)">画布</button>
+              <button type="button" class="card-link-btn" @click.stop="navigateTo(`/assets?drama_id=${d.id}&type=voice`)">音色库</button>
+            </template>
             <span class="card-date">{{ fmtDate(d.updated_at || d.updatedAt) }}</span>
           </div>
         </div>
@@ -130,6 +152,15 @@
         <p class="empty-desc">从剧本到成片，AI 助力的短剧制作工作台</p>
       </div>
     </div>
+
+    <DramaCoverGenerateModal
+      v-if="coverDramaId"
+      v-model:open="coverModalOpen"
+      :drama-id="coverDramaId"
+      :drama-title="coverDramaTitle"
+      :initial-covers="coverInitialCovers"
+      @applied="onCoverApplied"
+    />
 
     <!-- Create Dialog -->
     <div v-if="showCreate" class="overlay" @click.self="showCreate = false">
@@ -182,6 +213,8 @@
     </div>
 
     <!-- Share Dialog -->
+    <ScriptImportDialog v-model:open="showImport" @created="onImportCreated" />
+
     <div v-if="shareTarget" class="overlay" @click.self="closeShareModal">
       <div class="modal card share-modal">
         <div class="modal-header">
@@ -254,16 +287,25 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { canvasAPI, dramaAPI, promptsAPI, teamsAPI } from '~/composables/useApi'
+import { canvasAPI, dramaAPI, promptsAPI, teamsAPI, narrationAPI } from '~/composables/useApi'
 import BaseSelect from '~/components/BaseSelect.vue'
+import ScriptImportDialog from '~/components/ScriptImportDialog.vue'
+import DramaCoverGenerateModal from '~/components/DramaCoverGenerateModal.vue'
 import { dramaWorkbenchPath } from '~/utils/drama-entry.js'
 import { mediaDisplayUrl } from '~/utils/media-url.js'
+import { useAuth } from '~/composables/useAuth'
 
+const { isAdmin } = useAuth()
 const dramas = ref([])
 const loading = ref(false)
 const dramasLoaded = ref(false)
 const DRAMA_LIST_CACHE_KEY = 'project-list-dramas-v2'
 const showCreate = ref(false)
+const showImport = ref(false)
+const coverModalOpen = ref(false)
+const coverDramaId = ref(0)
+const coverDramaTitle = ref('')
+const coverInitialCovers = ref({ '3:4': null, '4:3': null })
 const form = ref({ title: '', total_episodes: 1, style: '', director_style: 'hongguo_director' })
 const styles = ['realistic', 'anime', 'ghibli', 'cinematic', 'comic', 'watercolor']
 const styleSelectOptions = computed(() => styles.map(s => ({ label: s, value: s })))
@@ -366,13 +408,56 @@ async function reloadList() {
   }
 }
 
+function isNarrationProject(d) {
+  return !!(d?.is_narration || d?.project_kind === 'narration' || d?.narration_job_id)
+}
+
+function canShowDelete(d) {
+  if (isNarrationProject(d)) return !!isAdmin.value && !!d.can_delete
+  return !!d.can_delete
+}
+
 function openDrama(d) {
   if (!d?.id) return
+  if (isNarrationProject(d) && d.narration_job_id) {
+    navigateTo(`/narration/${d.narration_job_id}`)
+    return
+  }
   navigateTo(dramaWorkbenchPath(d.id, d.episodes))
+}
+
+function openCoverModal(d) {
+  if (!d?.id) return
+  coverDramaId.value = Number(d.id)
+  coverDramaTitle.value = d.title || ''
+  coverInitialCovers.value = {
+    '3:4': d.covers?.['3:4'] || d.cover_3_4 || d.cover_url || d.thumbnail || null,
+    '4:3': d.covers?.['4:3'] || d.cover_4_3 || null,
+  }
+  coverModalOpen.value = true
+}
+
+function onCoverApplied(payload) {
+  const target = dramas.value.find(x => Number(x.id) === Number(coverDramaId.value))
+  if (!target) return
+  const covers = {
+    '3:4': payload?.covers?.['3:4'] || payload?.cover_3_4 || target.covers?.['3:4'] || null,
+    '4:3': payload?.covers?.['4:3'] || payload?.cover_4_3 || target.covers?.['4:3'] || null,
+  }
+  target.covers = covers
+  target.cover_3_4 = covers['3:4']
+  target.cover_4_3 = covers['4:3']
+  target.cover_url = payload?.cover_url || covers['3:4'] || covers['4:3']
+  target.thumbnail = target.cover_url
+  coverInitialCovers.value = { ...covers }
 }
 
 async function openDramaCanvas(d) {
   if (!d?.id) return
+  if (isNarrationProject(d) && d.narration_job_id) {
+    navigateTo(`/narration/${d.narration_job_id}`)
+    return
+  }
   try {
     const board = await canvasAPI.byDrama(d.id)
     navigateTo(`/canvas/${board.id}`)
@@ -392,7 +477,30 @@ async function create() {
   }
 }
 
+async function onImportCreated() {
+  await refreshDramasInBackground()
+}
+
 async function delDrama(d) {
+  if (isNarrationProject(d)) {
+    if (!isAdmin.value) {
+      toast.error('仅平台管理员可删除解说漫')
+      return
+    }
+    if (!confirm(`确定删除解说漫「${d.title}」？\n\n将从项目列表与解说工作流中移除。`)) return
+    try {
+      if (d.narration_job_id) {
+        await narrationAPI.delete(d.narration_job_id)
+      } else {
+        await dramaAPI.del(d.id)
+      }
+      toast.success('已删除')
+      reloadList()
+    } catch (e) {
+      toast.error(e.message)
+    }
+    return
+  }
   const summary = d.content_summary || '无制作内容'
   if (!confirm(`确定删除空项目「${d.title}」？\n\n当前内容：${summary}\n\n删除后将从列表移除（仅允许无制作内容的项目）。`)) return
   try {
@@ -566,6 +674,7 @@ onMounted(() => {
   margin-bottom: 28px;
 }
 .head-left { display: flex; flex-direction: column; gap: 4px; }
+.page-head-actions { display: flex; align-items: center; gap: 10px; }
 .page-title {
   font-family: var(--font-display);
   font-size: 26px;
@@ -622,6 +731,36 @@ onMounted(() => {
   height: 100%;
   background:
     linear-gradient(165deg, var(--bg-2) 0%, var(--bg-3) 48%, var(--bg-2) 100%);
+}
+.cover-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.cover-overlay .cover-gen-btn { pointer-events: auto; }
+.project-card:hover .cover-overlay,
+.project-cover:focus-within .cover-overlay { opacity: 1; }
+.cover-overlay.is-empty {
+  opacity: 1;
+  background: transparent;
+}
+.cover-gen-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0b0d12;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
 }
 .cover-top {
   position: absolute;

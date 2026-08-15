@@ -7,6 +7,7 @@ export interface StoredUser {
   display_name: string
   role: 'admin' | 'user'
   credits_balance?: number
+  can_use_funshion?: boolean
 }
 
 export function getAuthToken(): string | null {

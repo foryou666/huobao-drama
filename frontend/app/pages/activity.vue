@@ -8,7 +8,7 @@
 
         <h1 class="page-title">工作记录</h1>
 
-        <p class="page-desc">查看操作日志与积分消耗明细{{ scopeHint }}</p>
+        <p class="page-desc">查看操作日志、生成记录与积分消耗明细{{ scopeHint }}</p>
 
       </div>
 
@@ -66,27 +66,21 @@
 
     </div>
 
-
-
     <p v-if="rechargeSuccess" class="recharge-success-banner">充值成功，积分已到账，可在下方积分明细中查看。</p>
-
-
 
     <div class="record-tabs">
 
-      <button type="button" class="record-tab" :class="{ active: tab === 'activity' }" @click="tab = 'activity'">操作记录</button>
+      <button type="button" class="record-tab" :class="{ active: tab === 'activity' }" @click="switchTab('activity')">操作记录</button>
 
-      <button type="button" class="record-tab" :class="{ active: tab === 'credits' }" @click="tab = 'credits'">积分明细</button>
+      <button type="button" class="record-tab" :class="{ active: tab === 'generations' }" @click="switchTab('generations')">生成记录</button>
 
-      <button v-if="activeTeamId" type="button" class="record-tab" :class="{ active: tab === 'stats' }" @click="tab = 'stats'">团队统计</button>
+      <button type="button" class="record-tab" :class="{ active: tab === 'credits' }" @click="switchTab('credits')">积分明细</button>
+
+      <button v-if="activeTeamId" type="button" class="record-tab" :class="{ active: tab === 'stats' }" @click="switchTab('stats')">团队统计</button>
 
     </div>
 
-
-
     <div v-if="loading" class="dim">加载中…</div>
-
-
 
     <div v-else-if="tab === 'activity'">
 
@@ -122,11 +116,22 @@
 
               <td v-if="showMultiUser">{{ row.operator_name || row.display_name || row.username || '—' }}</td>
 
-              <td><span class="tag">{{ actionLabel(row.action) }}</span></td>
+              <td>
+                <span class="tag">{{ actionLabel(row.action) }}</span>
+                <span v-if="row.refunded || row.credit_refunded" class="tag tag-refund">已退款</span>
+                <span v-else-if="row.credit_refund_partial" class="tag tag-refund-partial">部分退款</span>
+              </td>
 
               <td>{{ row.summary || '—' }}</td>
 
-              <td class="mono" :class="row.credit_cost ? 'cost-negative' : 'dim'">{{ row.credit_cost ? `-${row.credit_cost}` : '—' }}</td>
+              <td class="mono" :class="row.credit_cost && !(row.refunded || row.credit_refunded) ? 'cost-negative' : 'dim'">
+                <template v-if="row.credit_cost">
+                  <span :class="{ 'cost-struck': row.refunded || row.credit_refunded || row.credit_refund_partial }">-{{ row.credit_cost }}</span>
+                  <span v-if="row.refunded || row.credit_refunded" class="refund-tag">已退款</span>
+                  <span v-else-if="row.credit_refund_partial" class="refund-tag">已退 {{ row.credit_refund_amount || 0 }}</span>
+                </template>
+                <span v-else>—</span>
+              </td>
 
             </tr>
 
@@ -137,8 +142,6 @@
       </div>
 
     </div>
-
-
 
     <div v-else-if="tab === 'stats'">
 
@@ -166,11 +169,7 @@
 
       </div>
 
-
-
       <div v-if="!teamStats" class="card empty-card">暂无统计数据</div>
-
-
 
       <template v-else>
 
@@ -212,15 +211,15 @@
 
           <div class="summary-card card">
 
-            <span class="summary-label">图片 / 视频</span>
+            <span class="summary-label">图片 / 视频 / 有效</span>
 
-            <span class="summary-value">{{ teamStats.summary.total_images }} / {{ teamStats.summary.total_videos }}</span>
+            <span class="summary-value">{{ teamStats.summary.total_images }} / {{ teamStats.summary.total_videos }} / {{ teamStats.summary.total_videos_effective ?? 0 }}</span>
+
+            <span class="summary-hint">有效 = 净扣积分未退款</span>
 
           </div>
 
         </div>
-
-
 
         <div class="card stats-panel">
 
@@ -243,8 +242,6 @@
           </div>
 
         </div>
-
-
 
         <div class="card stats-panel">
 
@@ -272,7 +269,9 @@
 
                   <th>图片</th>
 
-                  <th>视频</th>
+                  <th title="活动日志中的视频生成次数（含失败后退款）">视频</th>
+
+                  <th title="积分扣费且未退回的视频次数">有效视频</th>
 
                   <th>Agent</th>
 
@@ -308,6 +307,8 @@
 
                   <td class="mono">{{ m.period.videos }}</td>
 
+                  <td class="mono">{{ m.period.videos_effective ?? 0 }}</td>
+
                   <td class="mono">{{ m.period.agent_runs }}</td>
 
                   <td class="mono dim">{{ fmtTime(m.last_active_at) || '—' }}</td>
@@ -327,8 +328,85 @@
     </div>
 
 
+    <div v-else-if="tab === 'generations'">
+      <div class="gen-toolbar card">
+        <div class="gen-filters">
+          <select v-model="genKind" class="member-filter" @change="loadGenerations">
+            <option value="all">全部类型</option>
+            <option value="image">生图</option>
+            <option value="video">生视频</option>
+          </select>
+          <select v-model="genStatus" class="member-filter" @change="loadGenerations">
+            <option value="all">全部状态</option>
+            <option value="completed">已完成</option>
+            <option value="processing">进行中</option>
+            <option value="failed">失败</option>
+          </select>
+          <input
+            v-model="genKeyword"
+            type="search"
+            class="input input-sm gen-search"
+            placeholder="搜索提示词 / 错误 / 模型"
+            @keyup.enter="loadGenerations"
+          />
+          <button type="button" class="btn btn-sm" :disabled="loading" @click="loadGenerations">刷新</button>
+        </div>
+        <div v-if="genStats" class="gen-stats dim">
+          共 {{ genStats.total }} · 成功 {{ genStats.completed }} · 进行中 {{ genStats.processing }} · 失败 {{ genStats.failed }}
+          （图 {{ genStats.images }} / 视频 {{ genStats.videos }}）
+        </div>
+      </div>
 
-    <div v-else>
+      <div v-if="!generationItems.length" class="card empty-card">暂无生成记录</div>
+      <div v-else class="log-table card">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th v-if="showMultiUser">操作人</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>模型 / 通道</th>
+              <th>说明</th>
+              <th>失败原因</th>
+              <th>积分</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in generationItems" :key="`${row.kind}-${row.id}`">
+              <td class="mono dim">{{ fmtTime(row.created_at) }}</td>
+              <td v-if="showMultiUser">{{ row.operator_name || row.display_name || row.username || '—' }}</td>
+              <td><span class="tag">{{ row.kind === 'video' ? '生视频' : '生图' }} #{{ row.id }}</span></td>
+              <td>
+                <span class="tag" :class="genStatusClass(row.status)">{{ genStatusLabel(row.status) }}</span>
+              </td>
+              <td class="mono dim">{{ [row.provider, row.model].filter(Boolean).join(' · ') || '—' }}</td>
+              <td class="gen-prompt">
+                <div>{{ row.prompt || '—' }}</div>
+                <div v-if="row.drama_title" class="dim">{{ row.drama_title }}</div>
+              </td>
+              <td class="gen-error">
+                <span v-if="row.status === 'failed' && row.error_msg" class="cost-negative">{{ row.error_msg }}</span>
+                <span v-else class="dim">—</span>
+              </td>
+              <td class="mono">
+                <template v-if="row.credit_cost">
+                  <span class="cost-negative">-{{ row.credit_cost }}</span>
+                  <span v-if="row.credit_refunded" class="refund-tag">已退 {{ row.credit_refund_amount || row.credit_cost }}</span>
+                </template>
+                <span v-else class="dim">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="genPagination?.has_more" class="gen-more">
+        <button type="button" class="btn" :disabled="loading" @click="loadMoreGenerations">加载更多</button>
+      </div>
+    </div>
+
+    <div v-else-if="tab === 'credits'">
 
       <div v-if="!creditItems.length" class="card empty-card">暂无积分明细</div>
 
@@ -386,13 +464,9 @@
 
 </template>
 
-
-
 <script setup>
 
-import { activityAPI, creditsAPI, teamsAPI, ACTION_LABELS } from '~/composables/useApi'
-
-
+import { activityAPI, creditsAPI, teamsAPI, generationLogsAPI, ACTION_LABELS } from '~/composables/useApi'
 
 const { isAdmin, refreshBalance } = useAuth()
 
@@ -425,8 +499,6 @@ const teamMembers = ref([])
 
 const currentScope = ref('self')
 
-
-
 function fmtDateInput(d) {
 
   const y = d.getFullYear()
@@ -439,15 +511,11 @@ function fmtDateInput(d) {
 
 }
 
-
-
 const rangePreset = ref(1)
 
 const dateTo = ref(fmtDateInput(new Date()))
 
 const dateFrom = ref(fmtDateInput(new Date()))
-
-
 
 const showMultiUser = computed(() => showAll.value || showTeam.value || currentScope.value === 'team' || currentScope.value === 'all')
 
@@ -461,15 +529,11 @@ const scopeHint = computed(() => {
 
 })
 
-
-
 function actionLabel(action) {
 
   return ACTION_LABELS[action] || action
 
 }
-
-
 
 function fmtTime(s) {
 
@@ -480,8 +544,6 @@ function fmtTime(s) {
   return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 
 }
-
-
 
 function listParams() {
 
@@ -496,8 +558,6 @@ function listParams() {
   return params
 
 }
-
-
 
 async function loadTeamMembers() {
 
@@ -523,8 +583,6 @@ async function loadTeamMembers() {
 
 }
 
-
-
 async function loadBalance() {
 
   try {
@@ -544,6 +602,33 @@ async function loadBalance() {
 }
 
 
+function genStatusLabel(status) {
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  if (status === 'processing' || status === 'pending') return '进行中'
+  return status || '—'
+}
+
+function genStatusClass(status) {
+  if (status === 'completed') return 'tag-ok'
+  if (status === 'failed') return 'tag-fail'
+  if (status === 'processing' || status === 'pending') return 'tag-run'
+  return ''
+}
+
+function switchTab(next) {
+  tab.value = next
+}
+
+async function loadGenerations({ append = false } = {}) {
+  return loadGenerationsQuiet({ append })
+}
+
+async function loadMoreGenerations() {
+  if (!genPagination.value?.has_more) return
+  genOffset.value = (genPagination.value.offset || 0) + (genPagination.value.limit || 50)
+  await loadGenerations({ append: true })
+}
 
 async function loadActivity() {
 
@@ -555,8 +640,6 @@ async function loadActivity() {
 
 }
 
-
-
 async function loadCredits() {
 
   const res = await creditsAPI.transactions(listParams())
@@ -566,8 +649,6 @@ async function loadCredits() {
   currentScope.value = res.scope || 'self'
 
 }
-
-
 
 async function loadStats() {
 
@@ -589,8 +670,6 @@ async function loadStats() {
 
 }
 
-
-
 function setRangePreset(days) {
 
   rangePreset.value = days
@@ -607,8 +686,6 @@ function setRangePreset(days) {
 
 }
 
-
-
 function onRangeChange() {
 
   rangePreset.value = 0
@@ -616,8 +693,6 @@ function onRangeChange() {
   if (tab.value === 'stats') reload()
 
 }
-
-
 
 function dailyBarHeight(count) {
 
@@ -627,60 +702,67 @@ function dailyBarHeight(count) {
 
 }
 
-
-
 async function reload() {
-
   loading.value = true
-
   try {
-
-    await Promise.all([loadBalance(), loadActivity(), loadCredits(), loadStats()])
-
+    await Promise.all([
+      loadBalance(),
+      loadActivity(),
+      loadCredits(),
+      loadStats(),
+      loadGenerationsQuiet(),
+    ])
   } catch {
-
     activityItems.value = []
-
     creditItems.value = []
-
+    generationItems.value = []
     teamStats.value = null
-
   } finally {
-
     loading.value = false
-
   }
-
 }
 
-
+async function loadGenerationsQuiet({ append = false } = {}) {
+  if (!append) genOffset.value = 0
+  try {
+    const params = {
+      ...listParams(),
+      kind: genKind.value,
+      status: genStatus.value,
+      keyword: genKeyword.value || undefined,
+      limit: 50,
+      offset: genOffset.value,
+    }
+    const res = await generationLogsAPI.list(params)
+    const items = res.items || []
+    generationItems.value = append ? [...generationItems.value, ...items] : items
+    genStats.value = res.stats || null
+    genPagination.value = res.pagination || null
+    currentScope.value = res.scope || 'self'
+  } catch {
+    if (!append) {
+      generationItems.value = []
+      genStats.value = null
+      genPagination.value = null
+    }
+  }
+}
 
 function onScopeChange() {
-
   if (showAll.value) showTeam.value = false
-
   if (showTeam.value) showAll.value = false
-
   filterUserId.value = null
-
   reload()
-
 }
 
-
-
 watch(tab, (value) => {
-
   if (value === 'stats') loadStats()
-
+  if (value === 'generations') loadGenerationsQuiet()
 })
 
-
-
 onMounted(async () => {
-
   const qTab = String(route.query.tab || '')
-  if (qTab === 'credits' || qTab === 'stats' || qTab === 'activity') {
+  if (qTab === 'credits' || qTab === 'stats' || qTab === 'activity' || qTab === 'generations') {
     tab.value = qTab
   }
   if (route.query.recharge === 'success') {
@@ -698,8 +780,6 @@ onMounted(async () => {
 })
 
 </script>
-
-
 
 <style scoped>
 
@@ -978,12 +1058,72 @@ th { color: var(--text-3); font-weight: 500; font-size: 12px; }
 
 .member-role { font-size: 11px; }
 
-
-
 @media (max-width: 900px) {
 
   .stats-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+}
+
+
+.gen-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.gen-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.gen-search {
+  min-width: 220px;
+  flex: 1;
+}
+.gen-stats {
+  font-size: 12px;
+}
+.gen-prompt {
+  max-width: 280px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.gen-error {
+  max-width: 260px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.refund-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--success, #3d9a6a);
+}
+.cost-struck {
+  text-decoration: line-through;
+  opacity: 0.65;
+  margin-right: 4px;
+}
+.tag-refund {
+  margin-left: 6px;
+  background: rgba(61, 154, 106, 0.15);
+  color: #3d9a6a;
+}
+.tag-refund-partial {
+  margin-left: 6px;
+  background: rgba(200, 150, 40, 0.15);
+  color: #c89628;
+}
+.tag-ok { background: rgba(61, 154, 106, 0.15); color: #3d9a6a; }
+.tag-fail { background: rgba(200, 70, 70, 0.15); color: #c84646; }
+.tag-run { background: rgba(200, 150, 40, 0.15); color: #c89628; }
+.gen-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
 }
 
 </style>

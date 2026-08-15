@@ -5,7 +5,7 @@
         <h1 class="studio-title">S通道5</h1>
         <StudioGuideButton
           title="S通道5 使用说明"
-          :text="`S通道5：参考素材上限 ${refLimitsHint}（不支持音频）。可选 S2.0A / S2.0B / Fast VIP / VIP。`"
+          :text="`S通道5：当前模型参考上限 ${refLimitsHint}。S 2.5 最多 50 图（合计 ≤50）；2.0 档 9图3音3视频。S 2.5 用户自带参考视频时按标价 7 折扣积分。`"
         />
       </div>
       <div class="studio-header-actions">
@@ -44,7 +44,13 @@
             {{ m.display_name || m.username }}
           </option>
         </select>
-        <select v-if="isAdmin && xyqSessions.length > 1" v-model="selectedXyqKeyId" class="studio-filter-select" title="S通道5 Access Key">
+        <select
+          v-if="isAdmin && xyqSessions.length > 1"
+          v-model="selectedXyqKeyId"
+          class="studio-filter-select"
+          title="管理员可指定 Access Key；选「全部」则自动分配"
+        >
+          <option value="">全部（自动分配）</option>
           <option v-for="s in xyqSessions" :key="s.id" :value="s.id">
             {{ xyqKeyOptionLabel(s) }}
           </option>
@@ -149,15 +155,15 @@
       <VideoStudioComposer
         ref="composerRef"
         xyq-mode
-        :show-voice-picker="false"
         :generating="generating"
         :dramas="dramas"
         :default-drama-id="filterDramaId"
         :xyq-models="displayModels"
         :fixed-model="selectedModel"
-        :duration-min="4"
-        :duration-max="15"
+        :ref-limits-override="selectedRefLimits"
         :credit-cost-flat="selectedCreditCostFlat"
+        :credit-cost-per-second="selectedCreditCostPerSecond"
+        :reference-video-multiplier="referenceVideoMultiplier"
         drama-preference-scope="video-xyq"
         @update:fixed-model="selectedModel = $event"
         @generate="onGenerate"
@@ -231,6 +237,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
+import { copyText } from '~/utils/copy-text.js'
 import { videoAPI } from '~/composables/useApi'
 import StudioVideoCardMedia from '~/components/StudioVideoCardMedia.vue'
 import { mediaDisplayUrl, videoPosterDisplayUrl } from '~/utils/media-url.js'
@@ -249,6 +256,7 @@ import {
 const VIDEO_LEDGER_CACHE_PREFIX = 'studio-video-ledger-xyq-v1'
 
 const XYQ_MODEL_IDS = [
+  'xyq-video-seedance-2.5',
   'xyq-video-seedance-2.0-mini-trial',
   'xyq-video-seedance-2.0-mini',
   'xyq-video-seedance-2.0-fast',
@@ -258,13 +266,35 @@ const XYQ_MODEL_IDS = [
 const DEFAULT_XYQ_MODEL = 'xyq-video-seedance-2.0-mini-trial'
 
 const XYQ_REF_LIMITS = VIDEO_CHANNEL_REF_LIMITS['/videos/xyq']
-const refLimitsHint = computed(() => formatRefLimitsHint(XYQ_REF_LIMITS))
+
+const XYQ_SEEDANCE_25_REF_LIMITS = { images: 50, audios: 3, videos: 3 }
+
+function refLimitsForModel(modelId) {
+  if (String(modelId || '').includes('seedance-2.5')) return XYQ_SEEDANCE_25_REF_LIMITS
+  return XYQ_REF_LIMITS
+}
+
+const selectedRefLimits = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  const fromApi = model?.ref_limits
+  if (fromApi && Number.isFinite(Number(fromApi.images))) {
+    return {
+      images: Number(fromApi.images),
+      audios: Number(fromApi.audios ?? 3),
+      videos: Number(fromApi.videos ?? 3),
+    }
+  }
+  return refLimitsForModel(selectedModel.value)
+})
+
+const refLimitsHint = computed(() => formatRefLimitsHint(selectedRefLimits.value))
 
 const DEFAULT_XYQ_MODELS = [
-  { id: 'xyq-video-seedance-2.0-mini-trial', label: 'S2.0A', credit_cost_flat: 300, duration_min: 5, duration_max: 15, duration_default: 10 },
-  { id: 'xyq-video-seedance-2.0-mini', label: 'S2.0B', credit_cost_flat: 500, duration_min: 5, duration_max: 15, duration_default: 10 },
-  { id: 'xyq-video-seedance-2.0-fast', label: 'S 2.0 Fast VIP', credit_cost_flat: 750, duration_min: 5, duration_max: 15, duration_default: 10 },
-  { id: 'xyq-video-seedance-2.0', label: 'S 2.0 VIP', credit_cost_flat: 900, duration_min: 5, duration_max: 15, duration_default: 10 },
+  { id: 'xyq-video-seedance-2.5', label: 'S 2.5', billing_unit: 'second', credit_cost_per_second: 130, credit_cost_flat: null, duration_min: 5, duration_max: 30, duration_default: 10, ref_limits: { images: 50, audios: 3, videos: 3, max_total: 50 } },
+  { id: 'xyq-video-seedance-2.0-mini-trial', label: 'S2.0A', billing_unit: 'flat', credit_cost_flat: 300, duration_min: 5, duration_max: 15, duration_default: 10, ref_limits: { images: 9, audios: 3, videos: 3 } },
+  { id: 'xyq-video-seedance-2.0-mini', label: 'S2.0B', billing_unit: 'flat', credit_cost_flat: 500, duration_min: 5, duration_max: 15, duration_default: 10, ref_limits: { images: 9, audios: 3, videos: 3 } },
+  { id: 'xyq-video-seedance-2.0-fast', label: 'S 2.0 Fast VIP', billing_unit: 'flat', credit_cost_flat: 750, duration_min: 5, duration_max: 15, duration_default: 10, ref_limits: { images: 9, audios: 3, videos: 3 } },
+  { id: 'xyq-video-seedance-2.0', label: 'S 2.0 VIP', billing_unit: 'flat', credit_cost_flat: 900, duration_min: 5, duration_max: 15, duration_default: 10, ref_limits: { images: 9, audios: 3, videos: 3 } },
 ]
 
 const route = useRoute()
@@ -280,6 +310,7 @@ const selectedXyqKeyId = ref('')
 const keyConfigured = ref(false)
 const keyValid = ref(false)
 const selectedModel = ref(DEFAULT_XYQ_MODEL)
+const referenceVideoMultiplier = ref(0.7)
 const items = ref([])
 const dramas = ref([])
 const stats = ref({ total: 0, completed: 0, processing: 0, failed: 0 })
@@ -339,15 +370,25 @@ function xyqKeyOptionLabel(session) {
 
 const selectedCreditCostFlat = computed(() => {
   const model = displayModels.value.find(item => item.id === selectedModel.value)
+  if (model?.billing_unit === 'second' || model?.credit_cost_per_second != null) return null
   const cost = model?.credit_cost_flat ?? model?.credit_cost
   return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : 0
+})
+
+const selectedCreditCostPerSecond = computed(() => {
+  const model = displayModels.value.find(item => item.id === selectedModel.value)
+  if (!(model?.billing_unit === 'second' || model?.credit_cost_per_second != null)) return null
+  const cost = model?.credit_cost_per_second ?? model?.credit_cost
+  return cost != null && Number.isFinite(Number(cost)) ? Number(cost) : null
 })
 
 function modelLabel(modelId) {
   const label = displayModels.value.find(item => item.id === modelId)?.label
     || String(modelId || '').replace(/^xyq-video-/, 'S通道5 ').replace(/-/g, ' ')
-  // S2.0A / S2.0B 保持原样；其余走 Seedance→S 展示规则
-  if (/^S2\.0[AB]$/i.test(String(label).trim())) return String(label).trim()
+  // S2.0A / S2.0B / S 2.5 保持原样；其余走 Seedance→S 展示规则
+  if (/^S2\.0[AB]$/i.test(String(label).trim()) || /^S\s*2\.5$/i.test(String(label).trim())) {
+    return String(label).trim()
+  }
   return toSeedanceDisplayLabel(label)
 }
 
@@ -373,6 +414,8 @@ function normalizeItem(row) {
     aspect_ratio: row.aspect_ratio || row.aspectRatio || '9:16',
     reference_mode: row.reference_mode || row.referenceMode || '',
     reference_images: row.reference_images || [],
+    reference_videos: row.reference_videos || [],
+    reference_audios: row.reference_audios || [],
     is_manual: !!row.is_manual,
     created_at: row.created_at || row.createdAt || '',
     display_video_url: row.display_video_url || '',
@@ -488,12 +531,9 @@ async function reuseDetail() {
 }
 
 async function copyPrompt(text) {
-  try {
-    await navigator.clipboard.writeText(String(text || ''))
-    toast.success('已复制提示词')
-  } catch {
-    toast.error('复制失败')
-  }
+  const ok = await copyText(text)
+  if (ok) toast.success('已复制提示词')
+  else toast.error('复制失败')
 }
 
 function videoDownloadName(item) {
@@ -623,18 +663,16 @@ async function loadXyqOptions() {
     xyqSessions.value = res?.sessions || []
     keyConfigured.value = !!res?.session_configured || xyqSessions.value.length > 0
     keyValid.value = !!res?.session_valid || xyqSessions.value.some(item => item.valid)
-    const activeId = res?.active_id
-      || xyqSessions.value.find(item => item.is_active)?.id
-      || xyqSessions.value.find(item => item.valid)?.id
-      || xyqSessions.value[0]?.id
-      || ''
-    if (!selectedXyqKeyId.value || !xyqSessions.value.some(item => item.id === selectedXyqKeyId.value)) {
-      selectedXyqKeyId.value = activeId
+    if (selectedXyqKeyId.value && !xyqSessions.value.some(item => item.id === selectedXyqKeyId.value)) {
+      selectedXyqKeyId.value = ''
     }
+    if (!isAdmin.value) selectedXyqKeyId.value = ''
     if (xyqModels.value.length && !xyqModels.value.some(item => item.id === selectedModel.value)) {
       const preferred = xyqModels.value.find(item => item.id === DEFAULT_XYQ_MODEL)
       selectedModel.value = preferred?.id || xyqModels.value[0].id
     }
+    const mult = Number(res?.reference_video_multiplier)
+    if (Number.isFinite(mult) && mult > 0) referenceVideoMultiplier.value = mult
   } catch {
     xyqModels.value = []
     xyqSessions.value = []
@@ -645,11 +683,15 @@ async function loadXyqOptions() {
 }
 
 async function onGenerate(payload) {
+  if (generating.value) {
+    toast.warning('正在提交中，请稍候')
+    return
+  }
   if (!selectedModel.value) {
     toast.error('请选择模型')
     return
   }
-  await loadXyqOptions()
+  if (!serviceAvailable.value) await loadXyqOptions()
   if (!serviceAvailable.value) {
     toast.error(keyConfigured.value
       ? 'S通道5 视频服务暂时不可用，请稍后再试或联系管理员'
@@ -657,7 +699,6 @@ async function onGenerate(payload) {
     return
   }
   generating.value = true
-  const startedAt = Date.now()
   try {
     const generation = await videoAPI.generate({
       ...payload,
@@ -674,10 +715,7 @@ async function onGenerate(payload) {
     toast.error(formatVideoGenerationError(err?.message || '生成失败'))
     await reload()
   } finally {
-    const elapsed = Date.now() - startedAt
-    setTimeout(() => {
-      generating.value = false
-    }, Math.max(0, 1000 - elapsed))
+    generating.value = false
   }
 }
 

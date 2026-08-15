@@ -2,9 +2,9 @@
   <div class="login-page">
     <div class="login-card card">
       <div class="login-brand">
-        <div class="login-mark">红</div>
+        <div class="login-mark">影</div>
         <div>
-          <h1 class="login-title">红果短剧</h1>
+          <h1 class="login-title">影光工场</h1>
           <p class="login-desc">登录后继续制作</p>
         </div>
       </div>

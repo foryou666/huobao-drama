@@ -37,10 +37,14 @@
             @click="openPreview(row)"
           >
             <img
-              :src="mediaDisplayUrl(row.image_url)"
+              v-if="assetThumbUrl(row.image_url)"
+              :src="assetThumbUrl(row.image_url)"
               :alt="row.name"
               class="narration-asset-img"
+              loading="lazy"
+              decoding="async"
             />
+            <div v-else class="narration-asset-placeholder">加载缩略图…</div>
           </button>
           <div v-else class="narration-asset-placeholder">
             {{ statusLabel(row.image_status) }}
@@ -81,7 +85,7 @@
 <script setup>
 import { toast } from 'vue-sonner'
 import { narrationAPI } from '~/composables/useApi'
-import { mediaDisplayUrl } from '~/utils/media-url.js'
+import { mediaDisplayUrl, thumbPathFromSource, cacheVersion } from '~/utils/media-url.js'
 
 const props = defineProps({
   jobId: { type: Number, required: true },
@@ -123,6 +127,13 @@ function openPreview(row) {
     src: mediaDisplayUrl(row.image_url),
     title: row.name,
   }
+}
+
+function assetThumbUrl(raw) {
+  void cacheVersion.value
+  const thumb = thumbPathFromSource(raw)
+  if (!thumb) return ''
+  return mediaDisplayUrl(thumb)
 }
 
 function closePreview() {

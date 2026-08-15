@@ -17,6 +17,7 @@
       <div class="director-head-actions">
         <span v-if="!deskReady && !loadError" class="dim director-sync-tag">加载 3D 场景…</span>
         <span v-else-if="syncing" class="dim director-sync-tag">同步中…</span>
+        <span v-else-if="savingScene" class="dim director-sync-tag">云端保存中…</span>
         <button
           v-if="blockingContext?.characters?.length"
           type="button"
@@ -50,18 +51,20 @@
 
 <script setup>
 import { toast } from 'vue-sonner'
-import { episodeAPI, storyboardAPI, uploadAPI } from '~/composables/useApi'
+import { directorDeskAPI, episodeAPI, storyboardAPI, uploadAPI } from '~/composables/useApi'
 import {
   bindDirectorDeskHostListener,
   buildDirectorDeskInstanceId,
   directorDeskIframeSrc,
   postDirectorDeskBlockingLayout,
+  postDirectorDeskLoadState,
   postDirectorDeskPanorama,
   postDirectorDeskSession,
 } from '~/composables/useDirectorDeskHost'
 import { dataUrlToFile } from '~/utils/data-url-file'
 import { buildDirectorBlockingLayoutPayload } from '~/utils/director-blocking-layout.js'
 import { resolveBlockingLayout } from '~/utils/blocking-layout.js'
+import { resolveDirectorPanoramaObjectUrl } from '~/utils/director-panorama-url.js'
 import { normalizeMediaPath } from '~/utils/media-url.js'
 
 definePageMeta({ layout: 'studio' })
@@ -72,6 +75,7 @@ const loadError = ref(false)
 const deskKey = ref(0)
 const deskReady = ref(false)
 const syncing = ref(false)
+const savingScene = ref(false)
 const blockingContext = ref(null)
 const characterNameById = ref({})
 
@@ -92,10 +96,21 @@ const contextLabel = computed(() => {
   if (dramaId.value) parts.push(`项目 #${dramaId.value}`)
   if (episodeId.value) parts.push(`集 #${episodeId.value}`)
   if (storyboardId.value) parts.push(`镜头 #${storyboardId.value}`)
-  return parts.length ? parts.join(' · ') : '独立预演场景（本地自动保存）'
+  return parts.length ? parts.join(' · ') : '独立预演场景（云端自动保存）'
 })
 
 const iframeSrc = computed(() => `${directorDeskIframeSrc('dark')}&_=${deskKey.value}`)
+
+/** 已发给 iframe 的全景 blob，换图时释放，避免泄漏 */
+let panoramaObjectUrl = ''
+let panoramaSyncToken = 0
+/** 用户在导演台内手动导入后，停止宿主自动覆盖 */
+let skipHostPanoramaSync = false
+/** 服务端 hydrate 完成前不写库，避免用本地缓存覆盖云端 */
+let acceptStateSaves = false
+let pendingStateForSave = null
+let saveTimer = null
+let saveToken = 0
 
 function syncSession() {
   postDirectorDeskSession(deskFrame.value, {
@@ -104,17 +119,102 @@ function syncSession() {
   })
 }
 
-function syncPanorama() {
+function optionalPositiveInt(raw) {
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
+}
+
+function scheduleSaveScene(state) {
+  if (!state || typeof state !== 'object') return
+  if (!acceptStateSaves) {
+    pendingStateForSave = state
+    return
+  }
+  pendingStateForSave = state
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    void flushSaveScene()
+  }, 800)
+}
+
+async function flushSaveScene() {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  const state = pendingStateForSave
+  if (!state || !acceptStateSaves) return
+  const token = ++saveToken
+  savingScene.value = true
+  try {
+    await directorDeskAPI.saveScene(instanceId.value, {
+      state,
+      drama_id: optionalPositiveInt(dramaId.value),
+      episode_id: optionalPositiveInt(episodeId.value),
+      storyboard_id: optionalPositiveInt(storyboardId.value),
+    })
+  } catch (e) {
+    if (token !== saveToken) return
+    console.warn('[director] save scene failed', e)
+  } finally {
+    if (token === saveToken) savingScene.value = false
+  }
+}
+
+async function hydrateFromServer() {
+  acceptStateSaves = false
+  pendingStateForSave = null
+  try {
+    const res = await directorDeskAPI.getScene(instanceId.value)
+    const state = res?.scene?.state
+    if (state && typeof state === 'object') {
+      postDirectorDeskLoadState(deskFrame.value, state)
+      pendingStateForSave = null
+      return true
+    }
+  } catch (e) {
+    console.warn('[director] load scene failed', e)
+  }
+  return false
+}
+
+function revokePanoramaObjectUrl() {
+  if (!panoramaObjectUrl) return
+  try { URL.revokeObjectURL(panoramaObjectUrl) } catch { /* ignore */ }
+  panoramaObjectUrl = ''
+}
+
+async function syncPanorama({ force = false } = {}) {
+  if (skipHostPanoramaSync && !force) return
   const sceneUrl = sceneImage.value.trim()
   const blockingUrl = blockingImage.value.trim()
   const url = sceneUrl || blockingUrl
   if (!url) return
-  postDirectorDeskPanorama(deskFrame.value, {
-    edgeId: sceneUrl ? 'hg-scene-backdrop' : 'hg-blocking-backdrop',
-    sourceNodeId: storyboardId.value ? `storyboard:${storyboardId.value}` : 'hg-scene',
-    imageUrl: url,
-    fileName: sceneUrl ? '场景全景.png' : '站位图.png',
-  })
+
+  const token = ++panoramaSyncToken
+  try {
+    const objectUrl = await resolveDirectorPanoramaObjectUrl(url)
+    if (token !== panoramaSyncToken || (skipHostPanoramaSync && !force)) {
+      if (objectUrl.startsWith('blob:') && objectUrl !== url) {
+        try { URL.revokeObjectURL(objectUrl) } catch { /* ignore */ }
+      }
+      return
+    }
+    if (objectUrl.startsWith('blob:') && objectUrl !== panoramaObjectUrl) {
+      revokePanoramaObjectUrl()
+      panoramaObjectUrl = objectUrl
+    }
+    postDirectorDeskPanorama(deskFrame.value, {
+      edgeId: sceneUrl ? 'hg-scene-backdrop' : 'hg-blocking-backdrop',
+      sourceNodeId: storyboardId.value ? `storyboard:${storyboardId.value}` : 'hg-scene',
+      imageUrl: objectUrl,
+      fileName: sceneUrl ? '场景全景.png' : '站位图.png',
+    })
+  } catch (e) {
+    if (token !== panoramaSyncToken) return
+    console.warn('[director] panorama sync failed', e)
+    toast.error(e?.message || '全景图同步失败，主视口可能无法显示')
+  }
 }
 
 function syncBlockingLayout(force = false) {
@@ -176,13 +276,22 @@ async function loadBlockingContext() {
 function onFrameLoad() {
   loadError.value = false
   deskReady.value = false
+  acceptStateSaves = false
   syncSession()
-  syncPanorama()
 }
 
 function reloadDesk() {
   loadError.value = false
   deskReady.value = false
+  acceptStateSaves = false
+  pendingStateForSave = null
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  skipHostPanoramaSync = false
+  panoramaSyncToken += 1
+  revokePanoramaObjectUrl()
   deskKey.value += 1
 }
 
@@ -227,36 +336,78 @@ async function applyCaptureToStoryboard(captures) {
   }
 }
 
+async function bootstrapDesk() {
+  deskReady.value = true
+  syncSession()
+  const loaded = await hydrateFromServer()
+  acceptStateSaves = true
+  if (!loaded && pendingStateForSave) {
+    scheduleSaveScene(pendingStateForSave)
+  }
+  await syncPanorama()
+  syncBlockingLayout(false)
+}
+
 let unbindHost = null
 
 onMounted(() => {
   void loadBlockingContext()
   unbindHost = bindDirectorDeskHostListener({
     onReady: () => {
-      deskReady.value = true
-      syncSession()
-      syncPanorama()
-      syncBlockingLayout(false)
+      void bootstrapDesk()
     },
     onClose: () => {
       goBack()
     },
+    onStateChanged: (state) => {
+      scheduleSaveScene(state)
+    },
     onCaptures: (captures) => {
       void applyCaptureToStoryboard(captures)
+    },
+    onPanoramaUserImported: () => {
+      skipHostPanoramaSync = true
+      panoramaSyncToken += 1
+      revokePanoramaObjectUrl()
+      toast.success('全景图已导入到主视口')
+    },
+    onToast: ({ level, message }) => {
+      if (level === 'error') toast.error(message)
+      else toast.message(message)
     },
   })
 })
 
 onBeforeUnmount(() => {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  void flushSaveScene()
+  acceptStateSaves = false
   unbindHost?.()
+  panoramaSyncToken += 1
+  revokePanoramaObjectUrl()
 })
 
 watch(instanceId, () => {
-  if (deskFrame.value?.contentWindow) {
-    syncSession()
-    syncPanorama()
-    syncBlockingLayout(false)
+  if (!deskFrame.value?.contentWindow) return
+  acceptStateSaves = false
+  pendingStateForSave = null
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
   }
+  void (async () => {
+    syncSession()
+    const loaded = await hydrateFromServer()
+    acceptStateSaves = true
+    if (!loaded && pendingStateForSave) {
+      scheduleSaveScene(pendingStateForSave)
+    }
+    await syncPanorama()
+    syncBlockingLayout(false)
+  })()
 })
 
 watch([storyboardId, episodeId], () => {
@@ -264,11 +415,15 @@ watch([storyboardId, episodeId], () => {
 })
 
 watch(sceneImage, () => {
-  if (deskFrame.value?.contentWindow) syncPanorama()
+  skipHostPanoramaSync = false
+  if (deskFrame.value?.contentWindow) void syncPanorama({ force: true })
 })
 
 watch(blockingImage, () => {
-  if (deskFrame.value?.contentWindow && !sceneImage.value.trim()) syncPanorama()
+  if (deskFrame.value?.contentWindow && !sceneImage.value.trim()) {
+    skipHostPanoramaSync = false
+    void syncPanorama({ force: true })
+  }
 })
 </script>
 

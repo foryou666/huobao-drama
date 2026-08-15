@@ -2,13 +2,13 @@ export const MAX_VOICE_REFS = 3
 export const VOICE_REF_MIN_SECONDS = 3
 export const VOICE_REF_MAX_SECONDS = 10
 
-export function parseVoiceRefs(raw) {
+export function parseVoiceRefs(raw, max = MAX_VOICE_REFS) {
   if (!raw) return []
-  if (Array.isArray(raw)) return normalizeVoiceRefs(raw)
+  if (Array.isArray(raw)) return normalizeVoiceRefs(raw, max)
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? normalizeVoiceRefs(parsed) : []
+      return Array.isArray(parsed) ? normalizeVoiceRefs(parsed, max) : []
     } catch {
       return []
     }
@@ -16,7 +16,8 @@ export function parseVoiceRefs(raw) {
   return []
 }
 
-function normalizeVoiceRefs(items) {
+function normalizeVoiceRefs(items, max = MAX_VOICE_REFS) {
+  const limit = Number.isFinite(Number(max)) && Number(max) >= 0 ? Math.floor(Number(max)) : MAX_VOICE_REFS
   const seen = new Set()
   const result = []
   for (const item of items) {
@@ -29,7 +30,7 @@ function normalizeVoiceRefs(items) {
       name: String(item?.name || item?.label || '音色').trim() || '音色',
       duration: item?.duration != null ? Number(item.duration) : null,
     })
-    if (result.length >= MAX_VOICE_REFS) break
+    if (result.length >= limit) break
   }
   return result
 }
