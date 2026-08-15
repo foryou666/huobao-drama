@@ -1,6 +1,9 @@
 import type { CharacterBodyType, DirectorObject } from "../schema/directorProject";
 import { DEFAULT_CHARACTER_BODY_TYPE } from "../runtime/mannequin/bodyTypes";
 
+/** Keep in sync with directorStore DEFAULT_CHARACTER_UNIFORM_SCALE */
+const DEFAULT_HOST_CHARACTER_SCALE = 2.5;
+
 export type HostBlockingLayoutCharacter = {
   characterId: number | string;
   name: string;
@@ -130,7 +133,7 @@ export function buildHostBlockingCharacterObject(
     transform: {
       position: entry.position,
       rotation: [0, entry.rotationY, 0],
-      scale: [1, 1, 1],
+      scale: [DEFAULT_HOST_CHARACTER_SCALE, DEFAULT_HOST_CHARACTER_SCALE, DEFAULT_HOST_CHARACTER_SCALE],
     },
     characterRig: {
       rigType: "ue4-mannequin",

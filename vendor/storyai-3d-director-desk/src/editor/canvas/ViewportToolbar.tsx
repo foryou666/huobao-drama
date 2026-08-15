@@ -29,6 +29,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { requestViewportCapture } from "../io/captureBridge";
+import { notifyHostUserPanoramaImported } from "../io/hostBridge";
 import { readLocalModelFile } from "../loaders/localModelImport";
 import { readPanoramaFile } from "../loaders/panoramaImport";
 import {
@@ -108,6 +109,7 @@ export function ViewportToolbar({
   const [crowdPanelOpen, setCrowdPanelOpen] = useState(false);
   const [modelLibraryOpen, setModelLibraryOpen] = useState(false);
   const [aspectRatioPanelOpen, setAspectRatioPanelOpen] = useState(false);
+  const [panoramaImportStatus, setPanoramaImportStatus] = useState<string | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(DEFAULT_VIEWPORT_TOOLBAR_HEIGHT);
   const [characterMenuStyle, setCharacterMenuStyle] = useState<CSSProperties>({});
   const [geometryMenuStyle, setGeometryMenuStyle] = useState<CSSProperties>({});
@@ -296,11 +298,21 @@ export function ViewportToolbar({
     const file = input.files?.[0];
     if (!file) return;
 
+    setPanoramaImportStatus("正在导入全景图…");
     try {
       const result = await readPanoramaFile(file);
       addImportedAsset({ kind: "panorama", ...result });
-    } catch {
-      // The toolbar keeps file actions quiet; detailed import feedback lives in the side panel.
+      notifyHostUserPanoramaImported();
+      setPanoramaImportStatus(`已导入全景图：${result.fileName}`);
+      window.setTimeout(() => setPanoramaImportStatus(null), 3500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "全景图导入失败";
+      setPanoramaImportStatus(message);
+      window.parent?.postMessage(
+        { type: "storyai:director-desk-toast", payload: { level: "error", message } },
+        window.location.origin
+      );
+      window.setTimeout(() => setPanoramaImportStatus(null), 4500);
     } finally {
       input.value = "";
     }
@@ -500,6 +512,11 @@ export function ViewportToolbar({
 
   return (
     <>
+      {panoramaImportStatus ? (
+        <div className="viewport-panorama-status" role="status">
+          {panoramaImportStatus}
+        </div>
+      ) : null}
       <div className="viewport-toolbar" role="group" aria-label="3D视口快捷工具" ref={setToolbarElement}>
         {actions.slice(0, 3).map(renderActionButton)}
         <div className="viewport-toolbar-menu-wrap">

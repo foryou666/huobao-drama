@@ -1,3 +1,5 @@
+import { createClientId } from "./createClientId";
+
 const LOCAL_MODEL_EXTENSION_RE = /\.(fbx|obj)$/i;
 
 function readFileAsDataUrl(file: File) {
@@ -23,7 +25,7 @@ export async function readLocalModelFile(file: File) {
   }
 
   return {
-    id: crypto.randomUUID(),
+    id: createClientId("model"),
     fileName: file.name,
     name: file.name.replace(LOCAL_MODEL_EXTENSION_RE, ""),
     url: await readFileAsDataUrl(file),

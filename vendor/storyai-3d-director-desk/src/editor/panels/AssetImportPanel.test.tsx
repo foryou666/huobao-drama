@@ -38,6 +38,10 @@ beforeEach(() => {
       }) as unknown as CanvasRenderingContext2D
   );
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockImplementation(() => "data:image/jpeg;base64,panorama-adapted");
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(function toBlob(callback, _type, _quality) {
+    const blob = new Blob(["panorama-adapted"], { type: "image/jpeg" });
+    callback?.(blob);
+  });
   drawImageMock.mockReset();
 });
 
@@ -105,7 +109,7 @@ it("imports a non-2:1 image as a backdrop sphere texture", async () => {
     expect(useDirectorStore.getState().project.panoramaAssetId).toBe("asset_1");
   });
 
-  expect(useDirectorStore.getState().project.assets[0]?.url).toBe("data:image/jpeg;base64,panorama-adapted");
+  expect(useDirectorStore.getState().project.assets[0]?.url).toBe("blob:uploaded");
   expect(useDirectorStore.getState().project.assets[0]?.projectionMode).toBe("backdrop");
   expect(screen.getByText("已导入全景图: stadium.jpg")).toBeInTheDocument();
 });

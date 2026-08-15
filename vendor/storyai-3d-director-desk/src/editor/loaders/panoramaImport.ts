@@ -1,4 +1,7 @@
+import { createClientId } from "./createClientId";
+
 const PANORAMA_IMAGE_EXTENSION_RE = /\.(jpe?g|png|webp)$/i;
+const PANORAMA_IMAGE_MIME_RE = /^image\/(jpeg|jpg|png|webp)$/i;
 const PANORAMA_RATIO = 2;
 const PANORAMA_RATIO_TOLERANCE = 0.02;
 const PANORAMA_MIN_WIDTH = 2048;
@@ -267,8 +270,11 @@ function drawImageContain(
 
 async function readImageSource(file: File): Promise<PanoramaImageSource & CanvasImageSource> {
   if (typeof createImageBitmap === "function") {
-    const bitmap = await createImageBitmap(file);
-    return bitmap;
+    try {
+      return await createImageBitmap(file);
+    } catch {
+      // Fall through for codecs createImageBitmap cannot decode.
+    }
   }
 
   return await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -282,10 +288,35 @@ async function readImageSource(file: File): Promise<PanoramaImageSource & Canvas
 
     image.onerror = () => {
       URL.revokeObjectURL(probeUrl);
-      reject(new Error("无法读取全景图尺寸，请重新选择图片"));
+      reject(new Error("无法读取全景图，请改用 JPG / PNG / WEBP"));
     };
 
     image.src = probeUrl;
+  });
+}
+
+function canvasToObjectUrl(canvas: HTMLCanvasElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof canvas.toBlob === "function") {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob?.size) {
+            reject(new Error("全景图处理失败，请换一张较小的图片重试"));
+            return;
+          }
+          resolve(URL.createObjectURL(blob));
+        },
+        "image/jpeg",
+        0.92
+      );
+      return;
+    }
+
+    try {
+      resolve(canvas.toDataURL("image/jpeg", 0.92));
+    } catch {
+      reject(new Error("全景图过大，浏览器无法处理，请换一张较小的图片"));
+    }
   });
 }
 
@@ -293,6 +324,10 @@ async function buildAdaptedPanoramaAsset(file: File) {
   const source = await readImageSource(file);
 
   try {
+    if (!source.width || !source.height) {
+      throw new Error("无法读取图片尺寸，请重新选择图片");
+    }
+
     if (isPanoramaRatio(source.width, source.height)) {
       return {
         projectionMode: "equirectangular" as const,
@@ -306,7 +341,7 @@ async function buildAdaptedPanoramaAsset(file: File) {
     canvas.width = width;
     canvas.height = height;
 
-    const context = canvas.getContext("2d");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) {
       throw new Error("当前环境无法生成全景图，请稍后重试");
     }
@@ -316,27 +351,37 @@ async function buildAdaptedPanoramaAsset(file: File) {
 
     drawImageContain(context, source, placement);
 
-    optimizeAdaptedPanoramaProjection(context, width, height);
+    try {
+      optimizeAdaptedPanoramaProjection(context, width, height);
+    } catch {
+      // Seam optimization is best-effort for very large images.
+    }
 
     return {
       projectionMode: "backdrop" as const,
-      url: canvas.toDataURL("image/jpeg", 0.92),
+      url: await canvasToObjectUrl(canvas),
     };
   } finally {
     source.close?.();
   }
 }
 
+export function isSupportedPanoramaFile(file: File) {
+  if (PANORAMA_IMAGE_EXTENSION_RE.test(file.name)) return true;
+  if (file.type && PANORAMA_IMAGE_MIME_RE.test(file.type)) return true;
+  return false;
+}
+
 export async function readPanoramaFile(file: File) {
-  if (!PANORAMA_IMAGE_EXTENSION_RE.test(file.name)) {
+  if (!isSupportedPanoramaFile(file)) {
     throw new Error("当前全景图仅支持 JPG / PNG / WEBP");
   }
   const result = await buildAdaptedPanoramaAsset(file);
 
   return {
-    id: crypto.randomUUID(),
-    fileName: file.name,
-    name: file.name,
+    id: createClientId("panorama"),
+    fileName: file.name || "panorama.jpg",
+    name: file.name || "panorama.jpg",
     projectionMode: result.projectionMode,
     url: result.url,
   };

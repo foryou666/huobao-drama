@@ -310,7 +310,7 @@ export function CharacterPanel() {
             label="统一缩放"
             rangeAriaLabel="角色统一缩放滑杆"
             numberAriaLabel="角色统一缩放"
-            max="3"
+            max="10"
             min="0.2"
             step="0.01"
             value={transform.scale[0]}

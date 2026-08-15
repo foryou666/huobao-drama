@@ -144,6 +144,7 @@ export interface DirectorActions {
   openScopedScene: (scopeId: string | null | undefined) => void;
   importHostBlockingLayout: (payload: import("../io/blockingLayoutImport").HostBlockingLayoutPayload) => boolean;
   replaceProject: (project: DirectorProject) => void;
+  hydrateFromPersistedState: (snapshot: DirectorState) => void;
   saveLatestSnapshot: () => void;
   restoreLatestSnapshot: () => void;
 }
@@ -228,6 +229,17 @@ function createTransform(
   scale: [number, number, number] = [1, 1, 1]
 ): DirectorTransform {
   return { position, rotation, scale };
+}
+
+/** 相对全景球默认半径，角色默认略放大，避免站在背景里显得过小 */
+export const DEFAULT_CHARACTER_UNIFORM_SCALE = 2.5;
+
+function createCharacterTransform(
+  position: [number, number, number],
+  rotation: [number, number, number] = [0, 0, 0],
+  scale: number = DEFAULT_CHARACTER_UNIFORM_SCALE
+): DirectorTransform {
+  return createTransform(position, rotation, [scale, scale, scale]);
 }
 
 function roundTransformValue(value: number) {
@@ -381,14 +393,31 @@ function extractPersistedDirectorState(state: DirectorRuntimeState): DirectorSta
   });
 }
 
+type HostStateListener = (state: DirectorState) => void;
+let hostStateListener: HostStateListener | null = null;
+
+export function setDirectorDeskHostStateListener(listener: HostStateListener | null) {
+  hostStateListener = listener;
+}
+
+export function exportDirectorDeskPersistedState(): DirectorState {
+  return extractPersistedDirectorState(useDirectorStore.getState() as DirectorRuntimeState);
+}
+
 function writePersistedDirectorState(state: DirectorState) {
   const storage = getLocalStorageSafe();
-  if (!storage) return;
+  if (storage) {
+    try {
+      storage.setItem(getDirectorSceneStorageKey(), JSON.stringify(state));
+    } catch {
+      // Keep the editor usable if the browser storage quota is exceeded.
+    }
+  }
 
   try {
-    storage.setItem(getDirectorSceneStorageKey(), JSON.stringify(state));
+    hostStateListener?.(state);
   } catch {
-    // Keep the editor usable if the browser storage quota is exceeded.
+    // Host sync failures must not break the editor.
   }
 }
 
@@ -483,7 +512,7 @@ export function createDefaultDirectorProject({
     locked: false,
     bodyType: DEFAULT_CHARACTER_BODY_TYPE,
     color: "#4F8EF7",
-    transform: createTransform([0, 0, 0]),
+    transform: createCharacterTransform([0, 0, 0]),
     characterRig: {
       rigType: "ue4-mannequin",
       posePresetId: "stand",
@@ -617,7 +646,7 @@ function buildPresetCharacterObject(
     color: getNextCharacterColor(state.project.objects),
     crowdId: crowdMetadata?.crowdId,
     crowdLabel: crowdMetadata?.crowdLabel,
-    transform: createTransform(position),
+    transform: createCharacterTransform(position),
     characterRig: {
       rigType: "ue4-mannequin" as const,
       posePresetId: "stand",
@@ -2077,6 +2106,20 @@ export const useDirectorStore = create<DirectorStore>((set, get) => {
         selectedCrowdId: null,
         directorInspectorMode: "auto",
       })),
+    hydrateFromPersistedState: (snapshot) => {
+      if (!snapshot || typeof snapshot !== "object") return;
+      const nextSnapshot = cloneJsonValue(snapshot) as DirectorState;
+      if (!nextSnapshot.project || typeof nextSnapshot.project !== "object") return;
+
+      const currentState = get() as DirectorRuntimeState;
+      set({
+        ...createRuntimeStateFromPersistedState(nextSnapshot),
+        clipboard: currentState.clipboard,
+        clipboardPasteCount: currentState.clipboardPasteCount,
+        undoStack: [],
+      });
+      writePersistedDirectorState(extractPersistedDirectorState(get() as DirectorRuntimeState));
+    },
     saveLatestSnapshot: () => {
       writePersistedDirectorState(extractPersistedDirectorState(get() as DirectorRuntimeState));
     },

@@ -109,6 +109,7 @@ export function ScenePanel() {
           }
         }}
       />
+      <p className="scene-scale-hint">放大人物请选中角色后，在右侧用「统一缩放」；不要用场景缩放。</p>
       <InspectorAxisGroup
         label="场景平移"
         axes={[

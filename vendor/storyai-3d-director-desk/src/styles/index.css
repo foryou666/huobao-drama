@@ -1752,6 +1752,34 @@ textarea:focus-visible {
   display: none;
 }
 
+.viewport-panorama-status {
+  position: absolute;
+  left: 50%;
+  bottom: calc(40px + var(--viewport-toolbar-height, 46px) + 14px);
+  z-index: 12;
+  transform: translateX(-50%);
+  max-width: min(420px, calc(100% - 32px));
+  padding: 8px 14px;
+  border: 1px solid rgb(var(--border-rgb) / 0.35);
+  border-radius: 999px;
+  background: rgb(var(--panel-rgb) / 0.92);
+  color: rgb(var(--text-rgb));
+  box-shadow: var(--ui-shadow-panel);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  font-size: 12px;
+  line-height: 17px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.scene-scale-hint {
+  margin: -4px 0 10px;
+  color: rgb(var(--text-muted-rgb));
+  font-size: 12px;
+  line-height: 17px;
+}
+
 .viewport-toolbar {
   position: absolute;
   left: 50%;

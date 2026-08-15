@@ -1,4 +1,8 @@
-import { useDirectorStore } from "../store/directorStore";
+import {
+  setDirectorDeskHostStateListener,
+  useDirectorStore,
+  type DirectorState,
+} from "../store/directorStore";
 
 interface HostPanoramaPayload {
   edgeId?: unknown;
@@ -16,6 +20,10 @@ interface HostBlockingLayoutPayload {
   characters?: unknown;
   notes?: unknown;
   force?: unknown;
+}
+
+interface HostLoadStatePayload {
+  state?: unknown;
 }
 
 export interface HostCaptureItemPayload {
@@ -36,6 +44,8 @@ let initialized = false;
 let hostConnectedPanorama: HostConnectedPanorama | null = null;
 let removeUnsubscribe: (() => void) | null = null;
 let suppressNextPanoramaRemovalNotice = false;
+/** 宿主下发服务端快照时，避免立刻回推触发无意义 PUT */
+let suppressHostStateNotify = false;
 
 function normalizeString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
@@ -127,6 +137,18 @@ function importHostPanorama(payload: HostPanoramaPayload) {
   });
 }
 
+/** 用户在导演台内手动导入全景后通知宿主，避免异步场景同步覆盖 */
+export function notifyHostUserPanoramaImported() {
+  hostConnectedPanorama = null;
+  window.parent?.postMessage(
+    {
+      type: "storyai:director-desk-panorama-user-imported",
+      payload: {},
+    },
+    getHostOrigin()
+  );
+}
+
 function openHostSession(payload: HostSessionPayload) {
   const instanceId = normalizeString(payload.instanceId);
   const theme = normalizeTheme(payload.theme);
@@ -136,6 +158,23 @@ function openHostSession(payload: HostSessionPayload) {
   suppressNextPanoramaRemovalNotice = Boolean(useDirectorStore.getState().project.panoramaAssetId);
   useDirectorStore.getState().openScopedScene(instanceId || null);
   suppressNextPanoramaRemovalNotice = false;
+  hostConnectedPanorama = null;
+}
+
+function applyHostPersistedState(payload: HostLoadStatePayload) {
+  const state = payload?.state;
+  if (!state || typeof state !== "object") {
+    return;
+  }
+
+  suppressNextPanoramaRemovalNotice = Boolean(useDirectorStore.getState().project.panoramaAssetId);
+  suppressHostStateNotify = true;
+  try {
+    useDirectorStore.getState().hydrateFromPersistedState(state as DirectorState);
+  } finally {
+    suppressHostStateNotify = false;
+    suppressNextPanoramaRemovalNotice = false;
+  }
   hostConnectedPanorama = null;
 }
 
@@ -184,6 +223,11 @@ function handleHostMessage(event: MessageEvent) {
     return;
   }
 
+  if (event.data?.type === "storyai:director-desk-load-state") {
+    applyHostPersistedState((event.data.payload || {}) as HostLoadStatePayload);
+    return;
+  }
+
   if (event.data?.type === "storyai:director-desk-panorama") {
     importHostPanorama((event.data.payload || {}) as HostPanoramaPayload);
     return;
@@ -203,6 +247,18 @@ export function initDirectorDeskHostBridge() {
   applyDirectorDeskTheme(getInitialHostTheme() ?? "dark");
   window.addEventListener("message", handleHostMessage);
   subscribeToPanoramaRemoval();
+  setDirectorDeskHostStateListener((state) => {
+    if (suppressHostStateNotify) {
+      return;
+    }
+    window.parent?.postMessage(
+      {
+        type: "storyai:director-desk-state-changed",
+        payload: { state },
+      },
+      getHostOrigin()
+    );
+  });
 }
 
 export function clearDirectorDeskHostBridge() {
@@ -213,6 +269,8 @@ export function clearDirectorDeskHostBridge() {
   initialized = false;
   hostConnectedPanorama = null;
   suppressNextPanoramaRemovalNotice = false;
+  suppressHostStateNotify = false;
+  setDirectorDeskHostStateListener(null);
   window.removeEventListener("message", handleHostMessage);
   removeUnsubscribe?.();
   removeUnsubscribe = null;

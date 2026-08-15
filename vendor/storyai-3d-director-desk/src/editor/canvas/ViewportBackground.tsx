@@ -58,7 +58,9 @@ function usePanoramaTexture(url: string | null, projectionMode: PanoramaProjecti
     let texture: Texture | null = null;
 
     try {
-      texture = new TextureLoader().load(
+      const loader = new TextureLoader();
+      loader.setCrossOrigin("anonymous");
+      texture = loader.load(
         url,
         (loadedTexture) => {
           if (cancelled) {

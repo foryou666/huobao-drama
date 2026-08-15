@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { notifyHostUserPanoramaImported } from "../io/hostBridge";
 import { readLocalModelFile } from "../loaders/localModelImport";
 import { readPanoramaFile } from "../loaders/panoramaImport";
 import { useDirectorStore } from "../store/directorStore";
@@ -22,6 +23,7 @@ export function AssetImportPanel() {
     setImportError(null);
     const result = await readPanoramaFile(file);
     addImportedAsset({ kind: "panorama", ...result });
+    notifyHostUserPanoramaImported();
   }
 
   return (
