@@ -24,6 +24,10 @@ export interface CharacterOutfitCandidate {
   url: string
   label?: string
   created_at?: string
+  /** 该备选图独立的方舟虚拟人像认证 */
+  seedance_asset_id?: string | null
+  seedance_asset_status?: string | null
+  seedance_certified_url?: string | null
 }
 
 export interface CharacterOutfit {
@@ -34,6 +38,13 @@ export interface CharacterOutfit {
   costume_asset_id?: number | null
   candidates?: CharacterOutfitCandidate[]
   variants?: Record<string, CharacterOutfitVariant>
+  /**
+   * @deprecated 兼容旧数据：定稿级认证。新认证写在 candidates[].seedance_*
+   */
+  seedance_asset_id?: string | null
+  seedance_asset_status?: string | null
+  /** 认证时对应的定稿 URL；与 url 不一致时视为需重新认证 */
+  seedance_certified_url?: string | null
   created_at?: string
 }
 
@@ -53,11 +64,26 @@ function normalizeOutfitCandidate(raw: unknown): CharacterOutfitCandidate | null
   const url = normalizePath(item.url || '')
   const id = String(item.id || '').trim()
   if (!url || !id) return null
+  const seedanceAssetId = item.seedance_asset_id != null && String(item.seedance_asset_id).trim()
+    ? String(item.seedance_asset_id).trim()
+    : null
+  const certifiedUrl = item.seedance_certified_url
+    ? normalizePath(item.seedance_certified_url)
+    : null
+  let seedanceStatus = item.seedance_asset_status != null
+    ? String(item.seedance_asset_status).trim() || null
+    : null
+  if (seedanceAssetId && certifiedUrl && certifiedUrl !== url && seedanceStatus === 'active') {
+    seedanceStatus = 'pending'
+  }
   return {
     id,
     url,
     label: item.label ? String(item.label) : undefined,
     created_at: item.created_at ? String(item.created_at) : undefined,
+    seedance_asset_id: seedanceAssetId,
+    seedance_asset_status: seedanceStatus,
+    seedance_certified_url: certifiedUrl || (seedanceAssetId ? url : null),
   }
 }
 
@@ -84,6 +110,36 @@ function normalizeOutfitEntry(item: CharacterOutfit): CharacterOutfit | null {
   const resolvedUrl = url || candidates[0]?.url || ''
   if (!resolvedUrl) return null
 
+  const seedanceAssetId = item.seedance_asset_id != null && String(item.seedance_asset_id).trim()
+    ? String(item.seedance_asset_id).trim()
+    : null
+  const certifiedUrl = item.seedance_certified_url
+    ? normalizePath(item.seedance_certified_url)
+    : null
+  let seedanceStatus = item.seedance_asset_status != null
+    ? String(item.seedance_asset_status).trim() || null
+    : null
+  if (seedanceAssetId && certifiedUrl && certifiedUrl !== resolvedUrl && seedanceStatus === 'active') {
+    seedanceStatus = 'pending'
+  }
+
+  // 旧版定稿级认证 → 迁移到对应候选图（读时兼容，不强制回写）
+  if (seedanceAssetId) {
+    const matchIdx = candidates.findIndex((c) => {
+      if (c.seedance_asset_id) return false
+      if (certifiedUrl) return normalizePath(c.url) === certifiedUrl
+      return normalizePath(c.url) === resolvedUrl
+    })
+    if (matchIdx >= 0) {
+      candidates[matchIdx] = {
+        ...candidates[matchIdx],
+        seedance_asset_id: seedanceAssetId,
+        seedance_asset_status: seedanceStatus,
+        seedance_certified_url: certifiedUrl || candidates[matchIdx].url,
+      }
+    }
+  }
+
   return {
     kind: 'outfit',
     outfit_id: outfitId,
@@ -92,6 +148,9 @@ function normalizeOutfitEntry(item: CharacterOutfit): CharacterOutfit | null {
     costume_asset_id: item.costume_asset_id ?? null,
     candidates,
     variants: item.variants && typeof item.variants === 'object' ? item.variants : {},
+    seedance_asset_id: seedanceAssetId,
+    seedance_asset_status: seedanceStatus,
+    seedance_certified_url: certifiedUrl || (seedanceAssetId ? resolvedUrl : null),
     created_at: item.created_at ? String(item.created_at) : undefined,
   }
 }
@@ -260,11 +319,17 @@ export interface CharacterOutfitPreview {
   label: string
   url: string
   candidate_count: number
+  seedance_asset_id?: string | null
+  seedance_asset_status?: string | null
+  seedance_certified_url?: string | null
   candidates: Array<{
     id: string
     url: string
     label: string
     is_default: boolean
+    seedance_asset_id?: string | null
+    seedance_asset_status?: string | null
+    seedance_certified_url?: string | null
   }>
 }
 
@@ -325,11 +390,17 @@ export function listCharacterOutfitPreviews(char: {
     label: outfit.label,
     url: outfit.url,
     candidate_count: outfit.candidates?.length || 0,
+    seedance_asset_id: outfit.seedance_asset_id ?? null,
+    seedance_asset_status: outfit.seedance_asset_status ?? null,
+    seedance_certified_url: outfit.seedance_certified_url ?? null,
     candidates: (outfit.candidates || []).map(candidate => ({
       id: candidate.id,
       url: candidate.url,
       label: candidate.label || '备选',
       is_default: normalizePath(candidate.url) === normalizePath(outfit.url),
+      seedance_asset_id: candidate.seedance_asset_id ?? null,
+      seedance_asset_status: candidate.seedance_asset_status ?? null,
+      seedance_certified_url: candidate.seedance_certified_url ?? null,
     })),
   }))
 }
@@ -487,14 +558,20 @@ export function appendCharacterOutfitImage(
   }
 
   const setAsDefault = input.setAsDefault !== false
+  const nextUrl = setAsDefault ? normalizedUrl : (prev?.url || normalizedUrl)
+  const urlChanged = !!prev?.seedance_asset_id
+    && normalizePath(prev.url) !== normalizePath(nextUrl)
   const nextOutfit: CharacterOutfit = {
     kind: 'outfit',
     outfit_id: input.outfitId,
     label: input.label,
-    url: setAsDefault ? normalizedUrl : (prev?.url || normalizedUrl),
+    url: nextUrl,
     costume_asset_id: input.costumeAssetId ?? prev?.costume_asset_id ?? null,
     candidates,
     variants: prev?.variants || {},
+    seedance_asset_id: prev?.seedance_asset_id ?? null,
+    seedance_asset_status: urlChanged ? 'pending' : (prev?.seedance_asset_status ?? null),
+    seedance_certified_url: prev?.seedance_certified_url ?? null,
     created_at: prev?.created_at || now(),
   }
 
@@ -535,13 +612,138 @@ export function setCharacterOutfitDefault(
   const candidate = (outfit.candidates || []).find(item => item.id === candidateId)
   if (!candidate) return null
 
+  const nextUrl = normalizePath(candidate.url)
+  const urlChanged = !!outfit.seedance_asset_id
+    && normalizePath(outfit.url) !== nextUrl
+
   outfits[idx] = {
     ...outfit,
-    url: normalizePath(candidate.url),
+    url: nextUrl,
+    seedance_asset_status: urlChanged ? 'pending' : outfit.seedance_asset_status,
   }
 
   writeReferenceEntries(characterId, [...loaded.styleVariants, ...outfits])
   return outfits[idx]
+}
+
+/** 更新某套服装的方舟认证字段（写回 reference_images） */
+export function updateCharacterOutfitSeedanceFields(
+  characterId: number,
+  outfitId: string,
+  fields: {
+    seedance_asset_id?: string | null
+    seedance_asset_status?: string | null
+    seedance_certified_url?: string | null
+  },
+): CharacterOutfit | null {
+  const loaded = loadCharacterEntries(characterId)
+  if (!loaded) return null
+
+  const outfits = [...loaded.outfits]
+  const idx = outfits.findIndex(item => item.outfit_id === outfitId)
+  if (idx < 0) return null
+
+  const prev = outfits[idx]
+  outfits[idx] = {
+    ...prev,
+    seedance_asset_id: fields.seedance_asset_id !== undefined
+      ? fields.seedance_asset_id
+      : prev.seedance_asset_id,
+    seedance_asset_status: fields.seedance_asset_status !== undefined
+      ? fields.seedance_asset_status
+      : prev.seedance_asset_status,
+    seedance_certified_url: fields.seedance_certified_url !== undefined
+      ? (fields.seedance_certified_url ? normalizePath(fields.seedance_certified_url) : null)
+      : prev.seedance_certified_url,
+  }
+
+  writeReferenceEntries(characterId, [...loaded.styleVariants, ...outfits])
+  return outfits[idx]
+}
+
+/** 更新某张备选图的方舟认证字段 */
+export function updateCharacterOutfitCandidateSeedanceFields(
+  characterId: number,
+  outfitId: string,
+  candidateId: string,
+  fields: {
+    seedance_asset_id?: string | null
+    seedance_asset_status?: string | null
+    seedance_certified_url?: string | null
+  },
+): CharacterOutfit | null {
+  const loaded = loadCharacterEntries(characterId)
+  if (!loaded) return null
+
+  const outfits = [...loaded.outfits]
+  const idx = outfits.findIndex(item => item.outfit_id === outfitId)
+  if (idx < 0) return null
+
+  const prev = outfits[idx]
+  const candidates = [...(prev.candidates || [])]
+  const cIdx = candidates.findIndex(item => item.id === candidateId)
+  if (cIdx < 0) return null
+
+  const prevCand = candidates[cIdx]
+  const nextCand: CharacterOutfitCandidate = {
+    ...prevCand,
+    seedance_asset_id: fields.seedance_asset_id !== undefined
+      ? fields.seedance_asset_id
+      : prevCand.seedance_asset_id,
+    seedance_asset_status: fields.seedance_asset_status !== undefined
+      ? fields.seedance_asset_status
+      : prevCand.seedance_asset_status,
+    seedance_certified_url: fields.seedance_certified_url !== undefined
+      ? (fields.seedance_certified_url ? normalizePath(fields.seedance_certified_url) : null)
+      : prevCand.seedance_certified_url,
+  }
+  candidates[cIdx] = nextCand
+
+  // 同步旧版定稿级字段：若该候选是当前定稿，或刚认证成功，保持列表兼容
+  const isDefault = normalizePath(nextCand.url) === normalizePath(prev.url)
+  const nextOutfit: CharacterOutfit = {
+    ...prev,
+    candidates,
+  }
+  if (isDefault || nextCand.seedance_asset_id) {
+    if (isDefault) {
+      nextOutfit.seedance_asset_id = nextCand.seedance_asset_id ?? null
+      nextOutfit.seedance_asset_status = nextCand.seedance_asset_status ?? null
+      nextOutfit.seedance_certified_url = nextCand.seedance_certified_url ?? null
+    } else if (
+      prev.seedance_certified_url
+      && normalizePath(prev.seedance_certified_url) === normalizePath(nextCand.url)
+    ) {
+      nextOutfit.seedance_asset_id = nextCand.seedance_asset_id ?? null
+      nextOutfit.seedance_asset_status = nextCand.seedance_asset_status ?? null
+      nextOutfit.seedance_certified_url = nextCand.seedance_certified_url ?? null
+    }
+  }
+
+  outfits[idx] = nextOutfit
+  writeReferenceEntries(characterId, [...loaded.styleVariants, ...outfits])
+  return outfits[idx]
+}
+
+export function findCharacterOutfitCandidate(
+  raw: string | null | undefined,
+  outfitId: string,
+  candidateId: string,
+): CharacterOutfitCandidate | null {
+  const outfit = findCharacterOutfit(raw, outfitId)
+  if (!outfit) return null
+  return (outfit.candidates || []).find(item => item.id === candidateId) || null
+}
+
+export function characterHasAnySeedanceAsset(char: {
+  seedanceAssetId?: string | null
+  referenceImages?: string | null
+}): boolean {
+  if (char.seedanceAssetId) return true
+  return listCharacterOutfits(char.referenceImages).some(o =>
+    !!o.seedance_asset_id
+    || (o.candidates || []).some(c => !!c.seedance_asset_id),
+  )
 }
 
 export function removeCharacterOutfitCandidate(

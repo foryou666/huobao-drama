@@ -233,3 +233,87 @@ export async function probeIndexTts2Api(baseUrl: string) {
     response_preview: text.slice(0, 240),
   }
 }
+
+let statusCache: { at: number; payload: IndexTts2ServerStatus } | null = null
+const STATUS_CACHE_MS = 15_000
+
+export interface IndexTts2ServerStatus {
+  /** online | offline | unconfigured */
+  state: 'online' | 'offline' | 'unconfigured'
+  online: boolean
+  configured: boolean
+  reachable: boolean
+  label: string
+  detail: string
+  checked_at: string
+  http_status?: number | null
+}
+
+/** 面向普通用户的 TTS 服务器开机/关机状态（带短缓存） */
+export async function getIndexTts2ServerStatus(opts?: { force?: boolean }): Promise<IndexTts2ServerStatus> {
+  const nowMs = Date.now()
+  if (!opts?.force && statusCache && nowMs - statusCache.at < STATUS_CACHE_MS) {
+    return statusCache.payload
+  }
+
+  const admin = getIndexTts2AdminConfig()
+  const checkedAt = new Date().toISOString()
+
+  if (!admin.configured || !admin.base_url) {
+    const payload: IndexTts2ServerStatus = {
+      state: 'unconfigured',
+      online: false,
+      configured: false,
+      reachable: false,
+      label: '当前 TTS 服务器未配置，暂停使用',
+      detail: '请联系管理员在「设置 → AI 服务」配置 IndexTTS2',
+      checked_at: checkedAt,
+      http_status: null,
+    }
+    statusCache = { at: nowMs, payload }
+    return payload
+  }
+
+  try {
+    const probe = await probeIndexTts2Api(admin.base_url)
+    if (probe.reachable) {
+      const payload: IndexTts2ServerStatus = {
+        state: 'online',
+        online: true,
+        configured: true,
+        reachable: true,
+        label: '当前 TTS 服务器已开机，正常使用',
+        detail: probe.message,
+        checked_at: checkedAt,
+        http_status: probe.status,
+      }
+      statusCache = { at: nowMs, payload }
+      return payload
+    }
+    const payload: IndexTts2ServerStatus = {
+      state: 'offline',
+      online: false,
+      configured: true,
+      reachable: false,
+      label: '当前 TTS 服务器已关机。如需使用配音功能，请向管理员申请开机。',
+      detail: '如需使用配音功能，请向管理员申请开机。',
+      checked_at: checkedAt,
+      http_status: probe.status,
+    }
+    statusCache = { at: nowMs, payload }
+    return payload
+  } catch (err: any) {
+    const payload: IndexTts2ServerStatus = {
+      state: 'offline',
+      online: false,
+      configured: true,
+      reachable: false,
+      label: '当前 TTS 服务器已关机。如需使用配音功能，请向管理员申请开机。',
+      detail: err?.message || '无法连接 TTS 服务器',
+      checked_at: checkedAt,
+      http_status: null,
+    }
+    statusCache = { at: nowMs, payload }
+    return payload
+  }
+}

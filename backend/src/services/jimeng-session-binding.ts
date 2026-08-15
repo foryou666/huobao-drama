@@ -15,9 +15,43 @@ import {
 import { logTaskWarn } from '../utils/task-logger.js'
 
 export const JIMENG_SESSION_BINDING_META_KEY = 'jimeng_session_bindings'
+/** 强制全员使用指定 Session（覆盖按用户+项目粘滞分配） */
+export const JIMENG_FORCE_SESSION_META_KEY = 'jimeng_force_session_id'
 
 /** 即梦上游至少需约此 VIP/购买积分才够跑一单 Seedance VIP（赠送积分通常不够，低于此改分） */
 export const JIMENG_MIN_USABLE_CREDIT = 80
+
+export function getJimengForceSessionId(): string | null {
+  const raw = String(getAppMeta(JIMENG_FORCE_SESSION_META_KEY) || '').trim()
+  return raw || null
+}
+
+export function setJimengForceSessionId(sessionId: string | null): string | null {
+  const id = String(sessionId || '').trim()
+  if (!id) {
+    setAppMeta(JIMENG_FORCE_SESSION_META_KEY, '')
+    return null
+  }
+  const session = getJimengWebSession(id)
+  if (!session) throw new Error('所选即梦 Session 不存在')
+  setAppMeta(JIMENG_FORCE_SESSION_META_KEY, session.id)
+  return session.id
+}
+
+export function clearJimengForceSessionId(): void {
+  setAppMeta(JIMENG_FORCE_SESSION_META_KEY, '')
+}
+
+/** 若强制号已被删除则自动清除强制设置，返回当前有效的强制 Session id */
+export function resolveLiveJimengForceSessionId(): string | null {
+  const id = getJimengForceSessionId()
+  if (!id) return null
+  if (!getJimengWebSession(id)) {
+    clearJimengForceSessionId()
+    return null
+  }
+  return id
+}
 
 interface BindingEntry {
   sessionId: string
@@ -135,8 +169,8 @@ function writeBinding(store: BindingStore, key: string, sessionId: string) {
 
 export type ResolveJimengSessionResult = {
   session: JimengWebSession
-  /** reused = 复用旧绑定；assigned = 新分配；reassigned = 原号无积分改分；override = 管理员指定；fallback = 无项目等回退 */
-  source: 'reused' | 'assigned' | 'reassigned' | 'override' | 'fallback'
+  /** reused = 复用旧绑定；assigned = 新分配；reassigned = 原号无积分改分；override = 管理员指定；forced = 全局强制；fallback = 无项目等回退 */
+  source: 'reused' | 'assigned' | 'reassigned' | 'override' | 'forced' | 'fallback'
   bindingKey: string | null
   previousSessionId?: string | null
 }
@@ -148,10 +182,11 @@ export function isJimengUpstreamCreditError(message?: string | null): boolean {
 
 /**
  * 解析通道4应使用的 Session。
+ * - 全局强制 Session（设置页）：所有用户发布一律用该号，忽略粘滞分配与改分
  * - 有 userId + dramaId：按粘滞规则复用 / 新分配；绑定号无积分时自动改分
- * - preferredSessionId（管理员）：强制该 Session，并写入粘滞绑定
+ * - preferredSessionId（管理员）：强制该 Session，并写入粘滞绑定（全局强制开启时仍优先生效）
  * - 无 dramaId：回退全局启用 Session，不写绑定
- * - excludeSessionIds：强制避开（例如提交时积分不足后重试）
+ * - excludeSessionIds：强制避开（例如提交时积分不足后重试；全局强制时不改分）
  */
 export async function resolveJimengSessionForUserDrama(opts: {
   userId: number
@@ -185,6 +220,14 @@ export async function resolveJimengSessionForUserDrama(opts: {
     if (!session) throw new Error('所选即梦 Session 不存在')
     if (key) writeBinding(store, key, session.id)
     return { session, source: 'override', bindingKey: key }
+  }
+
+  const forceId = resolveLiveJimengForceSessionId()
+  if (forceId) {
+    const session = getJimengWebSession(forceId)
+    if (!session) throw new Error('强制使用的即梦 Session 不存在，请在设置中重新指定')
+    if (key) writeBinding(store, key, session.id)
+    return { session, source: 'forced', bindingKey: key }
   }
 
   if (key) {

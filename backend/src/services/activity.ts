@@ -70,12 +70,95 @@ export function logCreditActivity(
   })
 }
 
+/** 从 activity metadata 提取关联扣费交易 ID（缺省时回查生成记录） */
+export function extractActivityChargeTxIds(meta: Record<string, unknown> | null | undefined): number[] {
+  if (!meta || typeof meta !== 'object') return []
+  const ids = new Set<number>()
+  for (const key of ['transaction_id', 'credit_tx_id'] as const) {
+    const n = Number((meta as any)[key])
+    if (Number.isFinite(n) && n > 0) ids.add(n)
+  }
+  const arr = (meta as any).credit_tx_ids
+  if (Array.isArray(arr)) {
+    for (const raw of arr) {
+      const n = Number(raw)
+      if (Number.isFinite(n) && n > 0) ids.add(n)
+    }
+  }
+  if (ids.size) return [...ids]
+
+  const genId = Number((meta as any).generation_id)
+  if (Number.isFinite(genId) && genId > 0) {
+    const [video] = db.select({
+      creditTransactionId: schema.videoGenerations.creditTransactionId,
+    }).from(schema.videoGenerations).where(eq(schema.videoGenerations.id, genId)).all()
+    if (video?.creditTransactionId) ids.add(video.creditTransactionId)
+    else {
+      const [image] = db.select({
+        creditTransactionId: schema.imageGenerations.creditTransactionId,
+      }).from(schema.imageGenerations).where(eq(schema.imageGenerations.id, genId)).all()
+      if (image?.creditTransactionId) ids.add(image.creditTransactionId)
+    }
+  }
+  return [...ids]
+}
+
+/** charge_tx_id → 退款交易（只扫一次 refund 表） */
+function buildRefundByChargeIdMap(): Map<number, typeof schema.creditTransactions.$inferSelect> {
+  const map = new Map<number, typeof schema.creditTransactions.$inferSelect>()
+  const refunds = db.select().from(schema.creditTransactions)
+    .where(eq(schema.creditTransactions.type, 'refund'))
+    .all()
+  for (const tx of refunds) {
+    if (!tx.metadata) continue
+    try {
+      const chargeId = Number(JSON.parse(tx.metadata).charge_tx_id)
+      if (Number.isFinite(chargeId) && chargeId > 0 && !map.has(chargeId)) {
+        map.set(chargeId, tx)
+      }
+    } catch { /* ignore */ }
+  }
+  return map
+}
+
+function resolveActivityRefund(
+  meta: Record<string, unknown> | null,
+  refundByChargeId: Map<number, typeof schema.creditTransactions.$inferSelect>,
+) {
+  const chargeIds = extractActivityChargeTxIds(meta)
+  if (!chargeIds.length) {
+    return { refunded: false, refund_partial: false, credit_refund_amount: 0 }
+  }
+  let refundedCount = 0
+  let refundAmount = 0
+  for (const id of chargeIds) {
+    const refund = refundByChargeId.get(id)
+    if (refund) {
+      refundedCount += 1
+      refundAmount += Math.abs(Number(refund.amount) || 0)
+    }
+  }
+  return {
+    refunded: refundedCount > 0 && refundedCount === chargeIds.length,
+    refund_partial: refundedCount > 0 && refundedCount < chargeIds.length,
+    credit_refund_amount: refundAmount,
+  }
+}
+
 export function formatActivityLogRow(
   row: typeof schema.activityLogs.$inferSelect,
   userMap: Map<number, typeof schema.users.$inferSelect>,
+  refundByChargeId?: Map<number, typeof schema.creditTransactions.$inferSelect>,
 ) {
   const meta = row.metadata ? JSON.parse(row.metadata) : null
   const u = userMap.get(row.userId)
+  const refundInfo = resolveActivityRefund(meta, refundByChargeId || new Map())
+  let summary = enrichActivitySummary(row.summary, userMap, row)
+  if ((refundInfo.refunded || refundInfo.refund_partial) && summary && !/已退款|部分退款/.test(summary)) {
+    summary = `${summary}（${refundInfo.refunded ? '已退款' : '部分退款'}）`
+  } else if ((refundInfo.refunded || refundInfo.refund_partial) && !summary) {
+    summary = refundInfo.refunded ? '已退款' : '部分退款'
+  }
   return {
     id: row.id,
     user_id: row.userId,
@@ -84,13 +167,17 @@ export function formatActivityLogRow(
     operator_id: meta?.operator_id ?? row.userId,
     operator_name: meta?.operator_name || u?.displayName || u?.username,
     action: row.action,
-    summary: enrichActivitySummary(row.summary, userMap, row),
+    summary,
     resource_type: row.resourceType,
     resource_id: row.resourceId,
     drama_id: row.dramaId,
     episode_id: row.episodeId,
     metadata: meta,
     credit_cost: row.creditCost ?? 0,
+    credit_refunded: refundInfo.refunded,
+    credit_refund_partial: refundInfo.refund_partial,
+    credit_refund_amount: refundInfo.credit_refund_amount,
+    refunded: refundInfo.refunded,
     created_at: row.createdAt,
   }
 }
@@ -170,8 +257,9 @@ export function listEpisodeActivityLogs(episodeId: number, opts?: { limit?: numb
     )
   const slice = rows.slice(offset, offset + limit)
   const userMap = buildUserMap(collectActivityReferencedUserIds(slice))
+  const refundByChargeId = buildRefundByChargeIdMap()
   return {
-    items: slice.map(row => formatActivityLogRow(row, userMap)),
+    items: slice.map(row => formatActivityLogRow(row, userMap, refundByChargeId)),
     total: rows.length,
     limit,
     offset,
@@ -195,8 +283,9 @@ export function listActivityLogs(opts: {
   const rows = query.all()
   const slice = rows.slice(offset, offset + limit)
   const userMap = buildUserMap(collectActivityReferencedUserIds(slice))
+  const refundByChargeId = buildRefundByChargeIdMap()
   return {
-    items: slice.map(row => formatActivityLogRow(row, userMap)),
+    items: slice.map(row => formatActivityLogRow(row, userMap, refundByChargeId)),
     total: rows.length,
     limit,
     offset,

@@ -7,6 +7,22 @@ import { parseVideoContentRefs } from '../utils/seedance-content.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 import { videoPosterPathForSource } from '../utils/video-poster.js'
 
+type LedgerRefPath = { path: string; label: string | null }
+
+function mapContentRefsToPaths(
+  refs: ReturnType<typeof parseVideoContentRefs>,
+): LedgerRefPath[] {
+  return refs
+    .map((ref) => {
+      const path = String(ref.url || '').trim().replace(/^\/+/, '')
+      return {
+        path,
+        label: ref.label || null,
+      }
+    })
+    .filter(item => item.path)
+}
+
 /** 列表接口只返回路径（卡片展示走前端批量 resolve，避免逐条 OSS 签名） */
 function parseReferenceImagePaths(row: {
   imageUrl?: string | null
@@ -14,18 +30,12 @@ function parseReferenceImagePaths(row: {
   lastFrameUrl?: string | null
   referenceImageUrls?: string | null
   referencePayload?: string | null
-}) {
+}): LedgerRefPath[] {
   const contentRefs = parseVideoContentRefs(row.referencePayload)
     .filter(ref => ref.type === 'image' && ref.role !== 'first_frame' && ref.role !== 'last_frame')
 
   if (contentRefs.length) {
-    return contentRefs.map((ref) => {
-      const path = String(ref.url || '').trim().replace(/^\/+/, '')
-      return {
-        path,
-        label: ref.label || null,
-      }
-    }).filter(item => item.path)
+    return mapContentRefsToPaths(contentRefs)
   }
 
   const paths: string[] = []
@@ -46,7 +56,19 @@ function parseReferenceImagePaths(row: {
     } catch { /* ignore */ }
   }
 
-  return paths.map(path => ({ path }))
+  return paths.map(path => ({ path, label: null }))
+}
+
+function parseReferenceVideoPaths(row: { referencePayload?: string | null }): LedgerRefPath[] {
+  return mapContentRefsToPaths(
+    parseVideoContentRefs(row.referencePayload).filter(ref => ref.type === 'video'),
+  )
+}
+
+function parseReferenceAudioPaths(row: { referencePayload?: string | null }): LedgerRefPath[] {
+  return mapContentRefsToPaths(
+    parseVideoContentRefs(row.referencePayload).filter(ref => ref.type === 'audio'),
+  )
 }
 
 export interface VideoLedgerQuery {
@@ -101,6 +123,29 @@ function getVideoOwnerMaps() {
   const maps = buildVideoOwnerMaps()
   ownerMapsCache = { at: now, maps }
   return maps
+}
+
+function buildUserMap(userIds: number[]) {
+  if (!userIds.length) return new Map<number, typeof schema.users.$inferSelect>()
+  return new Map(
+    db.select().from(schema.users).where(inArray(schema.users.id, userIds)).all()
+      .map(u => [u.id, u]),
+  )
+}
+
+function resolveOperatorFields(
+  row: typeof schema.videoGenerations.$inferSelect,
+  ownerMaps: ReturnType<typeof buildVideoOwnerMaps>,
+  userMap: Map<number, typeof schema.users.$inferSelect>,
+) {
+  const ownerUserId = resolveVideoOwnerUserId(row, ownerMaps)
+  const owner = ownerUserId ? userMap.get(ownerUserId) : null
+  return {
+    operator_id: ownerUserId,
+    operator_name: owner?.displayName || owner?.username || null,
+    username: owner?.username || null,
+    display_name: owner?.displayName || owner?.username || null,
+  }
 }
 
 function resolveVideoOwnerUserId(
@@ -159,6 +204,11 @@ function buildLedgerSqlConditions(
         eq(schema.videoGenerations.status, 'processing'),
         eq(schema.videoGenerations.status, 'pending'),
       )!)
+    } else if (query.status === 'cancelled') {
+      conditions.push(or(
+        eq(schema.videoGenerations.status, 'cancelled'),
+        eq(schema.videoGenerations.status, 'canceled'),
+      )!)
     } else {
       conditions.push(eq(schema.videoGenerations.status, query.status))
     }
@@ -204,7 +254,7 @@ function warmVideoPosters(rows: typeof schema.videoGenerations.$inferSelect[]) {
 function emptyLedgerResult(limit: number, offset: number) {
   return {
     items: [],
-    stats: { total: 0, completed: 0, processing: 0, failed: 0 },
+    stats: { total: 0, completed: 0, processing: 0, failed: 0, cancelled: 0, expired: 0 },
     pagination: { limit, offset, total: 0, has_more: false },
   }
 }
@@ -217,7 +267,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
   const sqlConditions = buildLedgerSqlConditions(query, accessibleDramaIds)
   let rows = db.select().from(schema.videoGenerations)
     .where(and(...sqlConditions))
-    .orderBy(desc(schema.videoGenerations.createdAt))
+    // 必须二级排序，否则同秒创建的记录分页会重叠/漏项
+    .orderBy(desc(schema.videoGenerations.createdAt), desc(schema.videoGenerations.id))
     .all()
 
   const targetUserId = query.userId ?? (query.mineOnly ? query.user.id : null)
@@ -250,6 +301,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
     completed: rows.filter(r => r.status === 'completed').length,
     processing: rows.filter(r => r.status === 'processing' || r.status === 'pending').length,
     failed: rows.filter(r => r.status === 'failed').length,
+    cancelled: rows.filter(r => r.status === 'cancelled' || r.status === 'canceled').length,
+    expired: rows.filter(r => r.status === 'expired').length,
   }
 
   const page = rows.slice(offset, offset + limit)
@@ -273,11 +326,18 @@ export function listVideoLedger(query: VideoLedgerQuery) {
     : []
   const dramaMap = new Map(dramas.map(d => [d.id, d]))
 
+  const displayOwnerMaps = getVideoOwnerMaps()
+  const ownerIds = [...new Set(
+    page.map(row => resolveVideoOwnerUserId(row, displayOwnerMaps)).filter((id): id is number => !!id),
+  )]
+  const userMap = buildUserMap(ownerIds)
+
   const items = page.map((row) => {
     const sb = row.storyboardId ? sbMap.get(row.storyboardId) : null
     const ep = sb ? epMap.get(sb.episodeId) : null
     const drama = row.dramaId ? dramaMap.get(row.dramaId) : null
     const rawVideo = row.localPath || row.videoUrl
+    const operator = resolveOperatorFields(row, displayOwnerMaps, userMap)
     return toSnakeCase({
       id: row.id,
       storyboard_id: row.storyboardId,
@@ -290,6 +350,9 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       error_msg: sanitizeUserFacingProviderError(row.errorMsg),
       duration: row.duration,
       aspect_ratio: row.aspectRatio,
+      resolution: row.resolution,
+      width: row.width,
+      height: row.height,
       reference_mode: row.referenceMode,
       video_url: row.videoUrl,
       local_path: row.localPath,
@@ -298,6 +361,8 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       updated_at: row.updatedAt,
       completed_at: row.completedAt,
       reference_images: parseReferenceImagePaths(row),
+      reference_videos: parseReferenceVideoPaths(row),
+      reference_audios: parseReferenceAudioPaths(row),
       is_manual: !row.storyboardId,
       drama_title: drama?.title || null,
       episode_id: ep?.id || null,
@@ -306,6 +371,7 @@ export function listVideoLedger(query: VideoLedgerQuery) {
       storyboard_title: sb?.title || null,
       storyboard_number: sb?.storyboardNumber || null,
       storyboard_exists: !!sb,
+      ...operator,
     })
   })
 

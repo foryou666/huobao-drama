@@ -7,11 +7,12 @@ export function supportsImageReference(provider?: string | null, model?: string 
   if (/gpt-image|chatgpt-image/.test(m)) return true
   if (/nano-banana/.test(m)) return true
   if (/gemini/.test(m) && (p === 'gemini' || !p)) return true
-  if (/seedream|seed-edit|doubao-seed/.test(m)) return true
+  if (/seedream|seed-edit|doubao-seed|dream5\.0/.test(m)) return true
+  if (p === 'jimeng_web') return true
   if (/minimax|image-01|image-02/.test(m)) return true
   return false
 }
 
 export function imageReferenceSupportHint(): string {
-  return '参考图生图需 Gemini / MiniMax / 火山 Seedream，或 gpt-image-2 等 GPT Image 模型'
+  return '参考图生图需 Gemini / MiniMax / 火山 Seedream、dream5.0 pro（即梦通道4），或 gpt-image-2 等 GPT Image 模型'
 }

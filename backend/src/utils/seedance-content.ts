@@ -1,6 +1,6 @@
 import type { ProviderRequest } from '../services/adapters/types.js'
 import { joinProviderUrl } from '../services/adapters/url.js'
-import { isSeedance2Model, seedanceDurationBounds } from '../constants/seedance.js'
+import { isSeedance2FamilyModel, seedanceDurationBounds, normalizeSeedanceResolution } from '../constants/seedance.js'
 import type { AIConfig, VideoGenerationRecord } from '../services/adapters/types.js'
 import { seedanceRatioRequestFields } from './video-aspect-ratio.js'
 import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
@@ -144,6 +144,7 @@ export function buildSeedance2GenerateRequest(
     generate_audio: true,
     ...seedanceRatioRequestFields(record.aspectRatio, model, true, config.baseUrl),
     duration: normalizeSeedanceDuration(record.duration, model),
+    resolution: normalizeSeedanceResolution(record.resolution, model),
     watermark: false,
   }
 
@@ -166,5 +167,5 @@ function normalizeSeedanceDuration(duration?: number | null, model?: string) {
 }
 
 export function shouldUseSeedance2Multimodal(model?: string | null, refs?: VideoContentRef[]) {
-  return isSeedance2Model(model) && !!refs?.length
+  return isSeedance2FamilyModel(model) && !!refs?.length
 }

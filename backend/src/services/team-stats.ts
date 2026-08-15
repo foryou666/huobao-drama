@@ -16,6 +16,8 @@ export interface DailyWorkload {
   credits_consumed: number
   images: number
   videos: number
+  /** 净扣积分的视频次数（charge − refund） */
+  videos_effective: number
   agent_runs: number
 }
 
@@ -34,7 +36,10 @@ export interface MemberPeriodStats {
   dramas_touched: number
   episodes_touched: number
   images: number
+  /** 活动日志中的视频生成次数（含失败后退款） */
   videos: number
+  /** 净扣积分的视频次数（成功扣费且未退回） */
+  videos_effective: number
   agent_runs: number
   assistant_chats: number
 }
@@ -95,24 +100,30 @@ function isVideoAction(action: string): boolean {
   return action.startsWith('video.generate')
 }
 
+function emptyDailyRow(date: string): DailyWorkload {
+  return {
+    date,
+    activities: 0,
+    credits_consumed: 0,
+    images: 0,
+    videos: 0,
+    videos_effective: 0,
+    agent_runs: 0,
+  }
+}
+
 function emptyDailyMap(): Map<string, DailyWorkload> {
   return new Map()
 }
 
 function bumpDaily(map: Map<string, DailyWorkload>, iso: string, patch: Partial<DailyWorkload>) {
   const key = dayKey(iso)
-  const row = map.get(key) || {
-    date: key,
-    activities: 0,
-    credits_consumed: 0,
-    images: 0,
-    videos: 0,
-    agent_runs: 0,
-  }
+  const row = map.get(key) || emptyDailyRow(key)
   if (patch.activities) row.activities += patch.activities
   if (patch.credits_consumed != null) row.credits_consumed += patch.credits_consumed
   if (patch.images) row.images += patch.images
   if (patch.videos) row.videos += patch.videos
+  if (patch.videos_effective != null) row.videos_effective += patch.videos_effective
   if (patch.agent_runs) row.agent_runs += patch.agent_runs
   map.set(key, row)
 }
@@ -123,14 +134,7 @@ function fillDailyRange(map: Map<string, DailyWorkload>, from: string, to: strin
   const end = new Date(`${to}T00:00:00.000`)
   while (cursor <= end) {
     const key = formatDay(cursor)
-    out.push(map.get(key) || {
-      date: key,
-      activities: 0,
-      credits_consumed: 0,
-      images: 0,
-      videos: 0,
-      agent_runs: 0,
-    })
+    out.push(map.get(key) || emptyDailyRow(key))
     cursor.setDate(cursor.getDate() + 1)
   }
   return out
@@ -157,6 +161,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
         active_members: 0,
         total_images: 0,
         total_videos: 0,
+        total_videos_effective: 0,
         total_agent_runs: 0,
       },
       daily: fillDailyRange(emptyDailyMap(), range.date_from, range.date_to),
@@ -194,6 +199,8 @@ export function getTeamStats(opts: TeamStatsOptions) {
     let creditsGranted = 0
     let images = 0
     let videos = 0
+    let videoCharges = 0
+    let videoRefunds = 0
     let agentRuns = 0
     let assistantChats = 0
     const dramaIds = new Set<number>()
@@ -214,6 +221,11 @@ export function getTeamStats(opts: TeamStatsOptions) {
         }
         entry.credits += spent
         actionMap.set(tx.action, entry)
+        if (isVideoAction(tx.action) && spent > 0) {
+          videoCharges += 1
+          bumpDaily(memberDaily, tx.createdAt, { videos_effective: 1 })
+          bumpDaily(teamDaily, tx.createdAt, { videos_effective: 1 })
+        }
       } else if (tx.type === 'refund') {
         const refunded = Math.max(0, tx.amount)
         creditsRefunded += refunded
@@ -228,6 +240,11 @@ export function getTeamStats(opts: TeamStatsOptions) {
         }
         entry.credits -= refunded
         actionMap.set(tx.action, entry)
+        if (isVideoAction(tx.action) && refunded > 0) {
+          videoRefunds += 1
+          bumpDaily(memberDaily, tx.createdAt, { videos_effective: -1 })
+          bumpDaily(teamDaily, tx.createdAt, { videos_effective: -1 })
+        }
       } else if (tx.type === 'grant') {
         creditsGranted += Math.max(0, tx.amount)
       }
@@ -267,6 +284,8 @@ export function getTeamStats(opts: TeamStatsOptions) {
       if (act.action === 'assistant.chat') assistantChats += 1
     }
 
+    const videosEffective = Math.max(0, videoCharges - videoRefunds)
+
     memberRows.push({
       user_id: userId,
       username: member.username,
@@ -283,12 +302,16 @@ export function getTeamStats(opts: TeamStatsOptions) {
         episodes_touched: episodeIds.size,
         images,
         videos,
+        videos_effective: videosEffective,
         agent_runs: agentRuns,
         assistant_chats: assistantChats,
       },
       by_action: [...actionMap.values()]
         .sort((a, b) => b.credits - a.credits || b.count - a.count),
-      daily: fillDailyRange(memberDaily, range.date_from, range.date_to),
+      daily: fillDailyRange(memberDaily, range.date_from, range.date_to).map(day => ({
+        ...day,
+        videos_effective: Math.max(0, day.videos_effective),
+      })),
     })
   }
 
@@ -303,6 +326,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
     if (row.period.activity_count > 0) acc.active_members += 1
     acc.total_images += row.period.images
     acc.total_videos += row.period.videos
+    acc.total_videos_effective += row.period.videos_effective
     acc.total_agent_runs += row.period.agent_runs
     return acc
   }, {
@@ -313,6 +337,7 @@ export function getTeamStats(opts: TeamStatsOptions) {
     active_members: 0,
     total_images: 0,
     total_videos: 0,
+    total_videos_effective: 0,
     total_agent_runs: 0,
   })
 
@@ -324,7 +349,10 @@ export function getTeamStats(opts: TeamStatsOptions) {
     date_from: range.date_from,
     date_to: range.date_to,
     summary,
-    daily: fillDailyRange(teamDaily, range.date_from, range.date_to),
+    daily: fillDailyRange(teamDaily, range.date_from, range.date_to).map(day => ({
+      ...day,
+      videos_effective: Math.max(0, day.videos_effective),
+    })),
     members: memberRows,
   }
 }

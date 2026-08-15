@@ -1,5 +1,11 @@
 import type { AIConfig } from '../services/adapters/types.js'
 
+/**
+ * 解说漫实体抽取 / 画面 Prompt 推理默认模型。
+ * gpt-5.6-terra：5.6 中档，约 gpt-5.5 一半单价，适合长剧本 JSON 推理。
+ */
+export const APIMART_NARRATION_TEXT_MODEL = 'gpt-5.6-terra'
+
 /** 生产环境默认可达入口（api.apimart.ai 在部分机房超时） */
 export const APIMART_DEFAULT_BASE_URL = 'https://api.apib.ai'
 

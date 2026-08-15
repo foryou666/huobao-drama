@@ -84,11 +84,14 @@ export async function uploadXyqAsset(
   const mime = String(file.mimeType || '').toLowerCase()
   const isVideo = mime.startsWith('video/')
   const isImage = mime.startsWith('image/')
-  if (!isVideo && !isImage) throw new Error('小云雀仅支持上传图片或视频')
+  const isAudio = mime.startsWith('audio/')
+  if (!isVideo && !isImage && !isAudio) throw new Error('小云雀仅支持上传图片、视频或音频')
 
-  const assetType = isVideo ? 1 : 2
+  // 上游 asset_type：1 视频 / 2 图片 / 3 音频
+  const assetType = isVideo ? 1 : isAudio ? 3 : 2
   const boundary = `----XyqUpload${Date.now().toString(16)}`
-  const filename = file.filename || (isVideo ? 'reference.mp4' : 'reference.png')
+  const filename = file.filename
+    || (isVideo ? 'reference.mp4' : isAudio ? 'reference.mp3' : 'reference.png')
   const parts: Buffer[] = []
   const push = (s: string | Buffer) => parts.push(typeof s === 'string' ? Buffer.from(s) : s)
 
@@ -132,13 +135,25 @@ export interface XyqSubmitResult {
 
 export async function submitXyqRun(
   session: XyqWebSession,
-  input: { message: string; assetIds?: string[]; threadId?: string },
+  input: {
+    message: string
+    assetIds?: string[]
+    threadId?: string
+    /** 直出：pippit_video_part_agent + video_part_tool_param（禁止创意助手） */
+    agentName?: string
+    videoPartToolParam?: Record<string, unknown>
+  },
 ): Promise<XyqSubmitResult> {
+  const agentName = String(input.agentName || '').trim() || undefined
   const body: Record<string, unknown> = {
     message: String(input.message || '').trim(),
   }
   if (input.threadId) body.thread_id = input.threadId
   if (input.assetIds?.length) body.asset_ids = input.assetIds
+  if (agentName) body.agent_name = agentName
+  if (input.videoPartToolParam && typeof input.videoPartToolParam === 'object') {
+    body.video_part_tool_param = input.videoPartToolParam
+  }
 
   const data = await xyqJsonRequest(session, XYQ_API_PATHS.submitRun, body)
   const run = data?.run || {}
@@ -146,8 +161,9 @@ export async function submitXyqRun(
   const runId = String(run.run_id || data?.run_id || '').trim()
   if (!threadId || !runId) throw new Error('小云雀未返回 thread_id/run_id')
 
+  const linkAgent = agentName || 'pippit_video_part_agent'
   const webThreadLink = String(data?.web_thread_link || '').trim()
-    || `${XYQ_HOME_URL}?tab_name=integrated-agent&thread_id=${encodeURIComponent(threadId)}&agent_name=pippit_nest_agent`
+    || `${XYQ_HOME_URL}?tab_name=integrated-agent&thread_id=${encodeURIComponent(threadId)}&agent_name=${encodeURIComponent(linkAgent)}`
 
   return { threadId, runId, webThreadLink }
 }
@@ -246,6 +262,48 @@ function preferVideoUrl(urls: string[]): string | null {
   return mp4 || urls[0] || null
 }
 
+function collectAssistantPlainText(entries: Array<{ role: string; content: any[] }>): string {
+  const chunks: string[] = []
+  for (const entry of entries) {
+    if (entry.role && entry.role !== 'assistant') continue
+    for (const content of entry.content) {
+      if (!content || typeof content !== 'object') continue
+      const type = String((content as any).type || '').toLowerCase()
+      const subType = String((content as any).sub_type || (content as any).subtype || '')
+      const data = decodeContentData((content as any).data)
+      // 长视频工作流会通过 tool_call 暴露 load_skill / generate_idea 等
+      if (subType.includes('tool_call') || subType.includes('tool_call_req')) {
+        const toolName = String((data as any)?.tool_name || (content as any)?.tool_name || '')
+        const req = String((data as any)?.request_data || '')
+        if (toolName || req) chunks.push(`tool:${toolName} ${req.slice(0, 240)}`)
+        continue
+      }
+      if (subType.includes('upload')) continue
+      if (typeof data === 'string' && data.trim()) {
+        chunks.push(data.trim())
+        continue
+      }
+      if (data && typeof data === 'object') {
+        const msg = String((data as any).message || (data as any).loading_text || '')
+        if (msg) chunks.push(msg)
+      }
+      if (type === 'text' && typeof (content as any).data === 'string') {
+        chunks.push(String((content as any).data).trim())
+      }
+    }
+  }
+  return chunks.join('\n')
+}
+
+function detectXyqLongVideoWorkflowStall(text: string): string | null {
+  const raw = String(text || '')
+  if (!raw) return null
+  if (/属于长视频任务|长视频任务|long-video-production|SkillName["']?\s*:\s*["']?long-video|SkillName["']?\s*:\s*["']?video_creation|技能学习|生成创意\s*Storyboard|Storyboard已生成|已将故事板发送|故事板以及参考素材已生成|等待你确认|确认后.*生成|generate_idea|generate_reference_material|todo_write|present_sandbox_file|我先建立任务清单|创意助手|pippit_nest_agent|integrated-agent.*创意/i.test(raw)) {
+    return '小云雀误入创意助手/长视频工作流，已中止。请重试（本站仅允许 Seedance 多参直出成片）'
+  }
+  return null
+}
+
 export async function pollXyqRunOnce(
   session: XyqWebSession,
   threadId: string,
@@ -275,8 +333,16 @@ export async function pollXyqRunOnce(
     }
   }
 
+  const early = preferVideoUrl(urls)
+  // 有时产物先到、状态仍在 running
+  if (early) return { status: 'completed', videoUrl: early }
+
+  const assistantText = collectAssistantPlainText(entries)
+  const stallError = detectXyqLongVideoWorkflowStall(assistantText)
+
   if (status === 'completed') {
-    return { status, videoUrl: preferVideoUrl(urls) }
+    if (stallError) return { status: 'failed', error: stallError }
+    return { status: 'failed', error: '小云雀任务完成但未返回视频地址' }
   }
   if (status === 'failed') {
     return { status, error: String(run.fail_reason || '小云雀视频生成失败') }
@@ -285,11 +351,13 @@ export async function pollXyqRunOnce(
     return { status, error: '小云雀任务已取消' }
   }
   if (status === 'requires_action') {
-    return { status: 'requires_action', error: '小云雀需要人工确认，请在官网会话中处理或调整提示词后重试' }
+    return {
+      status: 'requires_action',
+      error: stallError || '小云雀需要人工确认，请调整提示词后重试（勿走长视频确认流）',
+    }
   }
-  // 有时产物先到、状态仍在 running
-  const early = preferVideoUrl(urls)
-  if (early) return { status: 'completed', videoUrl: early }
+  // 运行中若已明确进入长视频确认话术，尽早失败，避免空转半小时
+  if (stallError) return { status: 'failed', error: stallError }
   return { status: 'running' }
 }
 

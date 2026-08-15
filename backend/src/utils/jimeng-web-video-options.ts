@@ -1,17 +1,23 @@
 import {
   JIMENG_DEFAULT_VIDEO_MODEL,
   JIMENG_ENABLED_VIDEO_MODELS,
-  JIMENG_OMNI_MAX_TOTAL_REFS,
-  JIMENG_REF_LIMITS,
-  JIMENG_SEEDANCE_2_0_CREDIT_COST,
-  JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST,
+  formatJimengRefLimitsHint,
   isJimengVideoModel,
+  jimengRefLimitsForModel,
   jimengVideoDurationBounds,
   jimengVideoModelLabel,
+  resolveJimengCreditsPerSecond,
+  isJimengSeedance20VipModel,
+  JIMENG_SEEDANCE_2_0_WITH_REF_VIDEO_CREDIT_COST,
+  JIMENG_SEEDANCE_2_0_REF_VIDEO_MULTIPLIER,
+  JIMENG_SEEDANCE_2_0_FAST_LIST_CREDIT_COST,
+  JIMENG_SEEDANCE_2_0_FAST_DISCOUNT_MULTIPLIER,
+  isJimengSeedance20FastModel,
   resolveJimengVideoCreditAction,
   resolveJimengSubmitModel,
 } from '../constants/jimeng-web.js'
 import { hasJimengWebSession, maskJimengSessionId, getJimengWebSession, listJimengWebSessions, getActiveJimengSessionId, toPublicJimengSession } from '../services/jimeng-web-session.js'
+import { resolveLiveJimengForceSessionId } from '../services/jimeng-session-binding.js'
 import { validateJimengSession, getJimengUserCredit } from '../services/jimeng-web-client.js'
 
 export const JIMENG_SESSION_STYLE_PREFIX = 'jimeng_session:'
@@ -27,7 +33,31 @@ export function parseJimengSessionIdFromStyle(style?: string | null): string | n
   return id || null
 }
 
+/** 从生成记录 style 解析管理员可见的即梦账号摘要（不含完整 sessionid） */
+export function resolveJimengAccountFromStyle(style?: string | null) {
+  const sessionInternalId = parseJimengSessionIdFromStyle(style)
+  if (!sessionInternalId) {
+    return {
+      jimeng_session_id: null as string | null,
+      jimeng_session_label: null as string | null,
+      jimeng_session_masked: null as string | null,
+    }
+  }
+  const session = getJimengWebSession(sessionInternalId)
+  return {
+    jimeng_session_id: sessionInternalId,
+    jimeng_session_label: session?.label || null,
+    jimeng_session_masked: session ? maskJimengSessionId(session.sessionId) : null,
+  }
+}
+
 export function resolveJimengSessionForStyle(style?: string | null) {
+  // 全局强制 Session 优先：避免历史 style 仍指向已耗尽账号导致「余额不足」
+  const forceId = resolveLiveJimengForceSessionId()
+  if (forceId) {
+    const forced = getJimengWebSession(forceId)
+    if (forced) return forced
+  }
   const id = parseJimengSessionIdFromStyle(style)
   return getJimengWebSession(id || undefined)
 }
@@ -60,6 +90,7 @@ export function listJimengVideoModelOptions() {
   return JIMENG_ENABLED_VIDEO_MODELS.map(id => {
     const bounds = jimengVideoDurationBounds(id)
     const creditAction = resolveJimengVideoCreditAction(id)
+    const refLimits = jimengRefLimitsForModel(id)
     return {
       id,
       label: jimengVideoModelLabel(id),
@@ -68,9 +99,26 @@ export function listJimengVideoModelOptions() {
       duration_default: bounds.defaultSec,
       duration_options: bounds.options,
       credit_action: creditAction,
-      credit_cost_flat: creditAction === 'video.generate.jimeng.seedance2'
-        ? JIMENG_SEEDANCE_2_0_CREDIT_COST
-        : JIMENG_SEEDANCE_2_0_FAST_CREDIT_COST,
+      credit_cost_per_second: resolveJimengCreditsPerSecond(id),
+      credit_cost_per_second_list: isJimengSeedance20FastModel(id)
+        ? JIMENG_SEEDANCE_2_0_FAST_LIST_CREDIT_COST
+        : null,
+      discount_multiplier: isJimengSeedance20FastModel(id)
+        ? JIMENG_SEEDANCE_2_0_FAST_DISCOUNT_MULTIPLIER
+        : null,
+      credit_cost_per_second_with_ref_video: isJimengSeedance20VipModel(id)
+        ? JIMENG_SEEDANCE_2_0_WITH_REF_VIDEO_CREDIT_COST
+        : null,
+      reference_video_multiplier: isJimengSeedance20VipModel(id)
+        ? JIMENG_SEEDANCE_2_0_REF_VIDEO_MULTIPLIER
+        : null,
+      ref_limits: {
+        images: refLimits.images,
+        audios: refLimits.audios,
+        videos: refLimits.videos,
+        max_total: refLimits.maxTotal,
+      },
+      ref_limits_hint: formatJimengRefLimitsHint(id),
       config_id: null,
     }
   })
@@ -156,19 +204,21 @@ function countRefsByType(body: Record<string, unknown>) {
 }
 
 export function assertJimengReferencesAllowed(body: Record<string, unknown>) {
+  const model = String(body.model || JIMENG_DEFAULT_VIDEO_MODEL).trim()
+  const limits = jimengRefLimitsForModel(model)
   const counts = countRefsByType(body)
   const total = counts.images + counts.videos + counts.audios
 
-  if (counts.images > JIMENG_REF_LIMITS.images) {
-    throw new Error(`即梦通道4最多 ${JIMENG_REF_LIMITS.images} 张参考图，当前 ${counts.images} 张`)
+  if (counts.images > limits.images) {
+    throw new Error(`即梦通道4最多 ${limits.images} 张参考图，当前 ${counts.images} 张`)
   }
-  if (counts.videos > JIMENG_REF_LIMITS.videos) {
-    throw new Error(`即梦通道4最多 ${JIMENG_REF_LIMITS.videos} 个参考视频，当前 ${counts.videos} 个`)
+  if (counts.videos > limits.videos) {
+    throw new Error(`即梦通道4最多 ${limits.videos} 个参考视频，当前 ${counts.videos} 个`)
   }
-  if (counts.audios > JIMENG_REF_LIMITS.audios) {
-    throw new Error(`即梦通道4最多 ${JIMENG_REF_LIMITS.audios} 个参考音频，当前 ${counts.audios} 个`)
+  if (counts.audios > limits.audios) {
+    throw new Error(`即梦通道4最多 ${limits.audios} 个参考音频，当前 ${counts.audios} 个`)
   }
-  if (total > JIMENG_OMNI_MAX_TOTAL_REFS) {
-    throw new Error(`即梦通道4参考素材总数不能超过 ${JIMENG_OMNI_MAX_TOTAL_REFS} 个（9图+3音+3视频）`)
+  if (limits.maxTotal != null && total > limits.maxTotal) {
+    throw new Error(`即梦通道4参考素材合计最多 ${limits.maxTotal} 个（图+视频+音频），当前 ${total} 个`)
   }
 }

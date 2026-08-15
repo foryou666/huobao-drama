@@ -485,6 +485,7 @@ sqlite.exec(`
     analysis_json TEXT,
     narrator_voice TEXT,
     tts_config_id INTEGER,
+    grok_channel TEXT DEFAULT 'geeknow',
     grok_model TEXT DEFAULT 'grok-video-3-pro',
     aspect_ratio TEXT DEFAULT '9:16',
     jianying_draft_path TEXT,
@@ -542,6 +543,37 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_tts_generations_user_id ON tts_generations (user_id);
   CREATE INDEX IF NOT EXISTS idx_tts_generations_team_id ON tts_generations (team_id);
 
+  CREATE TABLE IF NOT EXISTS music_generations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    drama_id INTEGER,
+    order_no TEXT,
+    prompt TEXT NOT NULL,
+    title TEXT,
+    style TEXT,
+    negative_tags TEXT,
+    vocal_gender TEXT,
+    instrumental INTEGER DEFAULT 0,
+    custom_mode INTEGER DEFAULT 0,
+    version TEXT,
+    audio_path TEXT,
+    cover_path TEXT,
+    duration_sec REAL,
+    clips_json TEXT,
+    status TEXT DEFAULT 'pending',
+    error_msg TEXT,
+    provider TEXT,
+    remote_task_id TEXT,
+    credit_tx_id INTEGER,
+    visibility TEXT DEFAULT 'public',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_music_generations_user_id ON music_generations (user_id);
+  CREATE INDEX IF NOT EXISTS idx_music_generations_team_id ON music_generations (team_id);
+  CREATE INDEX IF NOT EXISTS idx_music_generations_status ON music_generations (status);
+
   CREATE TABLE IF NOT EXISTS subtitle_removal_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
@@ -562,6 +594,55 @@ sqlite.exec(`
   CREATE INDEX IF NOT EXISTS idx_subtitle_removal_jobs_user_id ON subtitle_removal_jobs (user_id);
   CREATE INDEX IF NOT EXISTS idx_subtitle_removal_jobs_team_id ON subtitle_removal_jobs (team_id);
 
+  CREATE TABLE IF NOT EXISTS video_upscale_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    video_generation_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'queued',
+    source_video_path TEXT,
+    output_video_path TEXT,
+    remote_task_id TEXT,
+    duration_sec REAL,
+    file_size INTEGER,
+    instance_type TEXT DEFAULT 'plus',
+    credit_transaction_id INTEGER,
+    progress INTEGER DEFAULT 0,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_video_upscale_jobs_user_id ON video_upscale_jobs (user_id);
+  CREATE INDEX IF NOT EXISTS idx_video_upscale_jobs_team_id ON video_upscale_jobs (team_id);
+  CREATE INDEX IF NOT EXISTS idx_video_upscale_jobs_status ON video_upscale_jobs (status);
+
+  CREATE TABLE IF NOT EXISTS subtitle_erase_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'queued',
+    erase_mode TEXT DEFAULT 'subtitle',
+    source_video_path TEXT,
+    output_video_path TEXT,
+    remote_task_id TEXT,
+    duration_sec REAL,
+    max_side INTEGER,
+    file_size INTEGER,
+    instance_type TEXT DEFAULT 'plus',
+    credit_transaction_id INTEGER,
+    progress INTEGER DEFAULT 0,
+    error_msg TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+  );
+  CREATE INDEX IF NOT EXISTS idx_subtitle_erase_jobs_user_id ON subtitle_erase_jobs (user_id);
+  CREATE INDEX IF NOT EXISTS idx_subtitle_erase_jobs_team_id ON subtitle_erase_jobs (team_id);
+  CREATE INDEX IF NOT EXISTS idx_subtitle_erase_jobs_status ON subtitle_erase_jobs (status);
+
   CREATE TABLE IF NOT EXISTS shot_clip_plans (
     storyboard_id INTEGER NOT NULL,
     shot_plan_id INTEGER NOT NULL,
@@ -574,6 +655,7 @@ sqlite.exec(`
 `)
 ensureColumn('assets', 'source_type', 'TEXT')
 ensureColumn('narration_segments', 'tts_voice', 'TEXT')
+ensureColumn('narration_jobs', 'grok_channel', "TEXT DEFAULT 'geeknow'")
 ensureColumn('assets', 'source_id', 'INTEGER')
 ensureColumn('activity_logs', 'credit_cost', 'INTEGER')
 ensureColumn('image_generations', 'credit_transaction_id', 'INTEGER')
@@ -582,6 +664,10 @@ ensureColumn('image_generations', 'pinned_at', 'TEXT')
 ensureColumn('video_generations', 'credit_transaction_id', 'INTEGER')
 ensureColumn('video_generations', 'user_id', 'INTEGER')
 ensureColumn('video_generations', 'config_id', 'INTEGER')
+ensureColumn('video_generations', 'upstream_estimated_cost_yuan', 'REAL')
+ensureColumn('video_generations', 'upstream_actual_cost_yuan', 'REAL')
+ensureColumn('video_generations', 'upstream_bill_id', 'TEXT')
+ensureColumn('video_generations', 'upstream_bill_synced_at', 'TEXT')
 try {
   sqlite.exec(`
     UPDATE video_generations
@@ -801,6 +887,37 @@ sqlite.exec(`
 
 ensureColumn('canvas_boards', 'focus_episode_id', 'INTEGER')
 ensureColumn('users', 'credits_balance', 'INTEGER DEFAULT 10000')
+ensureColumn('users', 'allowed_ips', 'TEXT')
+ensureColumn('users', 'last_login_ip', 'TEXT')
+ensureColumn('teams', 'allowed_ips', 'TEXT')
+ensureColumn('tts_generations', 'provider', 'TEXT')
+ensureColumn('tts_generations', 'remote_task_id', 'TEXT')
+ensureColumn('tts_generations', 'emotion_audio_path', 'TEXT')
+ensureColumn('music_generations', 'visibility', "TEXT DEFAULT 'public'")
+ensureColumn('music_generations', 'order_no', 'TEXT')
+ensureColumn('video_upscale_jobs', 'video_generation_id', 'INTEGER')
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_video_upscale_jobs_video_generation_id ON video_upscale_jobs (video_generation_id)`)
+sqlite.prepare(`UPDATE music_generations SET visibility = 'public' WHERE visibility IS NULL OR visibility = ''`).run()
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_music_generations_visibility ON music_generations (visibility)`)
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_music_generations_order_no ON music_generations (order_no) WHERE order_no IS NOT NULL AND order_no != ''`)
+
+// 历史配乐补齐订单编号
+;(() => {
+  const rows = sqlite.prepare(`
+    SELECT id, created_at FROM music_generations
+    WHERE order_no IS NULL OR order_no = ''
+  `).all() as { id: number; created_at: string }[]
+  if (!rows.length) return
+  const upd = sqlite.prepare('UPDATE music_generations SET order_no = ? WHERE id = ?')
+  for (const row of rows) {
+    const d = row.created_at ? new Date(row.created_at) : new Date()
+    const y = d.getFullYear()
+    const mo = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const seq = String(Math.max(1, Math.floor(row.id))).padStart(6, '0')
+    upd.run(`YG-BGM-${y}${mo}${day}-${seq}`, row.id)
+  }
+})()
 
 function seedDefaultAdmin() {
   const count = sqlite.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }
@@ -819,6 +936,57 @@ seedDefaultAdmin()
 sqlite.prepare('UPDATE users SET credits_balance = 10000 WHERE credits_balance IS NULL').run()
 
 sqlite.exec(`CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)`)
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS portrait_cert_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL,
+    drama_id INTEGER,
+    outfit_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'primary',
+    character_name TEXT,
+    outfit_label TEXT,
+    drama_title TEXT,
+    image_url TEXT,
+    seedance_asset_id TEXT,
+    seedance_asset_group_id TEXT,
+    status TEXT NOT NULL DEFAULT 'processing',
+    failed_reason TEXT,
+    config_id INTEGER,
+    config_name TEXT,
+    api_key_masked TEXT,
+    created_by INTEGER,
+    created_by_name TEXT,
+    cancelled_by INTEGER,
+    cancelled_by_name TEXT,
+    created_at TEXT NOT NULL,
+    activated_at TEXT,
+    cancelled_at TEXT,
+    cancel_reason TEXT,
+    replaced_by_id INTEGER,
+    metadata TEXT
+  )
+`)
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_portrait_cert_status ON portrait_cert_records(status)`)
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_portrait_cert_character ON portrait_cert_records(character_id, outfit_id)`)
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_portrait_cert_config ON portrait_cert_records(config_id)`)
+
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS director_desk_scenes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    drama_id INTEGER,
+    episode_id INTEGER,
+    storyboard_id INTEGER,
+    state_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )
+`)
+sqlite.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_director_desk_scenes_user_instance ON director_desk_scenes(user_id, instance_id)`)
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_director_desk_scenes_drama ON director_desk_scenes(drama_id)`)
+sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_director_desk_scenes_storyboard ON director_desk_scenes(storyboard_id)`)
 
 export function getAppMeta(key: string): string | null {
   const row = sqlite.prepare('SELECT value FROM app_meta WHERE key = ?').get(key) as { value: string } | undefined

@@ -69,11 +69,14 @@ export async function generateStudioTts(req: StudioTtsRequest) {
   if (!text) throw new Error('请输入配音文本')
 
   const resolved = resolveStudioTtsVoice(req.voice)
+  const voiceRef = resolved.voiceAssetId
+    ? `asset:${resolved.voiceAssetId}`
+    : (resolved.voicePath || resolved.voiceKey)
+
   const { path, durationSec } = await generateNarrationTTS({
     text,
-    voice: resolved.voiceKey,
+    voice: voiceRef,
     configId: req.config_id,
-    emotion: req.emotion,
   })
 
   return {

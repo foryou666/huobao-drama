@@ -6,6 +6,10 @@ import {
   type AIConfig,
 } from '../services/ai.js'
 import { isNanoBanana2Model } from '../constants/credit-actions.js'
+import {
+  buildJimengImageVirtualConfig,
+  isJimengDream50ProModel,
+} from '../constants/jimeng-web-image.js'
 
 function inferModelForRouting(options: {
   model?: string | null
@@ -35,6 +39,10 @@ export function resolveImageGenerationConfig(options: {
       throw new Error('Nano Banana 2 需使用启灵泽通道，请在「设置 → AI 配置」中启用启灵泽图片服务')
     }
     return qilingze
+  }
+
+  if (isJimengDream50ProModel(effectiveModel)) {
+    return buildJimengImageVirtualConfig(effectiveModel) as AIConfig
   }
 
   if (options.configId != null) {

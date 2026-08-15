@@ -3,21 +3,27 @@ import { getConfigById } from '../services/ai.js'
 import { isPlaceholderApiKey } from './official-volcengine-video.js'
 import { fetchAistarslabVideoConfig } from '../services/aistarslab-client.js'
 import {
+  AISTARSLAB_CHANNEL3_PREFERRED_CHANNEL_IDS,
   AISTARSLAB_DEFAULT_CHANNEL,
   AISTARSLAB_DEFAULT_CREDIT_COST,
   AISTARSLAB_DEFAULT_MODEL,
+  AISTARSLAB_DEFAULT_REF_LIMITS,
   AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
   AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER,
-  AISTARSLAB_USER_PRICE_MULTIPLIER,
   aistarslabModelCreditAction,
+  isAistarslabExcludedSyncChannel,
+  isAistarslabCurrentGenerationChannel,
   isAistarslabProvider,
+  isAistarslabSyncEligibleModel,
   isAistarslabVideoModel,
   normalizeAistarslabDuration,
   aistarslabModelLabel,
   sanitizeAistarslabChannelTitle,
   sanitizeAistarslabUserFacingText,
+  parseAistarslabRefLimits,
+  resolveAistarslab720pCreditsPerSecond,
 } from '../constants/aistarslab.js'
-import { CREDIT_ACTIONS, applyMinUserVideoCreditCost } from '../constants/credit-actions.js'
+import { CREDIT_ACTIONS, computeUserCreditsFromUpstreamCredits } from '../constants/credit-actions.js'
 import { getActionCost, updateCreditPricing } from '../services/credits.js'
 import { eq } from 'drizzle-orm'
 
@@ -38,6 +44,9 @@ export interface AistarslabChannelOption {
   secondsMax: number
   aspectRatios: string[]
   supportedModeTypes: string[]
+  maxImages: number
+  maxVideos: number
+  maxAudios: number
   defaultOption?: boolean
   models: AistarslabModelOption[]
 }
@@ -123,7 +132,15 @@ function normalizeChannelOption(raw: any): AistarslabChannelOption | null {
   if (!channel) return null
   const models = (Array.isArray(raw?.models) ? raw.models : [])
     .map(normalizeModelOption)
-    .filter(Boolean) as AistarslabModelOption[]
+    .filter(Boolean)
+    .map((model) => {
+      const item = model as AistarslabModelOption
+      // 按秒线路：计费统一按官网 720p 单价（提交也固定 720p）
+      if (item.fixedTotalCredits && item.fixedTotalCredits > 0) return item
+      const rate720 = resolveAistarslab720pCreditsPerSecond(channel, item.model, item.creditsPerSecond)
+      if (rate720 == null) return item
+      return { ...item, creditsPerSecond: rate720 }
+    }) as AistarslabModelOption[]
   if (!models.length) return null
   const secondsMin = Math.max(1, Math.round(Number(raw?.secondsMin ?? 4) || 4))
   const secondsMax = Math.max(secondsMin, Math.round(Number(raw?.secondsMax ?? 15) || 15))
@@ -131,16 +148,21 @@ function normalizeChannelOption(raw: any): AistarslabChannelOption | null {
     ? raw.aspectRatios.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
     : ['16:9', '9:16', '1:1']
   const rawTitle = String(raw?.title ?? channel).trim() || channel
+  const description = sanitizeAistarslabUserFacingText(String(raw?.description ?? '').trim())
+  const limits = parseAistarslabRefLimits(description, rawTitle)
   return {
     channel,
     title: sanitizeAistarslabChannelTitle(rawTitle) || rawTitle,
-    description: sanitizeAistarslabUserFacingText(String(raw?.description ?? '').trim()),
+    description,
     secondsMin,
     secondsMax,
     aspectRatios,
     supportedModeTypes: Array.isArray(raw?.supportedModeTypes)
       ? raw.supportedModeTypes.map((item: unknown) => String(item ?? '').trim()).filter(Boolean)
       : ['text2video', 'image2video'],
+    maxImages: limits.maxImages,
+    maxVideos: limits.maxVideos,
+    maxAudios: limits.maxAudios,
     defaultOption: !!raw?.defaultOption,
     models,
   }
@@ -190,21 +212,57 @@ export function filterAistarslabConfigByUpstreamCost(
   return { ...config, channels }
 }
 
-/** 通道3 前台展示：仅 Seedance 模型，且上游参考价不超过上限 */
-export function filterAistarslabConfigForDisplay(
+/** 通道3 同步规则：优先开通线路 50/53；否则回退「（新）」Seedance，再按上游参考价上限裁剪 */
+export function filterAistarslabConfigForSync(
   config: AistarslabVideoConfig,
   maxUpstreamCredits = AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
 ): AistarslabVideoConfig {
+  const byId = new Map(config.channels.map(item => [String(item.channel), item]))
+  const preferred = AISTARSLAB_CHANNEL3_PREFERRED_CHANNEL_IDS
+    .map((id) => {
+      const channel = byId.get(id)
+      if (!channel) return null
+      if (isAistarslabExcludedSyncChannel(channel.title, channel.description, channel.channel)) return null
+      const models = channel.models.filter(model => isAistarslabSyncEligibleModel(model.model))
+      return models.length ? { ...channel, models, defaultOption: id === AISTARSLAB_DEFAULT_CHANNEL } : null
+    })
+    .filter(Boolean) as AistarslabChannelOption[]
+
+  if (preferred.length) {
+    return filterAistarslabConfigByUpstreamCost({ ...config, channels: preferred }, maxUpstreamCredits)
+  }
+
   const seedanceOnly: AistarslabVideoConfig = {
     ...config,
     channels: config.channels
+      .filter(channel => !isAistarslabExcludedSyncChannel(channel.title, channel.description, channel.channel))
+      .filter(channel => isAistarslabCurrentGenerationChannel(channel.title))
       .map((channel) => {
-        const models = channel.models.filter(model => isAistarslabVideoModel(model.model))
+        const models = channel.models.filter(model => isAistarslabSyncEligibleModel(model.model))
         return models.length ? { ...channel, models } : null
       })
       .filter(Boolean) as AistarslabChannelOption[],
   }
   return filterAistarslabConfigByUpstreamCost(seedanceOnly, maxUpstreamCredits)
+}
+
+/** 通道3 前台展示：与上游同步规则一致 */
+export function filterAistarslabConfigForDisplay(
+  config: AistarslabVideoConfig,
+  maxUpstreamCredits = AISTARSLAB_MAX_UPSTREAM_DISPLAY_CREDITS,
+): AistarslabVideoConfig {
+  return filterAistarslabConfigForSync(config, maxUpstreamCredits)
+}
+
+/** 从上游拉取线路并写入缓存；refresh 时强制绕过缓存并同步积分定价项 */
+export async function syncAistarslabChannelsFromProvider(
+  config: { baseUrl?: string | null; apiKey?: string | null },
+  options?: { refresh?: boolean },
+): Promise<AistarslabVideoConfig> {
+  const loaded = await loadAistarslabVideoConfigFromProvider(config, { refresh: options?.refresh !== false })
+  const filtered = filterAistarslabConfigForSync(loaded)
+  syncAistarslabModelCreditPricing(filtered)
+  return filtered
 }
 
 export function computeAistarslabCreditCost(
@@ -250,14 +308,25 @@ function resolveAistarslabChannelModel(
   return { channel, model }
 }
 
+/** 上游按条（fixedTotal）→ 本站按次；上游按秒 → 本站按秒 */
+export function isAistarslabPerSecondModel(model?: Pick<AistarslabModelOption, 'fixedTotalCredits' | 'creditsPerSecond'> | null): boolean {
+  if (!model) return false
+  if (model.fixedTotalCredits != null && model.fixedTotalCredits > 0) return false
+  return !!(model.creditsPerSecond != null && model.creditsPerSecond > 0)
+}
+
 export function defaultAistarslabUserCreditCost(
   config: AistarslabVideoConfig,
   channelId: string,
   modelId: string,
   seconds?: number | null,
 ): number {
-  const { channel } = resolveAistarslabChannelModel(config, channelId, modelId)
-  const billedSeconds = seconds ?? channel?.secondsMax ?? normalizeAistarslabDuration(undefined)
+  const { channel, model } = resolveAistarslabChannelModel(config, channelId, modelId)
+  const billedSeconds = isAistarslabPerSecondModel(model)
+    ? normalizeAistarslabDuration(seconds ?? channel?.secondsMax)
+    : (channel?.secondsMax ?? normalizeAistarslabDuration(undefined))
+  const hasPricedModel = !!(model?.fixedTotalCredits || model?.creditsPerSecond)
+  if (!hasPricedModel) return AISTARSLAB_DEFAULT_CREDIT_COST
   const upstream = computeAistarslabUpstreamCreditCost(
     config,
     channelId,
@@ -265,10 +334,20 @@ export function defaultAistarslabUserCreditCost(
     billedSeconds,
     false,
   )
-  return applyMinUserVideoCreditCost(
-    Math.max(1, Math.round(upstream * AISTARSLAB_USER_PRICE_MULTIPLIER)),
-    aistarslabModelCreditAction(channelId, modelId),
-  )
+  return computeUserCreditsFromUpstreamCredits(upstream)
+}
+
+/** 按秒线路的用户单价（积分/秒，供展示与定价表；扣费按实际秒数 × 上游再 +2 元） */
+export function defaultAistarslabUserCreditsPerSecond(
+  config: AistarslabVideoConfig,
+  channelId: string,
+  modelId: string,
+): number | null {
+  const { channel, model } = resolveAistarslabChannelModel(config, channelId, modelId)
+  if (!isAistarslabPerSecondModel(model) || !model?.creditsPerSecond) return null
+  const refSeconds = Math.max(1, channel?.secondsMax || 15)
+  const total = defaultAistarslabUserCreditCost(config, channelId, modelId, refSeconds)
+  return Math.max(1, Math.round(total / refSeconds))
 }
 
 function pricingDescriptionForAistarslabModel(
@@ -276,53 +355,43 @@ function pricingDescriptionForAistarslabModel(
   model: AistarslabModelOption,
   upstreamCost: number,
   userCost: number,
+  perSecond = false,
 ): string {
   const billingHint = model.fixedTotalCredits
     ? `上游 ${model.fixedTotalCredits} 积分/条`
     : model.creditsPerSecond
       ? `上游 ${model.creditsPerSecond} 积分/秒`
       : '上游按次'
-  return `seedance通道3 · 线路 ${channel.channel} ${channel.title} · ${model.model}（${billingHint}，${channel.secondsMin}-${channel.secondsMax} 秒；默认用户价 ${userCost} 积分/次 = 上游约 ${upstreamCost} × ${AISTARSLAB_USER_PRICE_MULTIPLIER}）`
+  const upstreamYuan = (upstreamCost / 100).toFixed(2)
+  if (perSecond) {
+    return `seedance通道3 · 线路 ${channel.channel} ${channel.title} · ${model.model}（${billingHint}；本站按秒=上游+2元摊入；当前约 ${userCost} 积分/秒）`
+  }
+  return `seedance通道3 · 线路 ${channel.channel} ${channel.title} · ${model.model}（${billingHint}≈${upstreamYuan}元/条；本站=上游+2元；当前用户价 ${userCost} 积分/次）`
 }
 
-/** 为每条上游线路×模型同步积分定价项（默认用户价 = 上游 ×1.5；已有项保留管理员手调单价） */
+/** 为每条上游线路×模型同步积分定价项（强制覆盖为最新定价规则） */
 export function syncAistarslabModelCreditPricing(config: AistarslabVideoConfig) {
   for (const channel of config.channels) {
     for (const model of channel.models) {
       const action = aistarslabModelCreditAction(channel.channel, model.model)
-      const [existing] = db.select().from(schema.creditPricing)
-        .where(eq(schema.creditPricing.action, action))
-        .all()
+      const perSecond = isAistarslabPerSecondModel(model)
+      const billSeconds = perSecond ? 15 : channel.secondsMax
       const upstreamCost = computeAistarslabUpstreamCreditCost(
         config,
         channel.channel,
         model.model,
-        channel.secondsMax,
+        billSeconds,
         false,
       )
-      let userCost = defaultAistarslabUserCreditCost(
-        config,
-        channel.channel,
-        model.model,
-        channel.secondsMax,
-      )
-      if (
-        channel.channel === AISTARSLAB_DEFAULT_CHANNEL
-        && model.model === AISTARSLAB_DEFAULT_MODEL
-      ) {
-        const legacy = getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, 1)
-        if (legacy > 0) userCost = legacy
-      }
-      // 管理员已手调过的单价不再被上游同步覆盖
-      if (existing && Number(existing.cost) > 0) {
-        userCost = Number(existing.cost)
-      }
+      const userCost = perSecond
+        ? (defaultAistarslabUserCreditsPerSecond(config, channel.channel, model.model) || 1)
+        : defaultAistarslabUserCreditCost(config, channel.channel, model.model, channel.secondsMax)
 
       updateCreditPricing(
         action,
         userCost,
-        `VIP ${channel.title} · ${model.label}`,
-        pricingDescriptionForAistarslabModel(channel, model, upstreamCost, userCost),
+        `VIP ${channel.title} · ${model.label}${perSecond ? '（按秒）' : ''}`,
+        pricingDescriptionForAistarslabModel(channel, model, upstreamCost, userCost, perSecond),
       )
     }
   }
@@ -337,27 +406,24 @@ export function ensureAistarslabModelCreditPricing(config: AistarslabVideoConfig
         .all()
       if (existing) continue
 
+      const perSecond = isAistarslabPerSecondModel(model)
+      const billSeconds = perSecond ? 15 : channel.secondsMax
       const upstreamCost = computeAistarslabUpstreamCreditCost(
         config,
         channel.channel,
         model.model,
-        channel.secondsMax,
+        billSeconds,
         false,
       )
-      let userCost = defaultAistarslabUserCreditCost(config, channel.channel, model.model, channel.secondsMax)
-      if (
-        channel.channel === AISTARSLAB_DEFAULT_CHANNEL
-        && model.model === AISTARSLAB_DEFAULT_MODEL
-      ) {
-        const legacy = getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, 1)
-        if (legacy > 0) userCost = legacy
-      }
+      const userCost = perSecond
+        ? (defaultAistarslabUserCreditsPerSecond(config, channel.channel, model.model) || 1)
+        : defaultAistarslabUserCreditCost(config, channel.channel, model.model, channel.secondsMax)
 
       updateCreditPricing(
         action,
         userCost,
-        `VIP ${channel.title} · ${model.label}`,
-        pricingDescriptionForAistarslabModel(channel, model, upstreamCost, userCost),
+        `VIP ${channel.title} · ${model.label}${perSecond ? '（按秒）' : ''}`,
+        pricingDescriptionForAistarslabModel(channel, model, upstreamCost, userCost, perSecond),
       )
     }
   }
@@ -399,6 +465,30 @@ export async function loadAistarslabVideoConfigFromProvider(
   return normalized
 }
 
+/** 同步读取最近一次拉取的上游配置（用于生成前校验） */
+export function getCachedAistarslabVideoConfig(): AistarslabVideoConfig | null {
+  return aistarslabConfigCache?.config || null
+}
+
+export function resolveAistarslabChannelModelConstraints(
+  channelId?: string | null,
+  modelId?: string | null,
+  config?: AistarslabVideoConfig | null,
+) {
+  const source = config || getCachedAistarslabVideoConfig()
+  const channel = source?.channels.find(item => item.channel === String(channelId || '').trim())
+  const model = channel?.models.find(item => item.model === String(modelId || '').trim())
+    || channel?.models[0]
+  return {
+    channel: channel || null,
+    model: model || null,
+    resolutions: model?.resolutions?.length ? model.resolutions : null,
+    maxImages: channel?.maxImages ?? AISTARSLAB_DEFAULT_REF_LIMITS.images,
+    maxVideos: channel?.maxVideos ?? AISTARSLAB_DEFAULT_REF_LIMITS.videos,
+    maxAudios: channel?.maxAudios ?? AISTARSLAB_DEFAULT_REF_LIMITS.audios,
+  }
+}
+
 export function listAistarslabModelOptionsForApi(
   config: AistarslabVideoConfig,
   configId: number | null,
@@ -407,20 +497,29 @@ export function listAistarslabModelOptionsForApi(
   return config.channels.flatMap((channel) =>
     channel.models.map((model) => {
       const creditAction = aistarslabModelCreditAction(channel.channel, model.model)
+      const perSecond = isAistarslabPerSecondModel(model)
+      const billSeconds = perSecond ? channel.secondsMax : channel.secondsMax
       const upstreamCost = computeAistarslabUpstreamCreditCost(
         config,
         channel.channel,
         model.model,
-        channel.secondsMax,
+        billSeconds,
         false,
       )
-      const creditCost = getActionCost(creditAction, 1)
       const defaultUserCost = defaultAistarslabUserCreditCost(
         config,
         channel.channel,
         model.model,
-        channel.secondsMax,
+        billSeconds,
       )
+      const userPerSecond = perSecond
+        ? (defaultAistarslabUserCreditsPerSecond(config, channel.channel, model.model) || null)
+        : null
+      const stored = getActionCost(creditAction, 1)
+      const creditCostFlat = perSecond ? null : (stored > 0 ? stored : defaultUserCost)
+      const creditCostPerSecond = perSecond
+        ? (stored > 0 ? stored : userPerSecond)
+        : null
       return {
         id: `${channel.channel}:${model.model}`,
         channel: channel.channel,
@@ -435,10 +534,15 @@ export function listAistarslabModelOptionsForApi(
         duration_default: Math.min(channel.secondsMax, Math.max(channel.secondsMin, 15)),
         aspect_ratios: channel.aspectRatios,
         supported_mode_types: channel.supportedModeTypes,
-        billing_unit: model.fixedTotalCredits ? 'flat' : 'dynamic',
+        max_images: channel.maxImages,
+        max_videos: channel.maxVideos,
+        max_audios: channel.maxAudios,
+        resolutions: model.resolutions,
+        billing_unit: perSecond ? 'per_second' : (model.fixedTotalCredits ? 'flat' : 'dynamic'),
         credit_action: creditAction,
-        credit_cost: creditCost > 0 ? creditCost : defaultUserCost,
-        credit_cost_flat: creditCost > 0 ? creditCost : defaultUserCost,
+        credit_cost: perSecond ? (creditCostPerSecond || defaultUserCost) : (creditCostFlat || defaultUserCost),
+        credit_cost_flat: creditCostFlat,
+        credit_cost_per_second: creditCostPerSecond,
         upstream_credit_cost: upstreamCost,
         default_user_credit_cost: defaultUserCost,
         credits_per_second: model.creditsPerSecond,
@@ -454,17 +558,60 @@ export function bodyHasReferenceVideo(body: Record<string, unknown>): boolean {
   return refs.some((item: any) => String(item?.type || '').toLowerCase() === 'video')
 }
 
-/** 用户扣费：按线路×模型积分项 ×（含参考视频时 ×referenceVideoCreditsMultiplier） */
+function resolveAistarslabBillingModel(
+  channelId: string,
+  modelId: string,
+): { config: AistarslabVideoConfig | null; model: AistarslabModelOption | null; perSecond: boolean } {
+  const config = getCachedAistarslabVideoConfig()
+  if (!config) return { config: null, model: null, perSecond: false }
+  const { model } = resolveAistarslabChannelModel(config, channelId, modelId)
+  return { config, model: model || null, perSecond: isAistarslabPerSecondModel(model) }
+}
+
+/** 用户扣费：按条线路按次；按秒线路按「用户秒单价 × 时长」（含参考视频时 ×referenceVideoCreditsMultiplier） */
 export function resolveAistarslabUserCreditCost(body: Record<string, unknown>): number {
   const channel = String(body.aistarslab_channel || body.channel || AISTARSLAB_DEFAULT_CHANNEL).trim()
   const model = String(body.model || AISTARSLAB_DEFAULT_MODEL).trim()
   const action = aistarslabModelCreditAction(channel, model)
-  let base = getActionCost(action, 1)
+  const seconds = normalizeAistarslabDuration(
+    body.duration != null ? Number(body.duration) : undefined,
+  )
+  const hasRef = bodyHasReferenceVideo(body)
+  const { config, perSecond } = resolveAistarslabBillingModel(channel, model)
+
+  let base: number
+  if (perSecond) {
+    const storedRate = getActionCost(action, 1)
+    const rate = storedRate > 0
+      ? storedRate
+      : (config
+        ? (defaultAistarslabUserCreditsPerSecond(config, channel, model) || 0)
+        : 0)
+    base = rate > 0
+      ? Math.max(1, Math.round(rate * seconds))
+      : (config ? defaultAistarslabUserCreditCost(config, channel, model, seconds) : 0)
+  } else if (config) {
+    base = defaultAistarslabUserCreditCost(config, channel, model, seconds)
+  } else {
+    base = getActionCost(action, 1)
+  }
+
   if (base <= 0) {
     base = getActionCost(CREDIT_ACTIONS.VIDEO_GENERATE_AISTARSLAB, 1)
   }
-  if (!bodyHasReferenceVideo(body)) return Math.max(1, base)
+
+  if (!hasRef) return Math.max(1, base)
   return Math.max(1, Math.round(base * AISTARSLAB_REFERENCE_VIDEO_MULTIPLIER))
+}
+
+export function resolveAistarslabBillingUnit(body: Record<string, unknown>): 'flat' | 'second' {
+  const channel = String(body.aistarslab_channel || body.channel || AISTARSLAB_DEFAULT_CHANNEL).trim()
+  const model = String(body.model || AISTARSLAB_DEFAULT_MODEL).trim()
+  const { perSecond } = resolveAistarslabBillingModel(channel, model)
+  if (perSecond) return 'second'
+  // 无缓存时看上游字段透传 / 定价量级
+  if (body.billing_unit === 'per_second' || body.billing_unit === 'second') return 'second'
+  return 'flat'
 }
 
 /** 上游线路参考价（仅供管理端展示，用户扣费见 resolveAistarslabUserCreditCost） */

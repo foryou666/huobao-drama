@@ -9,6 +9,8 @@ import {
   mimeForStaticPath,
   openMediaReadStream,
   openVideoGenerationReadStream,
+  resolveStaticMediaDownloadLink,
+  resolveVideoGenerationDownloadLink,
   sanitizeDownloadFilename,
 } from '../utils/media-download.js'
 
@@ -40,7 +42,27 @@ app.post('/resolve-urls', async (c) => {
   return success(c, { urls })
 })
 
-/** GET /media/download?path=static/...&filename= — 同源代理下载（OSS 优先，不依赖本地 static） */
+/** GET /media/download-link?path=&filename= — 返回直链（本地 /static 或 OSS 签名），避免整包经 Node 缓冲 */
+app.get('/download-link', async (c) => {
+  try {
+    const staticPath = assertSafeStaticMediaPath(c.req.query('path') || '')
+    const filename = sanitizeDownloadFilename(
+      c.req.query('filename') || '',
+      path.basename(staticPath),
+    )
+    const link = await resolveStaticMediaDownloadLink(staticPath, filename)
+    if (!link) return notFound(c, 'file not found')
+    return success(c, link)
+  } catch (err: any) {
+    const message = String(err?.message || '')
+    if (message === 'path is required') return badRequest(c, 'path is required')
+    if (message === 'invalid path') return badRequest(c, 'invalid path')
+    if (message === 'file not found') return notFound(c, 'file not found')
+    return serverError(c, message || 'download failed')
+  }
+})
+
+/** GET /media/download?path=static/...&filename= — 同源代理下载（无直链时回退） */
 app.get('/download', async (c) => {
   try {
     const staticPath = assertSafeStaticMediaPath(c.req.query('path') || '')
@@ -65,7 +87,23 @@ app.get('/download', async (c) => {
   }
 })
 
-/** GET /media/download-video/:id?filename= — 视频生成记录下载（OSS / 上游 URL 均由服务端代理） */
+/** GET /media/download-video/:id/link — 鉴权后返回直链，浏览器直接拉文件 */
+app.get('/download-video/:id/link', async (c) => {
+  try {
+    const id = Number(c.req.param('id'))
+    if (!Number.isFinite(id) || id <= 0) return badRequest(c, 'invalid id')
+    const filename = sanitizeDownloadFilename(c.req.query('filename') || '', `video_${id}.mp4`)
+    const link = await resolveVideoGenerationDownloadLink(id, filename)
+    if (!link) return notFound(c, 'file not found')
+    return success(c, link)
+  } catch (err: any) {
+    const message = String(err?.message || '')
+    if (message === 'not found' || message === 'file not found') return notFound(c, 'file not found')
+    return serverError(c, message || 'download failed')
+  }
+})
+
+/** GET /media/download-video/:id?filename= — 代理流式下载（无直链时回退） */
 app.get('/download-video/:id', async (c) => {
   try {
     const id = Number(c.req.param('id'))

@@ -1,0 +1,41 @@
+/**
+ * RunningHub SeedVR2.5 视频高清放大（工作流 API）
+ * https://www.runninghub.cn/call-api/api-detail/2061462363160797186?apiType=5
+ */
+export const RUNNINGHUB_SEEDVR25_WORKFLOW_ID = '2061462363160797186'
+
+/** 页面上关联的 webappId（仅作参考，提交走 workflowId） */
+export const RUNNINGHUB_SEEDVR25_WEBAPP_ID = '2081598176372547586'
+
+export const RUNNINGHUB_SEEDVR25_DOCS_URL =
+  `https://www.runninghub.cn/call-api/api-detail/${RUNNINGHUB_SEEDVR25_WORKFLOW_ID}?apiType=5`
+
+/**
+ * VHS_LoadVideo 节点
+ * 官方 getJsonApiFormat：nodeId=25, fieldName=video
+ */
+export const RUNNINGHUB_SEEDVR25_VIDEO_NODE = {
+  nodeId: '25',
+  fieldName: 'video',
+} as const
+
+/** 官方示例默认 plus（48G） */
+export const RUNNINGHUB_SEEDVR25_INSTANCE_TYPE = 'plus'
+
+export const RUNNINGHUB_SEEDVR25_PROVIDER = 'runninghub_seedvr25'
+
+/** 单文件限制（沿用超分页规则） */
+export const SEEDVR25_MAX_FILES_PER_BATCH = 10
+export const SEEDVR25_MAX_DURATION_SEC = 180
+export const SEEDVR25_MAX_FILE_BYTES = 500 * 1024 * 1024
+
+// —— 兼容旧常量名（避免其它引用瞬时断裂）——
+export const RUNNINGHUB_SEEDVR2_WEBAPP_ID = RUNNINGHUB_SEEDVR25_WORKFLOW_ID
+export const RUNNINGHUB_SEEDVR2_WORKFLOW_ID = RUNNINGHUB_SEEDVR25_WORKFLOW_ID
+export const RUNNINGHUB_SEEDVR2_DOCS_URL = RUNNINGHUB_SEEDVR25_DOCS_URL
+export const RUNNINGHUB_SEEDVR2_VIDEO_NODE = RUNNINGHUB_SEEDVR25_VIDEO_NODE
+export const RUNNINGHUB_SEEDVR2_INSTANCE_TYPE = RUNNINGHUB_SEEDVR25_INSTANCE_TYPE
+export const RUNNINGHUB_SEEDVR2_PROVIDER = RUNNINGHUB_SEEDVR25_PROVIDER
+export const SEEDVR2_MAX_FILES_PER_BATCH = SEEDVR25_MAX_FILES_PER_BATCH
+export const SEEDVR2_MAX_DURATION_SEC = SEEDVR25_MAX_DURATION_SEC
+export const SEEDVR2_MAX_FILE_BYTES = SEEDVR25_MAX_FILE_BYTES

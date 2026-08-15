@@ -29,10 +29,12 @@ export const requestLogger: MiddlewareHandler = async (c, next) => {
   const path = c.req.path
   const start = performance.now()
 
-  // 打印请求
+  // 打印请求（multipart / 大文件不读 body，避免拖垮日志与请求）
   const time = formatTime()
   let bodyInfo = ''
-  if (['POST', 'PUT', 'PATCH'].includes(method)) {
+  const contentType = c.req.header('content-type') || ''
+  const isMultipart = contentType.includes('multipart/form-data')
+  if (['POST', 'PUT', 'PATCH'].includes(method) && !isMultipart) {
     try {
       const clone = c.req.raw.clone()
       const text = await clone.text()
@@ -41,6 +43,8 @@ export const requestLogger: MiddlewareHandler = async (c, next) => {
         bodyInfo = `\n  ${colors.dim}body: ${truncated}${colors.reset}`
       }
     } catch {}
+  } else if (isMultipart) {
+    bodyInfo = `\n  ${colors.dim}body: [multipart omitted]${colors.reset}`
   }
 
   console.log(`${colors.dim}${time}${colors.reset} ${colors.cyan}${method}${colors.reset} ${path}${bodyInfo}`)

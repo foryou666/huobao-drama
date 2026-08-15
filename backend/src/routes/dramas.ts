@@ -18,7 +18,7 @@ import {
   userCanManageDramaShares,
   userCanManageDrama,
 } from '../services/drama-shares.js'
-import { assessDramaDeletion, assessEpisodeDeletion, toDeletionInfo } from '../services/deletion-guards.js'
+import { assessDramaDeletion, assessEpisodeDeletionsForDrama, toDeletionInfo } from '../services/deletion-guards.js'
 import { episodeSummaryToSnakeCase, getEpisodeSummariesForDrama } from '../services/episode-summary.js'
 import {
   enrichPropForStudio,
@@ -26,6 +26,12 @@ import {
   reconcileOrphanAssets,
 } from '../services/asset-library.js'
 import { enrichDramaListItems } from '../services/drama-list-enrichment.js'
+import {
+  ensureMissingNarrationLinkedDramas,
+} from '../services/narration-drama-link.js'
+import { syncNarrationAssetsForDramaId } from '../services/narration-drama-sync.js'
+import { softDeleteNarrationJobForDrama } from '../services/narration-delete.js'
+import { parseDramaProjectMeta } from '../services/narration-drama-meta.js'
 import {
   boardTitleForDrama,
   ensureBoardForDrama,
@@ -184,6 +190,12 @@ app.get('/', async (c) => {
   const keyword = c.req.query('keyword')
   const includeArchived = c.req.query('include_archived') === '1'
   const lite = c.req.query('lite') === '1' || c.req.query('picker') === '1'
+
+  // 旧解说任务补挂轻量 drama，便于项目/画布列表与封面统一展示
+  ensureMissingNarrationLinkedDramas({
+    userId: user.role === 'admin' ? null : user.id,
+    teamId: activeTeamId,
+  })
 
   let query = db.select().from(schema.dramas).where(isNull(schema.dramas.deletedAt))
 
@@ -376,6 +388,9 @@ app.get('/:id', async (c) => {
     hydratePropImagesFromLinkedAssets(id)
   }
 
+  // 解说漫：把工作流里已定稿的角色/场景图同步到 drama 表，供封面弹窗选用
+  syncNarrationAssetsForDramaId(id)
+
   const eps = await db.select().from(schema.episodes)
     .where(eq(schema.episodes.dramaId, id))
     .all()
@@ -392,9 +407,24 @@ app.get('/:id', async (c) => {
   if (!workbench) {
     deletion = toDeletionInfo(assessDramaDeletion(id))
     const episodeSummaries = getEpisodeSummariesForDrama(id, activeEps.map(ep => ep.id))
+    const episodeDeletions = assessEpisodeDeletionsForDrama(id, activeEps)
     episodesOut = activeEps.map(ep => ({
       ...toSnakeCase(ep),
-      ...toDeletionInfo(assessEpisodeDeletion(ep.id)),
+      ...toDeletionInfo(episodeDeletions.get(ep.id) || {
+        allowed: true,
+        reason: null,
+        stats: {
+          episodes: 1,
+          storyboards: 0,
+          images: 0,
+          videos: 0,
+          characters: 0,
+          scenes: 0,
+          props: 0,
+          assets: 0,
+        },
+        summary: '无制作内容',
+      }),
       summary: episodeSummaryToSnakeCase(episodeSummaries.get(ep.id) || {
         script: {
           has_script: false,
@@ -555,6 +585,8 @@ app.post('/:id/generate-cover', async (c) => {
   } catch (err: any) {
     return badRequest(c, err?.message || '图片服务配置不可用')
   }
+
+  syncNarrationAssetsForDramaId(id)
 
   const allChars = db.select().from(schema.characters)
     .where(eq(schema.characters.dramaId, id)).all()
@@ -806,13 +838,29 @@ app.post('/:id/restore', async (c) => {
   return success(c, { status: 'draft' })
 })
 
-// DELETE /dramas/:id - Soft delete (empty projects only)
+// DELETE /dramas/:id - Soft delete（短剧空项目；解说漫可整单删除）
 app.delete('/:id', async (c) => {
   const id = Number(c.req.param('id'))
   const [drama] = db.select().from(schema.dramas).where(eq(schema.dramas.id, id)).all()
   if (!drama) return notFound(c, '剧本不存在')
   const denied = assertDramaAdminAccess(c, drama)
   if (denied) return denied
+
+  const { project_kind } = parseDramaProjectMeta(drama)
+  if (project_kind === 'narration') {
+    const user = getAuthUser(c)
+    if (user.role !== 'admin') return forbidden(c, '仅平台管理员可删除解说漫')
+    softDeleteNarrationJobForDrama(id)
+    logActivity(user, {
+      action: 'drama.delete',
+      summary: `删除解说漫项目「${drama.title || id}」`,
+      resourceType: 'drama',
+      resourceId: id,
+      dramaId: id,
+    })
+    return success(c)
+  }
+
   const check = assessDramaDeletion(id)
   if (!check.allowed) return badRequest(c, check.reason || '项目含制作内容，无法删除')
   await db.update(schema.dramas).set({ deletedAt: now(), updatedAt: now() }).where(eq(schema.dramas.id, id))

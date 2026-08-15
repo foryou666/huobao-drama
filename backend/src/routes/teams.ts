@@ -27,6 +27,12 @@ import { logActivity } from '../services/activity.js'
 import { listAllTeamsDirectory } from '../services/drama-shares.js'
 import { canViewTeamAudit } from '../services/team-audit.js'
 import { getTeamStats } from '../services/team-stats.js'
+import { requireAdmin } from '../middleware/auth.js'
+import {
+  deserializeAllowedIps,
+  parseAllowedIpsInput,
+  serializeAllowedIps,
+} from '../utils/login-ip.js'
 
 const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -120,6 +126,48 @@ app.put('/:id', async (c) => {
     resourceId: teamId,
   })
   return success(c, { id: teamId, name })
+})
+
+// GET /teams/:id/login-ips — 查看团队登录 IP 白名单（管理员）
+app.get('/:id/login-ips', requireAdmin, async (c) => {
+  const teamId = Number(c.req.param('id'))
+  const [team] = db.select().from(schema.teams).where(eq(schema.teams.id, teamId)).all()
+  if (!team) return notFound(c, '团队不存在')
+  return success(c, {
+    team_id: team.id,
+    team_name: team.name,
+    allowed_ips: deserializeAllowedIps(team.allowedIps),
+  })
+})
+
+// PUT /teams/:id/login-ips — 设置团队登录 IP（成员登录时生效，管理员）
+app.put('/:id/login-ips', requireAdmin, async (c) => {
+  const teamId = Number(c.req.param('id'))
+  const [team] = db.select().from(schema.teams).where(eq(schema.teams.id, teamId)).all()
+  if (!team) return notFound(c, '团队不存在')
+
+  const body = await c.req.json()
+  const allowedIps = serializeAllowedIps(parseAllowedIpsInput(body.allowed_ips))
+  const ts = now()
+  db.update(schema.teams).set({ allowedIps, updatedAt: ts }).where(eq(schema.teams.id, teamId)).run()
+
+  const user = getAuthUser(c)
+  const list = deserializeAllowedIps(allowedIps)
+  logActivity(user, {
+    action: 'team.login_ips',
+    summary: list.length
+      ? `设置团队「${team.name}」登录 IP（${list.length} 条）`
+      : `清除团队「${team.name}」登录 IP 限制`,
+    resourceType: 'team',
+    resourceId: teamId,
+    metadata: { allowed_ips: list },
+  })
+
+  return success(c, {
+    team_id: team.id,
+    team_name: team.name,
+    allowed_ips: list,
+  })
 })
 
 // GET /teams/:id/members

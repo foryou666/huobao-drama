@@ -4,9 +4,11 @@ import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
 import { ensureApiTrimmedAudioPath } from './audio-trim.js'
 import {
   AISTARSLAB_DURATION_BOUNDS,
+  AISTARSLAB_DEFAULT_REF_LIMITS,
   normalizeAistarslabAspectRatio,
   normalizeAistarslabDuration,
   normalizeAistarslabModelSlug,
+  pickAistarslabResolution,
 } from '../constants/aistarslab.js'
 import { resolveChengmengMediaUrl } from './chengmeng-content.js'
 
@@ -85,18 +87,28 @@ function buildTagPrefix(imageCount: number, videoCount: number, audioCount: numb
   return tags.length ? `${tags.join(' ')} ` : ''
 }
 
-/** 文档要求 prompt 内保留 @图片N / @视频N / @音频N */
+/** 保留用户 @；把「图片1是…」补成 @图片1，避免再整表刷前缀 */
+function ensureAistarslabAtMentions(prompt: string): string {
+  return String(prompt || '')
+    .replace(/@音色\s*(\d+)/gi, '@音频$1')
+    .replace(/(?<!@)音色\s*(\d+)/gi, '@音频$1')
+    .replace(/(?<!@)图片\s*(\d+)/gi, '@图片$1')
+    .replace(/(?<!@)视频\s*(\d+)/gi, '@视频$1')
+    .replace(/(?<!@)素材\s*(\d+)/gi, '@视频$1')
+    .replace(/(?<!@)音频\s*(\d+)/gi, '@音频$1')
+}
+
+/** 文档要求 prompt 内保留 @图片N / @视频N / @音频N；已有引用则不再全量补前缀 */
 export function buildAistarslabPrompt(
   prompt: string,
   imageCount: number,
   videoCount: number,
   audioCount: number,
 ): string {
-  const text = normalizeVideoPromptFraming(String(prompt || '').trim())
+  const text = normalizeVideoPromptFraming(ensureAistarslabAtMentions(prompt)).trim()
+  if (/@(?:图片|视频|音频)\s*\d/i.test(text)) return text
   const prefix = buildTagPrefix(imageCount, videoCount, audioCount)
-  if (!prefix) return text
-  if (/@[图片视频音频]\s*\d/i.test(text)) return text
-  return `${prefix}${text}`.trim()
+  return prefix ? `${prefix}${text}`.trim() : text
 }
 
 export function resolveAistarslabModeType(input: {
@@ -116,12 +128,6 @@ export function resolveAistarslabReferenceMode(referenceMode?: string | null): '
 
 function onlyPublicUrls(urls: string[]): string[] {
   return urls.filter(url => /^https?:\/\//i.test(String(url || '').trim()))
-}
-
-function resolveAistarslabResolution(model: string): string {
-  const id = String(model || '').trim().toLowerCase()
-  if (id.includes('480')) return '480p'
-  return '720p'
 }
 
 function collectReferenceImages(input: {
@@ -174,13 +180,32 @@ export function buildAistarslabOpenApiTaskPayload(input: {
   lastFrameUrl?: string | null
   referenceImageUrls?: string[] | null
   contentRefs?: VideoContentRef[] | null
+  /** 上游模型允许的分辨率列表；缺省时按模型名启发式 */
+  allowedResolutions?: string[] | null
+  maxImages?: number | null
+  maxVideos?: number | null
+  maxAudios?: number | null
 }): Record<string, unknown> {
   const channel = String(input.channel).trim()
   const model = normalizeAistarslabModelSlug(input.model)
   const seconds = normalizeAistarslabDuration(input.seconds)
   const size = normalizeAistarslabAspectRatio(input.aspectRatio)
-  const resolution = resolveAistarslabResolution(model)
+  const resolution = pickAistarslabResolution(model, input.allowedResolutions)
   const { images, videos, audios, useFirstLast } = collectReferenceImages(input)
+  const maxImages = input.maxImages == null ? AISTARSLAB_DEFAULT_REF_LIMITS.images : Number(input.maxImages)
+  const maxVideos = input.maxVideos == null ? AISTARSLAB_DEFAULT_REF_LIMITS.videos : Number(input.maxVideos)
+  const maxAudios = input.maxAudios == null ? AISTARSLAB_DEFAULT_REF_LIMITS.audios : Number(input.maxAudios)
+
+  if (!useFirstLast && images.length > maxImages) {
+    throw new Error(`当前线路最多支持 ${maxImages} 张参考图，当前 ${images.length} 张，请减少后重试`)
+  }
+  if (videos.length > maxVideos) {
+    throw new Error(`当前线路最多支持 ${maxVideos} 个参考视频，当前 ${videos.length} 个，请减少后重试`)
+  }
+  if (audios.length > maxAudios) {
+    throw new Error(`当前线路最多支持 ${maxAudios} 条参考音频，当前 ${audios.length} 条，请减少后重试`)
+  }
+
   const imageCount = useFirstLast ? 0 : images.length
   const modeType = resolveAistarslabModeType({
     referenceMode: input.referenceMode,
@@ -189,11 +214,13 @@ export function buildAistarslabOpenApiTaskPayload(input: {
     hasFirstLast: useFirstLast,
   })
 
+  const prompt = buildAistarslabPrompt(input.prompt, imageCount, videos.length, audios.length)
+
   const body: Record<string, unknown> = {
     channel,
     model,
     resolution,
-    prompt: buildAistarslabPrompt(input.prompt, imageCount, videos.length, audios.length),
+    prompt,
     seconds,
     size,
     modeType,

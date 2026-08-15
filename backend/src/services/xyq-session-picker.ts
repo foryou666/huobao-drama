@@ -100,7 +100,7 @@ export async function resolveXyqSessionForGeneration(opts: {
       sessionId: best.session.id,
       label: best.session.label,
       estimatedNeed,
-      duration: normalizeXyqDuration(opts.duration),
+      duration: normalizeXyqDuration(opts.duration, opts.model),
       model: opts.model,
       balance: best.total,
       gift: best.gift,
@@ -133,7 +133,7 @@ export async function resolveXyqSessionForGeneration(opts: {
   logTaskWarn('XyqBind', 'no-enough-balance', {
     estimatedNeed,
     model: opts.model,
-    duration: normalizeXyqDuration(opts.duration),
+    duration: normalizeXyqDuration(opts.duration, opts.model),
     balances: scored.map(item => ({
       id: item.session.id,
       label: item.session.label,

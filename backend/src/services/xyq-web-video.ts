@@ -2,12 +2,18 @@ import fs from 'fs'
 import path from 'path'
 import { eq } from 'drizzle-orm'
 import {
+  XYQ_VIDEO_PART_AGENT,
+  XYQ_VIDEO_MODELS,
   XYQ_DEFAULT_VIDEO_MODEL,
-  XYQ_REF_LIMITS,
   buildXyqSubmitMessage,
+  buildXyqVideoPartToolParam,
   normalizeXyqAspectRatio,
   normalizeXyqDuration,
+  normalizeXyqResolution,
+  resolveXyqUpstreamVideoPartModelId,
+  xyqRefLimitsForModel,
   xyqVideoModelLabel,
+  type XyqVideoPartAsset,
 } from '../constants/xyq-web.js'
 import { db, schema } from '../db/index.js'
 import { now } from '../utils/response.js'
@@ -16,6 +22,11 @@ import { getAbsolutePath, parseDataUrl } from '../utils/storage.js'
 import { openMediaReadStream } from '../utils/media-download.js'
 import { parseVideoContentRefs, type VideoContentRef } from '../utils/seedance-content.js'
 import { logTaskError, logTaskPayload, logTaskProgress, logTaskSuccess, logTaskWarn } from '../utils/task-logger.js'
+import {
+  ensureS25DiscountRefVideo,
+  isS25SilentDiscountRefPath,
+  S25_DISCOUNT_REF_VIDEO_PATH,
+} from '../utils/s25-discount-ref.js'
 import type { VideoGenerationRecord } from './adapters/types.js'
 import {
   decodeXyqTaskId,
@@ -33,12 +44,28 @@ function resolveSessionForRecord(record: VideoGenerationRecord) {
   return session
 }
 
-function detectMime(filePath: string, mediaType: 'image' | 'video'): string {
+type XyqMediaType = 'image' | 'video' | 'audio'
+
+function detectMediaTypeFromPath(filePath: string): XyqMediaType {
+  if (/\.(mp4|mov|webm|m4v)$/i.test(filePath)) return 'video'
+  if (/\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(filePath)) return 'audio'
+  return 'image'
+}
+
+function detectMime(filePath: string, mediaType: XyqMediaType): string {
   const ext = path.extname(filePath).toLowerCase()
   if (mediaType === 'video') {
     if (ext === '.mov') return 'video/quicktime'
     if (ext === '.webm') return 'video/webm'
     return 'video/mp4'
+  }
+  if (mediaType === 'audio') {
+    if (ext === '.wav') return 'audio/wav'
+    if (ext === '.m4a') return 'audio/mp4'
+    if (ext === '.aac') return 'audio/aac'
+    if (ext === '.ogg') return 'audio/ogg'
+    if (ext === '.flac') return 'audio/flac'
+    return 'audio/mpeg'
   }
   if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
   if (ext === '.webp') return 'image/webp'
@@ -46,15 +73,25 @@ function detectMime(filePath: string, mediaType: 'image' | 'video'): string {
   return 'image/png'
 }
 
-async function readMediaBuffer(ref: string): Promise<{ buffer: Buffer; filename: string; mimeType: string; mediaType: 'image' | 'video' } | null> {
+function defaultExt(mediaType: XyqMediaType): string {
+  if (mediaType === 'video') return '.mp4'
+  if (mediaType === 'audio') return '.mp3'
+  return '.png'
+}
+
+async function readMediaBuffer(ref: string): Promise<{ buffer: Buffer; filename: string; mimeType: string; mediaType: XyqMediaType } | null> {
   const raw = String(ref || '').trim()
   if (!raw) return null
 
   const parsed = parseDataUrl(raw)
   if (parsed) {
     const mime = parsed.mimeType.toLowerCase()
-    const mediaType: 'image' | 'video' = mime.startsWith('video/') ? 'video' : 'image'
-    const ext = mediaType === 'video' ? '.mp4' : '.png'
+    const mediaType: XyqMediaType = mime.startsWith('video/')
+      ? 'video'
+      : mime.startsWith('audio/')
+        ? 'audio'
+        : 'image'
+    const ext = defaultExt(mediaType)
     return {
       buffer: Buffer.from(parsed.data, 'base64'),
       filename: `reference${ext}`,
@@ -66,9 +103,9 @@ async function readMediaBuffer(ref: string): Promise<{ buffer: Buffer; filename:
   const staticPath = raw.replace(/^\/+/, '')
   if (staticPath.startsWith('static/')) {
     const absPath = getAbsolutePath(staticPath)
-    const mediaType: 'image' | 'video' = /\.(mp4|mov|webm|m4v)$/i.test(staticPath) ? 'video' : 'image'
+    const mediaType = detectMediaTypeFromPath(staticPath)
     if (fs.existsSync(absPath)) {
-      const ext = path.extname(absPath).toLowerCase() || (mediaType === 'video' ? '.mp4' : '.png')
+      const ext = path.extname(absPath).toLowerCase() || defaultExt(mediaType)
       return {
         buffer: fs.readFileSync(absPath),
         filename: `reference${ext}`,
@@ -84,7 +121,7 @@ async function readMediaBuffer(ref: string): Promise<{ buffer: Buffer; filename:
         stream.on('end', () => resolve())
         stream.on('error', reject)
       })
-      const ext = path.extname(staticPath).toLowerCase() || (mediaType === 'video' ? '.mp4' : '.png')
+      const ext = path.extname(staticPath).toLowerCase() || defaultExt(mediaType)
       return {
         buffer: Buffer.concat(chunks),
         filename: `reference${ext}`,
@@ -124,17 +161,60 @@ function collectRefs(record: VideoGenerationRecord): VideoContentRef[] {
   }
 
   for (const ref of parseVideoContentRefs(record.referencePayload)) {
-    if (ref.type === 'image' || ref.type === 'video') push(ref.type, ref.url)
+    if (ref.type === 'image' || ref.type === 'video' || ref.type === 'audio') push(ref.type, ref.url)
   }
 
-  const images = refs.filter(r => r.type === 'image').slice(0, XYQ_REF_LIMITS.images)
-  const videos = refs.filter(r => r.type === 'video').slice(0, XYQ_REF_LIMITS.videos)
-  return [...images, ...videos]
+  const limits = xyqRefLimitsForModel(record.model)
+  let images = refs.filter(r => r.type === 'image')
+  let videos = refs.filter(r => r.type === 'video')
+  let audios = refs.filter(r => r.type === 'audio')
+
+  // Seedance 2.5：无用户参考视频时静默附加短视频，触发上游参考视频优惠价
+  const isS25 = String(record.model || '').trim() === XYQ_VIDEO_MODELS.SEEDANCE_2_5
+  if (isS25 && videos.length === 0) {
+    const discountPath = ensureS25DiscountRefVideo()
+    if (discountPath) {
+      const maxTotal = limits.maxTotal
+      const currentTotal = images.length + audios.length
+      if (maxTotal != null && currentTotal >= maxTotal && images.length > 0) {
+        const dropped = images[images.length - 1]
+        const dropIdx = refs.findIndex(r => r.type === 'image' && r.url === dropped.url)
+        if (dropIdx >= 0) refs.splice(dropIdx, 1)
+        seen.delete(`image:${dropped.url}`)
+      }
+      push('video', discountPath)
+      images = refs.filter(r => r.type === 'image')
+      videos = refs.filter(r => r.type === 'video')
+      audios = refs.filter(r => r.type === 'audio')
+    } else {
+      logTaskWarn('XyqVideo', 's25-discount-ref-missing', { path: S25_DISCOUNT_REF_VIDEO_PATH })
+    }
+  }
+
+  images = images.slice(0, limits.images)
+  videos = videos.slice(0, limits.videos)
+  audios = audios.slice(0, limits.audios)
+  let ordered = [...images, ...videos, ...audios]
+  if (limits.maxTotal != null && ordered.length > limits.maxTotal) {
+    ordered = ordered.slice(0, limits.maxTotal)
+  }
+  return ordered
 }
 
-async function uploadRefs(session: ReturnType<typeof getXyqWebSession>, refs: VideoContentRef[]): Promise<string[]> {
-  if (!session) return []
+async function uploadRefs(
+  session: NonNullable<ReturnType<typeof getXyqWebSession>>,
+  refs: VideoContentRef[],
+): Promise<{
+  assetIds: string[]
+  images: XyqVideoPartAsset[]
+  videos: XyqVideoPartAsset[]
+  audios: XyqVideoPartAsset[]
+}> {
   const assetIds: string[] = []
+  const images: XyqVideoPartAsset[] = []
+  const videos: XyqVideoPartAsset[] = []
+  const audios: XyqVideoPartAsset[] = []
+
   for (const ref of refs) {
     const media = await readMediaBuffer(ref.url)
     if (!media) continue
@@ -144,32 +224,70 @@ async function uploadRefs(session: ReturnType<typeof getXyqWebSession>, refs: Vi
       mimeType: media.mimeType,
     })
     assetIds.push(assetId)
+    const item: XyqVideoPartAsset = {
+      asset_id: assetId,
+      name: media.filename,
+    }
+    if (ref.type === 'video' || media.mediaType === 'video') videos.push(item)
+    else if (ref.type === 'audio' || media.mediaType === 'audio') audios.push(item)
+    else images.push(item)
   }
-  return assetIds
+  return { assetIds, images, videos, audios }
 }
 
 export async function submitXyqVideo(record: VideoGenerationRecord): Promise<string> {
   const session = resolveSessionForRecord(record)
   const refs = collectRefs(record)
-  const assetIds = refs.length ? await uploadRefs(session, refs) : []
+  const uploaded = refs.length
+    ? await uploadRefs(session, refs)
+    : { assetIds: [] as string[], images: [] as XyqVideoPartAsset[], videos: [] as XyqVideoPartAsset[], audios: [] as XyqVideoPartAsset[] }
+
+  const duration = normalizeXyqDuration(record.duration, record.model)
+  const ratio = normalizeXyqAspectRatio(record.aspectRatio)
+  const resolution = normalizeXyqResolution(record.resolution)
+  const upstreamModel = resolveXyqUpstreamVideoPartModelId(record.model)
+  const prompt = String(record.prompt || '').trim()
   const message = buildXyqSubmitMessage({
     model: record.model,
-    prompt: String(record.prompt || ''),
-    duration: record.duration,
-    aspectRatio: record.aspectRatio,
-    hasAssets: assetIds.length > 0,
+    prompt,
+    duration,
+    aspectRatio: ratio,
+    hasAssets: uploaded.assetIds.length > 0,
+  })
+  const videoPartToolParam = buildXyqVideoPartToolParam({
+    model: record.model,
+    prompt,
+    duration,
+    aspectRatio: ratio,
+    resolution,
+    images: uploaded.images,
+    videos: uploaded.videos,
+    audios: uploaded.audios,
   })
 
   logTaskPayload('XyqVideo', 'submit', {
     recordId: record.id,
     model: record.model,
     label: xyqVideoModelLabel(record.model),
-    duration: normalizeXyqDuration(record.duration),
-    ratio: normalizeXyqAspectRatio(record.aspectRatio),
-    assetCount: assetIds.length,
+    upstreamModel,
+    agent: XYQ_VIDEO_PART_AGENT,
+    duration,
+    ratio,
+    resolution,
+    assetCount: uploaded.assetIds.length,
+    imageCount: uploaded.images.length,
+    videoCount: uploaded.videos.length,
+    audioCount: uploaded.audios.length,
+    silentDiscountVideo: String(record.model || '').trim() === XYQ_VIDEO_MODELS.SEEDANCE_2_5
+      && refs.some(r => r.type === 'video' && isS25SilentDiscountRefPath(r.url)),
   })
 
-  const result = await submitXyqRun(session, { message, assetIds })
+  const result = await submitXyqRun(session, {
+    message,
+    assetIds: uploaded.assetIds,
+    agentName: XYQ_VIDEO_PART_AGENT,
+    videoPartToolParam,
+  })
   return encodeXyqTaskId(result.threadId, result.runId)
 }
 

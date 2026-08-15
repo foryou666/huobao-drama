@@ -1,4 +1,4 @@
-import { eq, and, isNull } from 'drizzle-orm'
+import { eq, and, isNull, inArray, count } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
 
 export type ContentStats = {
@@ -49,26 +49,34 @@ export function formatContentSummary(stats: ContentStats): string {
   return parts.length ? parts.join(' · ') : '无制作内容'
 }
 
+function countRows(value: unknown): number {
+  return Number(value || 0)
+}
+
 function countActiveAssets(where: { dramaId?: number; episodeId?: number }) {
-  const rows = db.select().from(schema.assets).all()
-  return rows.filter(a =>
-    !a.deletedAt
-    && (where.dramaId == null || a.dramaId === where.dramaId)
-    && (where.episodeId == null || a.episodeId === where.episodeId),
-  ).length
+  const conditions = [isNull(schema.assets.deletedAt)]
+  if (where.dramaId != null) conditions.push(eq(schema.assets.dramaId, where.dramaId))
+  if (where.episodeId != null) conditions.push(eq(schema.assets.episodeId, where.episodeId))
+  const [row] = db.select({ value: count() }).from(schema.assets).where(and(...conditions)).all()
+  return countRows(row?.value)
 }
 
 function countStoryboardGenerations(storyboardIds: number[]) {
   if (!storyboardIds.length) return { images: 0, videos: 0 }
-  const images = db.select().from(schema.imageGenerations).all()
-    .filter(g => g.storyboardId != null && storyboardIds.includes(g.storyboardId)).length
-  const videos = db.select().from(schema.videoGenerations).all()
-    .filter(g => !g.deletedAt && g.storyboardId != null && storyboardIds.includes(g.storyboardId)).length
-  return { images, videos }
+  const [images] = db.select({ value: count() }).from(schema.imageGenerations)
+    .where(inArray(schema.imageGenerations.storyboardId, storyboardIds))
+    .all()
+  const [videos] = db.select({ value: count() }).from(schema.videoGenerations)
+    .where(and(
+      inArray(schema.videoGenerations.storyboardId, storyboardIds),
+      isNull(schema.videoGenerations.deletedAt),
+    ))
+    .all()
+  return { images: countRows(images?.value), videos: countRows(videos?.value) }
 }
 
 function getActiveStoryboardsForEpisode(episodeId: number) {
-  return db.select().from(schema.storyboards)
+  return db.select({ id: schema.storyboards.id }).from(schema.storyboards)
     .where(and(eq(schema.storyboards.episodeId, episodeId), isNull(schema.storyboards.deletedAt)))
     .all()
 }
@@ -77,7 +85,7 @@ export function getEpisodeContentStats(episodeId: number): ContentStats {
   const storyboards = getActiveStoryboardsForEpisode(episodeId)
   const sbIds = storyboards.map(sb => sb.id)
   const gens = countStoryboardGenerations(sbIds)
-  const merges = db.select().from(schema.videoMerges)
+  const [merges] = db.select({ value: count() }).from(schema.videoMerges)
     .where(and(eq(schema.videoMerges.episodeId, episodeId), isNull(schema.videoMerges.deletedAt)))
     .all()
 
@@ -86,24 +94,19 @@ export function getEpisodeContentStats(episodeId: number): ContentStats {
     episodes: 1,
     storyboards: storyboards.length,
     images: gens.images,
-    videos: gens.videos + merges.length,
+    videos: gens.videos + countRows(merges?.value),
     assets: countActiveAssets({ episodeId }),
   }
 }
 
-export function assessEpisodeDeletion(episodeId: number): DeletionAssessment {
-  const [episode] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
-  if (!episode || episode.deletedAt) {
-    return { allowed: false, reason: '集不存在', stats: emptyStats(), summary: '无制作内容' }
-  }
-
-  const stats = getEpisodeContentStats(episodeId)
+function buildEpisodeDeletionAssessment(
+  episode: typeof schema.episodes.$inferSelect,
+  stats: ContentStats,
+  activeEpisodeCount: number,
+): DeletionAssessment {
   const blockers: string[] = []
 
-  const activeEpisodes = db.select().from(schema.episodes)
-    .where(and(eq(schema.episodes.dramaId, episode.dramaId), isNull(schema.episodes.deletedAt)))
-    .all()
-  if (activeEpisodes.length <= 1) {
+  if (activeEpisodeCount <= 1) {
     blockers.push('至少保留一集，请归档或删除整个项目')
   }
   if (hasText(episode.scriptContent) || hasText(episode.content)) {
@@ -130,44 +133,186 @@ export function assessEpisodeDeletion(episodeId: number): DeletionAssessment {
   return { allowed: true, reason: null, stats, summary }
 }
 
+export function assessEpisodeDeletion(episodeId: number): DeletionAssessment {
+  const [episode] = db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId)).all()
+  if (!episode || episode.deletedAt) {
+    return { allowed: false, reason: '集不存在', stats: emptyStats(), summary: '无制作内容' }
+  }
+
+  const [activeCount] = db.select({ value: count() }).from(schema.episodes)
+    .where(and(eq(schema.episodes.dramaId, episode.dramaId), isNull(schema.episodes.deletedAt)))
+    .all()
+
+  return buildEpisodeDeletionAssessment(
+    episode,
+    getEpisodeContentStats(episodeId),
+    countRows(activeCount?.value),
+  )
+}
+
+/**
+ * 批量评估某项目下多集的删除条件，避免逐集全表扫描 generation/assets。
+ */
+export function assessEpisodeDeletionsForDrama(
+  dramaId: number,
+  episodes: Array<typeof schema.episodes.$inferSelect>,
+): Map<number, DeletionAssessment> {
+  const result = new Map<number, DeletionAssessment>()
+  const active = episodes.filter(ep => !ep.deletedAt)
+  if (!active.length) return result
+
+  const episodeIds = active.map(ep => ep.id)
+  const storyboards = db.select({
+    id: schema.storyboards.id,
+    episodeId: schema.storyboards.episodeId,
+  }).from(schema.storyboards)
+    .where(and(
+      inArray(schema.storyboards.episodeId, episodeIds),
+      isNull(schema.storyboards.deletedAt),
+    ))
+    .all()
+
+  const sbIdsByEpisode = new Map<number, number[]>()
+  for (const sb of storyboards) {
+    const list = sbIdsByEpisode.get(sb.episodeId) || []
+    list.push(sb.id)
+    sbIdsByEpisode.set(sb.episodeId, list)
+  }
+  const allSbIds = storyboards.map(sb => sb.id)
+
+  const imageCounts = new Map<number, number>()
+  const videoCounts = new Map<number, number>()
+  if (allSbIds.length) {
+    const imageRows = db.select({
+      storyboardId: schema.imageGenerations.storyboardId,
+      value: count(),
+    }).from(schema.imageGenerations)
+      .where(inArray(schema.imageGenerations.storyboardId, allSbIds))
+      .groupBy(schema.imageGenerations.storyboardId)
+      .all()
+    for (const row of imageRows) {
+      if (row.storyboardId != null) imageCounts.set(row.storyboardId, countRows(row.value))
+    }
+
+    const videoRows = db.select({
+      storyboardId: schema.videoGenerations.storyboardId,
+      value: count(),
+    }).from(schema.videoGenerations)
+      .where(and(
+        inArray(schema.videoGenerations.storyboardId, allSbIds),
+        isNull(schema.videoGenerations.deletedAt),
+      ))
+      .groupBy(schema.videoGenerations.storyboardId)
+      .all()
+    for (const row of videoRows) {
+      if (row.storyboardId != null) videoCounts.set(row.storyboardId, countRows(row.value))
+    }
+  }
+
+  const mergeCounts = new Map<number, number>()
+  const mergeRows = db.select({
+    episodeId: schema.videoMerges.episodeId,
+    value: count(),
+  }).from(schema.videoMerges)
+    .where(and(
+      inArray(schema.videoMerges.episodeId, episodeIds),
+      isNull(schema.videoMerges.deletedAt),
+    ))
+    .groupBy(schema.videoMerges.episodeId)
+    .all()
+  for (const row of mergeRows) {
+    mergeCounts.set(row.episodeId, countRows(row.value))
+  }
+
+  const assetCounts = new Map<number, number>()
+  const assetRows = db.select({
+    episodeId: schema.assets.episodeId,
+    value: count(),
+  }).from(schema.assets)
+    .where(and(
+      inArray(schema.assets.episodeId, episodeIds),
+      isNull(schema.assets.deletedAt),
+    ))
+    .groupBy(schema.assets.episodeId)
+    .all()
+  for (const row of assetRows) {
+    if (row.episodeId != null) assetCounts.set(row.episodeId, countRows(row.value))
+  }
+
+  for (const ep of active) {
+    const sbIds = sbIdsByEpisode.get(ep.id) || []
+    let images = 0
+    let videos = 0
+    for (const sbId of sbIds) {
+      images += imageCounts.get(sbId) || 0
+      videos += videoCounts.get(sbId) || 0
+    }
+    videos += mergeCounts.get(ep.id) || 0
+    const stats: ContentStats = {
+      ...emptyStats(),
+      episodes: 1,
+      storyboards: sbIds.length,
+      images,
+      videos,
+      assets: assetCounts.get(ep.id) || 0,
+    }
+    result.set(ep.id, buildEpisodeDeletionAssessment(ep, stats, active.length))
+  }
+
+  return result
+}
+
 export function getDramaContentStats(dramaId: number): ContentStats {
-  const episodes = db.select().from(schema.episodes)
+  const episodes = db.select({ id: schema.episodes.id }).from(schema.episodes)
     .where(and(eq(schema.episodes.dramaId, dramaId), isNull(schema.episodes.deletedAt)))
     .all()
-  const characters = db.select().from(schema.characters)
+  const episodeIds = episodes.map(ep => ep.id)
+
+  const [characters] = db.select({ value: count() }).from(schema.characters)
     .where(and(eq(schema.characters.dramaId, dramaId), isNull(schema.characters.deletedAt)))
     .all()
-  const scenes = db.select().from(schema.scenes)
+  const [scenes] = db.select({ value: count() }).from(schema.scenes)
     .where(and(eq(schema.scenes.dramaId, dramaId), isNull(schema.scenes.deletedAt)))
     .all()
-  const props = db.select().from(schema.props)
+  const [props] = db.select({ value: count() }).from(schema.props)
     .where(and(eq(schema.props.dramaId, dramaId), isNull(schema.props.deletedAt)))
     .all()
 
-  let storyboards = 0
-  let images = 0
-  let videos = 0
-  for (const ep of episodes) {
-    const epStats = getEpisodeContentStats(ep.id)
-    storyboards += epStats.storyboards
-    images += epStats.images
-    videos += epStats.videos
-  }
+  const storyboards = episodeIds.length
+    ? db.select({ id: schema.storyboards.id }).from(schema.storyboards)
+      .where(and(
+        inArray(schema.storyboards.episodeId, episodeIds),
+        isNull(schema.storyboards.deletedAt),
+      ))
+      .all()
+    : []
+  const sbIds = storyboards.map(sb => sb.id)
+  const gens = countStoryboardGenerations(sbIds)
 
-  const dramaImages = db.select().from(schema.imageGenerations)
-    .where(eq(schema.imageGenerations.dramaId, dramaId)).all().length
-  const dramaVideos = db.select().from(schema.videoGenerations)
+  const [merges] = episodeIds.length
+    ? db.select({ value: count() }).from(schema.videoMerges)
+      .where(and(
+        inArray(schema.videoMerges.episodeId, episodeIds),
+        isNull(schema.videoMerges.deletedAt),
+      ))
+      .all()
+    : [{ value: 0 }]
+
+  const [dramaImages] = db.select({ value: count() }).from(schema.imageGenerations)
+    .where(eq(schema.imageGenerations.dramaId, dramaId))
+    .all()
+  const [dramaVideos] = db.select({ value: count() }).from(schema.videoGenerations)
     .where(and(eq(schema.videoGenerations.dramaId, dramaId), isNull(schema.videoGenerations.deletedAt)))
-    .all().length
+    .all()
 
   return {
     episodes: episodes.length,
-    storyboards,
-    images: images + dramaImages,
-    videos: videos + dramaVideos,
-    characters: characters.length,
-    scenes: scenes.length,
-    props: props.length,
+    storyboards: storyboards.length,
+    images: gens.images + countRows(dramaImages?.value),
+    videos: gens.videos + countRows(merges?.value) + countRows(dramaVideos?.value),
+    characters: countRows(characters?.value),
+    scenes: countRows(scenes?.value),
+    props: countRows(props?.value),
     assets: countActiveAssets({ dramaId }),
   }
 }
@@ -176,7 +321,13 @@ export function assessDramaDeletion(dramaId: number): DeletionAssessment {
   const stats = getDramaContentStats(dramaId)
   const blockers: string[] = []
 
-  const episodes = db.select().from(schema.episodes)
+  const episodes = db.select({
+    episodeNumber: schema.episodes.episodeNumber,
+    scriptContent: schema.episodes.scriptContent,
+    content: schema.episodes.content,
+    videoUrl: schema.episodes.videoUrl,
+    thumbnail: schema.episodes.thumbnail,
+  }).from(schema.episodes)
     .where(and(eq(schema.episodes.dramaId, dramaId), isNull(schema.episodes.deletedAt)))
     .all()
   for (const ep of episodes) {

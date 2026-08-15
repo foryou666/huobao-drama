@@ -18,7 +18,11 @@ import { ChengmengVideoAdapter } from './chengmeng-video'
 import { GeeknowGrokVideoAdapter } from './geeknow-grok-video'
 import { JimengWebVideoAdapter } from './jimeng-web-video'
 import { XyqWebVideoAdapter } from './xyq-web-video'
+import { CozeWebVideoAdapter } from './coze-web-video'
+import { FunshionWebVideoAdapter } from './funshion-web-video'
+import { XingyuemengWebVideoAdapter } from './xingyuemeng-web-video'
 import { AistarslabVideoAdapter } from './aistarslab-video'
+import { AigcccVideoAdapter } from './aigccc-video'
 import type { ImageProviderAdapter, VideoProviderAdapter, TTSProviderAdapter } from './types'
 
 // 图片 Adapter 注册表
@@ -43,10 +47,16 @@ export const videoAdapters: Record<string, VideoProviderAdapter> = {
   ali: new AliVideoAdapter(),
   chengmeng: new ChengmengVideoAdapter(),
   geeknow: new GeeknowGrokVideoAdapter(),
+  // 花镜 / 启灵泽：NewAPI 兼容 Grok 视频（与 GeekNow 同适配器）
+  chatfire: new GeeknowGrokVideoAdapter(),
+  qilingze: new GeeknowGrokVideoAdapter(),
   jimeng_web: new JimengWebVideoAdapter(),
   xyq_web: new XyqWebVideoAdapter(),
+  coze_web: new CozeWebVideoAdapter(),
+  funshion_web: new FunshionWebVideoAdapter(),
+  xingyuemeng_web: new XingyuemengWebVideoAdapter(),
   aistarslab: new AistarslabVideoAdapter(),
-  // Chatfire 视频 - 待确认 API 格式
+  aigccc: new AigcccVideoAdapter(),
 }
 
 // TTS Adapter 注册表

@@ -22,6 +22,7 @@ import {
   trySyncSceneImageAfterGeneration,
   trySyncStoryboardImageAfterGeneration,
 } from '../utils/oss-entity-sync.js'
+import { isJimengDream50ProModel } from '../constants/jimeng-web-image.js'
 
 function resolveOutfitLabel(record: typeof schema.imageGenerations.$inferSelect): string {
   if (record.propId) {
@@ -101,12 +102,16 @@ export async function generateImage(params: GenerateImageParams): Promise<number
     model: params.model,
   })
 
-  const size = await resolveGenerationImageSize({
-    explicitSize: params.size,
-    dramaId: params.dramaId,
-    referenceImages: params.referenceImages,
-    imageType: params.imageType,
-  })
+  const dreamModel = isJimengDream50ProModel(params.model || config.model)
+  // 即梦尺寸含非 16 对齐值（如 4K 3:4=3520x4693），不可走通用 normalize
+  const size = dreamModel && params.size
+    ? String(params.size).trim()
+    : await resolveGenerationImageSize({
+      explicitSize: params.size,
+      dramaId: params.dramaId,
+      referenceImages: params.referenceImages,
+      imageType: params.imageType,
+    })
 
   const res = db.insert(schema.imageGenerations).values({
     storyboardId: params.storyboardId,
@@ -221,12 +226,18 @@ async function tryGeeknowImageFallback(
 }
 
 async function processImageGeneration(id: number, config: AIConfig, options?: ImageGenerationOptions) {
-  const adapter = getImageAdapter(config.provider)
-
   try {
     const rows = db.select().from(schema.imageGenerations).where(eq(schema.imageGenerations.id, id)).all()
     const record = rows[0]
     if (!record) return
+
+    if (String(config.provider || '').toLowerCase() === 'jimeng_web') {
+      const { processJimengWebImageGeneration } = await import('./jimeng-web-image.js')
+      await processJimengWebImageGeneration(id)
+      return
+    }
+
+    const adapter = getImageAdapter(config.provider)
     logTaskProgress('ImageTask', 'build-request', {
       id,
       provider: config.provider,

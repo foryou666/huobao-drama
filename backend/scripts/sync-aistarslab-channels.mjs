@@ -72,12 +72,13 @@ for (const channel of visible.channels) {
       false,
     )
     const userCost = getActionCost(aistarslabModelCreditAction(channel.channel, model.model), 1)
+    const perSecond = !model.fixedTotalCredits && !!(model.creditsPerSecond && model.creditsPerSecond > 0)
     const priceHint = model.fixedTotalCredits
       ? `上游 ${model.fixedTotalCredits} 积分/条`
       : model.creditsPerSecond
         ? `上游 ${model.creditsPerSecond} 积分/秒（${channel.secondsMax}秒=${upstream}）`
         : `上游 ${upstream} 积分`
-    console.log(`  · ${model.model} ${model.label} · ${priceHint} · 用户 ${userCost} 积分/次`)
+    console.log(`  · ${model.model} ${model.label} · ${priceHint} · 用户 ${userCost} 积分/${perSecond ? '秒' : '次'}`)
   }
 }
 
@@ -92,7 +93,11 @@ if (hidden.length) {
 const apiList = listAistarslabModelOptionsForApi(visible, row.id)
 console.log('\n通道3 API 模型列表:')
 for (const item of apiList) {
-  console.log(`  线路${item.channel} ${item.label} · ${item.credit_cost_flat ?? item.credit_cost} 积分/次`)
+  if (item.billing_unit === 'per_second') {
+    console.log(`  线路${item.channel} ${item.label} · ${item.credit_cost_per_second ?? item.credit_cost} 积分/秒`)
+  } else {
+    console.log(`  线路${item.channel} ${item.label} · ${item.credit_cost_flat ?? item.credit_cost} 积分/次`)
+  }
 }
 
 console.log('\n同步完成')

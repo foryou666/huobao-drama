@@ -308,7 +308,13 @@ app.post('/:id/upload-image', async (c) => {
     const savedPath = await saveUploadedFile(buffer, 'characters', file.name)
     const ts = now()
     db.update(schema.characters)
-      .set({ imageUrl: savedPath, localPath: savedPath, updatedAt: ts })
+      .set({
+        imageUrl: savedPath,
+        localPath: savedPath,
+        updatedAt: ts,
+        // 基准图变更后需重新认证（旧方舟素材仍占配额，可点「取消认证」腾位）
+        ...(char.seedanceAssetId ? { seedanceAssetStatus: 'pending' } : {}),
+      })
       .where(eq(schema.characters.id, id))
       .run()
     let ossWarning: string | null = null

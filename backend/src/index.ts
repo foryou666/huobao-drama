@@ -16,6 +16,9 @@ import images from './routes/images.js'
 import videos from './routes/videos.js'
 import jimeng from './routes/jimeng.js'
 import xyq from './routes/xyq.js'
+import coze from './routes/coze.js'
+import funshion from './routes/funshion.js'
+import xingyuemeng from './routes/xingyuemeng.js'
 import doubaoTraining from './routes/doubao-training.js'
 import upload from './routes/upload.js'
 import aiConfigs, { aiProviders } from './routes/aiConfigs.js'
@@ -33,6 +36,7 @@ import { requireAuth, type AuthVariables } from './middleware/auth.js'
 import auth from './routes/auth.js'
 import users from './routes/users.js'
 import activity from './routes/activity.js'
+import generationLogs from './routes/generationLogs.js'
 import portraits from './routes/portraits.js'
 import assistant from './routes/assistant.js'
 import credits from './routes/credits.js'
@@ -42,14 +46,30 @@ import teams from './routes/teams.js'
 import payments from './routes/payments.js'
 import repaint from './routes/repaint.js'
 import narration from './routes/narration.js'
+import scriptImport from './routes/script-import.js'
+import autoProduce from './routes/auto-produce.js'
 import tts from './routes/tts.js'
+import ttsRunninghub from './routes/tts-runninghub.js'
+import ttsRunninghubRef from './routes/tts-runninghub-ref.js'
+import musicSuno from './routes/music-suno.js'
 import subtitleRemover from './routes/subtitle-remover.js'
+import subtitleErase from './routes/subtitle-erase.js'
+import videoUpscale from './routes/video-upscale.js'
 import canvas from './routes/canvas.js'
-import { applyCreditPricingDefaultsIfNeeded, clampVideoCreditPricingToMinimum, applyXyqCreditPricingMigration, applyImage12CreditPricingMigration, applyNanoBanana2CreditPricingMigration, applyApimartImageCreditPricingMigration, applyApimartImageResolutionPricingMigration, migrateApimartPricingDisplayLabel, restoreVideoCreditPricingAfterFlat12 } from './services/credits.js'
+import directorDesk from './routes/director-desk.js'
+import { applyCreditPricingDefaultsIfNeeded, clampVideoCreditPricingToMinimum, applyXyqCreditPricingMigration, applyCozeCreditPricingMigration, applyFunshionCreditPricingMigration, applyXingyuemengCreditPricingMigration, applyAigcccCreditPricingMigration, applyImage12CreditPricingMigration, applyNanoBanana2CreditPricingMigration, applyApimartImageCreditPricingMigration, applyApimartImageResolutionPricingMigration, migrateApimartPricingDisplayLabel, restoreVideoCreditPricingAfterFlat12, fixSeedancePerSecondUnitFloor, applyOfficialSeedanceFast50Pricing, applyOfficialSeedanceFast51Pricing, applyOfficialSeedanceFastHd61Pricing, applyOfficialSeedanceStandard80Pricing, applyOfficialSeedance25Pricing, applyOfficialChannel2AlignXingyuemengPricing, applyJimengVip80Min800Pricing, applyJimengVipRefVideo130Pricing, applyJimengFast80OffPricing, applySunoMusic90Pricing, applyMinimaxMusic200Pricing, applyVideoUpscaleSeedvr26Pricing, applyVideoUpscaleFunshion2kPricing, applySubtitleErase4Pricing } from './services/credits.js'
 import { migrateDefaultTeamIfNeeded } from './services/teams.js'
 import { migrateChengmengBaseUrlIfNeeded, migrateChengmengApiKeyIfNeeded, migrateChengmengModelIdsIfNeeded } from './services/chengmeng-migrate.js'
+import { migrateChengmengChannel1PreferredEnableIfNeeded } from './utils/chengmeng-model-settings.js'
+import { migrateAistarslabChannel3PreferredEnableIfNeeded } from './utils/aistarslab-channel-settings.js'
 import { resumeProcessingVideoTasks } from './services/video-generation.js'
 import { resumeProcessingImageTasks } from './services/image-generation.js'
+import { resumePendingMusicGenerations } from './services/minimax-music.js'
+import { resumePendingRunningHubTts } from './services/runninghub-indextts2.js'
+import { resumePendingVideoUpscaleJobs } from './services/video-upscale-seedvr2.js'
+import { resumePendingSubtitleEraseJobs } from './services/subtitle-erase-runninghub.js'
+import { syncOfficialVolcengineKeysFromEnv } from './services/official-volcengine-keys.js'
+import { startOfficialChannel2BillSyncWorker } from './services/official-channel2-bill-sync.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -95,6 +115,7 @@ api.use('/*', requireAuth)
 api.route('/users', users)
 api.route('/teams', teams)
 api.route('/activity-logs', activity)
+api.route('/generation-logs', generationLogs)
 api.route('/portraits', portraits)
 api.route('/dramas', dramas)
 api.route('/episodes', episodes)
@@ -107,13 +128,24 @@ api.route('/media', media)
 api.route('/images', images)
 api.route('/jimeng', jimeng)
 api.route('/xyq', xyq)
+api.route('/coze', coze)
+api.route('/funshion', funshion)
+api.route('/xingyuemeng', xingyuemeng)
 api.route('/doubao-training', doubaoTraining)
 api.route('/videos', videos)
 api.route('/repaint', repaint)
 api.route('/narration', narration)
+api.route('/script-import', scriptImport)
+api.route('/auto-produce', autoProduce)
+api.route('/tts/runninghub', ttsRunninghub)
+api.route('/tts/runninghub-ref', ttsRunninghubRef)
 api.route('/tts', tts)
+api.route('/music/suno', musicSuno)
 api.route('/subtitle-remover', subtitleRemover)
+api.route('/subtitle-erase', subtitleErase)
+api.route('/video-upscale', videoUpscale)
 api.route('/canvas', canvas)
+api.route('/director-desk', directorDesk)
 api.route('/upload', upload)
 api.route('/ai-configs', aiConfigs)
 api.route('/ai-providers', aiProviders)
@@ -150,13 +182,47 @@ applyApimartImageResolutionPricingMigration()
 migrateApimartPricingDisplayLabel()
 restoreVideoCreditPricingAfterFlat12()
 clampVideoCreditPricingToMinimum()
+fixSeedancePerSecondUnitFloor()
+applyOfficialSeedanceFast50Pricing()
+applyOfficialSeedanceFast51Pricing()
+applyOfficialSeedanceFastHd61Pricing()
+applyOfficialSeedanceStandard80Pricing()
+applyOfficialSeedance25Pricing()
+applyOfficialChannel2AlignXingyuemengPricing()
+applyJimengVip80Min800Pricing()
+applyJimengVipRefVideo130Pricing()
+applyJimengFast80OffPricing()
 applyXyqCreditPricingMigration()
+applyCozeCreditPricingMigration()
+applyFunshionCreditPricingMigration()
+applyXingyuemengCreditPricingMigration()
+applyAigcccCreditPricingMigration()
+applySunoMusic90Pricing()
+applyMinimaxMusic200Pricing()
+applyVideoUpscaleSeedvr26Pricing()
+applyVideoUpscaleFunshion2kPricing()
+applySubtitleErase4Pricing()
 migrateDefaultTeamIfNeeded()
 migrateChengmengBaseUrlIfNeeded()
 migrateChengmengModelIdsIfNeeded()
 migrateChengmengApiKeyIfNeeded()
+migrateChengmengChannel1PreferredEnableIfNeeded()
+migrateAistarslabChannel3PreferredEnableIfNeeded()
 resumeProcessingVideoTasks()
 resumeProcessingImageTasks()
+resumePendingMusicGenerations()
+resumePendingRunningHubTts()
+resumePendingVideoUpscaleJobs()
+resumePendingSubtitleEraseJobs()
+try {
+  const synced = syncOfficialVolcengineKeysFromEnv()
+  if (synced.created || synced.updated || synced.billing_updated) {
+    console.log(`通道2 火山 Key 已从 env 同步：新建 ${synced.created}，更新 ${synced.updated}，账单凭证 ${synced.billing_updated}`)
+  }
+} catch (err: any) {
+  console.warn('通道2 火山 Key env 同步失败:', err?.message || err)
+}
+startOfficialChannel2BillSyncWorker()
 
 function getLanAddresses() {
   const addrs: string[] = []
@@ -169,7 +235,7 @@ function getLanAddresses() {
   return addrs
 }
 
-console.log(`🚀 红果短剧 TS server on http://localhost:${port}`)
+console.log(`🚀 影光工场 TS server on http://localhost:${port}`)
 for (const ip of getLanAddresses()) {
   console.log(`   局域网: http://${ip}:${port}`)
 }

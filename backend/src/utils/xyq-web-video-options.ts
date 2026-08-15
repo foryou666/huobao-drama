@@ -1,10 +1,11 @@
 import {
   XYQ_DEFAULT_VIDEO_MODEL,
   XYQ_ENABLED_VIDEO_MODELS,
-  XYQ_REF_LIMITS,
+  isXyqPerSecondBilling,
   isXyqVideoModel,
   resolveXyqCreditCostDefault,
   resolveXyqVideoCreditAction,
+  xyqRefLimitsForModel,
   xyqVideoDurationBounds,
   xyqVideoModelLabel,
 } from '../constants/xyq-web.js'
@@ -65,6 +66,9 @@ export function listXyqVideoModelOptions() {
   return XYQ_ENABLED_VIDEO_MODELS.map(id => {
     const bounds = xyqVideoDurationBounds(id)
     const creditAction = resolveXyqVideoCreditAction(id)
+    const perSecond = isXyqPerSecondBilling(id)
+    const unitCost = resolveXyqCreditCostDefault(id)
+    const refLimits = xyqRefLimitsForModel(id)
     return {
       id,
       label: xyqVideoModelLabel(id),
@@ -73,7 +77,15 @@ export function listXyqVideoModelOptions() {
       duration_default: bounds.defaultSec,
       duration_options: bounds.options,
       credit_action: creditAction,
-      credit_cost_flat: resolveXyqCreditCostDefault(id),
+      billing_unit: perSecond ? 'second' : 'flat',
+      credit_cost_flat: perSecond ? null : unitCost,
+      credit_cost_per_second: perSecond ? unitCost : null,
+      ref_limits: {
+        images: refLimits.images,
+        audios: refLimits.audios,
+        videos: refLimits.videos,
+        max_total: refLimits.maxTotal,
+      },
       config_id: null,
     }
   })
@@ -157,14 +169,22 @@ function countRefsByType(body: Record<string, unknown>) {
 }
 
 export function assertXyqReferencesAllowed(body: Record<string, unknown>) {
+  const model = String(body.model || XYQ_DEFAULT_VIDEO_MODEL).trim()
+  const limits = xyqRefLimitsForModel(model)
   const counts = countRefsByType(body)
-  if (counts.images > XYQ_REF_LIMITS.images) {
-    throw new Error(`S通道5最多 ${XYQ_REF_LIMITS.images} 张参考图，当前 ${counts.images} 张`)
+  if (counts.images > limits.images) {
+    throw new Error(`S通道5最多 ${limits.images} 张参考图，当前 ${counts.images} 张`)
   }
-  if (counts.videos > XYQ_REF_LIMITS.videos) {
-    throw new Error(`S通道5最多 ${XYQ_REF_LIMITS.videos} 个参考视频，当前 ${counts.videos} 个`)
+  if (counts.videos > limits.videos) {
+    throw new Error(`S通道5最多 ${limits.videos} 个参考视频，当前 ${counts.videos} 个`)
   }
-  if (counts.audios > XYQ_REF_LIMITS.audios) {
-    throw new Error('S通道5暂不支持参考音频')
+  if (counts.audios > limits.audios) {
+    throw new Error(`S通道5最多 ${limits.audios} 个参考音频，当前 ${counts.audios} 个`)
+  }
+  if (limits.maxTotal != null) {
+    const total = counts.images + counts.videos + counts.audios
+    if (total > limits.maxTotal) {
+      throw new Error(`S 2.5 参考素材合计最多 ${limits.maxTotal} 个（图+视频+音频），当前 ${total} 个`)
+    }
   }
 }

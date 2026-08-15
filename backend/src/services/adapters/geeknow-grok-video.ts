@@ -22,6 +22,7 @@ import {
   normalizeGrokVideoSize,
   resolveGrokBillingSeconds,
 } from '../../constants/geeknow-grok.js'
+import { isGrokImagineModel } from '../../constants/narration-grok-channels.js'
 import { sanitizeUserFacingProviderError } from '../../utils/provider-error-sanitize.js'
 
 const MAX_GROK_REFERENCES = 6
@@ -100,6 +101,49 @@ function collectGrokReferencePaths(record: VideoGenerationRecord): string[] {
   return paths.slice(0, MAX_GROK_REFERENCES)
 }
 
+function readRefAsDataUri(ref: string): string | null {
+  const raw = String(ref || '').trim()
+  if (!raw) return null
+  if (raw.startsWith('data:')) return raw
+
+  const parsed = parseDataUrl(raw)
+  if (parsed) return `data:${parsed.mimeType};base64,${parsed.data}`
+
+  const staticPath = normalizeStaticPath(raw)
+  if (!staticPath || staticPath.startsWith('http://') || staticPath.startsWith('https://')) return null
+  const absPath = getAbsolutePath(staticPath)
+  if (!fs.existsSync(absPath)) return null
+  const buffer = fs.readFileSync(absPath)
+  const ext = path.extname(absPath).toLowerCase() || '.png'
+  const mimeType = ext === '.jpg' || ext === '.jpeg'
+    ? 'image/jpeg'
+    : ext === '.webp'
+      ? 'image/webp'
+      : 'image/png'
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
+}
+
+function buildGrokImagineJsonBody(config: AIConfig, record: VideoGenerationRecord): Record<string, unknown> {
+  const model = String(record.model || config.model || '').trim()
+  const body: Record<string, unknown> = {
+    model,
+    prompt: String(record.prompt || ''),
+    seconds: String(resolveGrokBillingSeconds(model, record.duration)),
+    aspect_ratio: mapGrokAspectRatio(record.aspectRatio),
+    resolution: normalizeGrokVideoSize(String(config.settings?.resolution || '')),
+  }
+
+  const dataUris = collectGrokReferencePaths(record)
+    .map(readRefAsDataUri)
+    .filter((item): item is string => !!item)
+    .slice(0, MAX_GROK_REFERENCES)
+
+  if (dataUris.length === 1) body.image = dataUris[0]
+  else if (dataUris.length > 1) body.images = dataUris
+
+  return body
+}
+
 function buildGrokFormData(config: AIConfig, record: VideoGenerationRecord): FormData {
   const model = String(record.model || config.model || '').trim()
   const form = new FormData()
@@ -121,12 +165,28 @@ export class GeeknowGrokVideoAdapter implements VideoProviderAdapter {
   provider = 'geeknow'
 
   buildGenerateRequest(config: AIConfig, record: VideoGenerationRecord): ProviderRequest {
+    const model = String(record.model || config.model || '').trim()
+    const url = joinProviderUrl(config.baseUrl, '/v1', '/videos')
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${config.apiKey}`,
+    }
+
+    if (isGrokImagineModel(model)) {
+      return {
+        url,
+        method: 'POST',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: buildGrokImagineJsonBody(config, record),
+      }
+    }
+
     return {
-      url: joinProviderUrl(config.baseUrl, '/v1', '/videos'),
+      url,
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-      },
+      headers,
       body: buildGrokFormData(config, record),
     }
   }
@@ -153,21 +213,30 @@ export class GeeknowGrokVideoAdapter implements VideoProviderAdapter {
 
   parsePollResponse(result: any): VideoPollResponse {
     const status = String(result?.status || '').toLowerCase()
-    if (status === 'completed' || status === 'succeeded') {
-      const videoUrl = result?.output?.url
-        || result?.video_url
-        || result?.url
-        || result?.detail?.url
-      return { status: 'completed', videoUrl }
+    const videoUrl = result?.output?.url
+      || result?.video_url
+      || result?.url
+      || result?.detail?.url
+      || result?.data?.url
+      || result?.result?.url
+      || (Array.isArray(result?.output) ? result.output[0]?.url : null)
+    if (status === 'completed' || status === 'succeeded' || status === 'success') {
+      return { status: 'completed', videoUrl: videoUrl || undefined }
     }
-    if (status === 'failed' || status === 'cancelled') {
-      const err = result?.error?.message || result?.error || 'Grok video generation failed'
+    if (status === 'failed' || status === 'cancelled' || status === 'canceled' || status === 'error') {
+      const err = result?.error?.message || result?.error || result?.message || 'Grok video generation failed'
       return {
         status: 'failed',
         error: sanitizeUserFacingProviderError(String(err)),
       }
     }
-    if (status === 'queued') return { status: 'pending' }
+    if (status === 'queued' || status === 'pending') return { status: 'pending' }
+    // OpenAI / NewAPI Imagine: in_progress
+    if (status === 'in_progress' || status === 'processing' || status === 'running') {
+      return { status: 'processing' }
+    }
+    // 部分上游完成态只给 url、status 为空或未知
+    if (videoUrl) return { status: 'completed', videoUrl }
     return { status: 'processing' }
   }
 

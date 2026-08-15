@@ -56,6 +56,9 @@ export interface VideoProviderAdapter {
 
   parsePollResponse(result: any): VideoPollResponse
 
+  /** 取消排队中的上游任务（可选；方舟 DELETE） */
+  buildCancelRequest?(config: AIConfig, taskId: string): ProviderRequest
+
   extractVideoUrl(result: any): string | null
 }
 
@@ -92,6 +95,7 @@ export interface ImageGenerationRecord {
 
 export interface VideoGenerationRecord {
   id: number
+  dramaId?: number | null
   model?: string | null
   prompt?: string | null
   referenceMode?: string | null
@@ -102,6 +106,7 @@ export interface VideoGenerationRecord {
   referencePayload?: string | null
   duration?: number | null
   aspectRatio?: string | null
+  resolution?: string | null
   providerChannel?: string | null
   style?: string | null
   // ... 其他字段
@@ -127,7 +132,7 @@ export interface VideoGenResponse {
 }
 
 export interface VideoPollResponse {
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired'
   videoUrl?: string
   error?: string
 }

@@ -39,24 +39,36 @@ export function resolveDisplayMediaUrl(raw: string | null | undefined): string |
     if (shouldPreferLocalStaticPath(path)) {
       return `/${path}`
     }
+
+    let localExists = false
+    try {
+      localExists = fs.existsSync(getAbsolutePath(path))
+    } catch {
+      localExists = false
+    }
+
     if (isOssConfigured()) {
       const mapped = lookupOssObjectKey(path)
-      if (mapped && !mapped.includes('unknown/asset/')) {
-        return signOssObjectKey(mapped)
-      }
-
-      let localExists = false
-      try {
-        localExists = fs.existsSync(getAbsolutePath(path))
-      } catch {
-        localExists = false
+      if (mapped) {
+        // 早期兜底 key（unknown/asset/...）在桶里往往仍有实体；
+        // 仅当本地文件不存在时签发，避免误用失效映射覆盖本地可读文件。
+        const isUnknownFallback = mapped.includes('unknown/asset/')
+        if (!isUnknownFallback || !localExists) {
+          return signOssObjectKey(mapped)
+        }
       }
 
       // 本地有文件 → 同源 static，避免对未上传 OSS 的路径签发无效 URL
       if (localExists) {
         return `/${path}`
       }
+      // 无 OSS 映射且本地也不存在（常见于早期未生成的 thumbs）→ 不返回假路径
+      return null
     }
+    if (localExists) {
+      return `/${path}`
+    }
+    return null
   }
 
   return `/${path}`

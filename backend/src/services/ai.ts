@@ -5,9 +5,16 @@ import { db, schema } from '../db/index.js'
 import { eq } from 'drizzle-orm'
 import { buildJimengVirtualConfig } from './jimeng-web-video.js'
 import { buildXyqVirtualConfig } from './xyq-web-video.js'
+import { buildCozeVirtualConfig } from './coze-web-video.js'
+import { buildFunshionVirtualConfig } from './funshion-web-video.js'
 import { buildDoubaoTrainingVirtualConfig } from './doubao-training-video.js'
 import { logTaskProgress, logTaskWarn } from '../utils/task-logger.js'
 import { joinProviderUrl } from './adapters/url.js'
+import {
+  APIMART_DEFAULT_BASE_URL,
+  APIMART_NARRATION_TEXT_MODEL,
+  apimartSettingsWithDefaultMirrors,
+} from '../constants/apimart.js'
 
 export type ServiceType = 'text' | 'image' | 'video' | 'audio'
 
@@ -45,7 +52,14 @@ function rowToAIConfig(row: typeof schema.aiServiceConfigs.$inferSelect): AIConf
 export function getTextProviderBaseUrl(config: AIConfig) {
   const provider = config.provider.toLowerCase()
 
-  if (provider === 'openai' || provider === 'openrouter' || provider === 'chatfire' || provider === 'geeknow' || provider === 'qilingze') {
+  if (
+    provider === 'openai'
+    || provider === 'openrouter'
+    || provider === 'chatfire'
+    || provider === 'geeknow'
+    || provider === 'qilingze'
+    || provider === 'apimart'
+  ) {
     return joinProviderUrl(config.baseUrl, '/v1', '')
   }
 
@@ -99,6 +113,53 @@ export function getTextConfig(): AIConfig {
   return config
 }
 
+/**
+ * 解说漫专用文本配置：优先 APIMart ChatGPT（不影响全局 Agent 文本通道）。
+ * 若尚未单独配置 text/apimart，则复用 APIMart 图片通道的 Key + 解说默认模型。
+ */
+export function getNarrationTextConfig(): AIConfig {
+  const apimartTextRows = db.select().from(schema.aiServiceConfigs)
+    .all()
+    .filter(r => r.serviceType === 'text' && String(r.provider || '').toLowerCase() === 'apimart' && r.isActive)
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+
+  if (apimartTextRows[0]) {
+    const config = rowToAIConfig(apimartTextRows[0])
+    if (!config.model) {
+      config.model = APIMART_NARRATION_TEXT_MODEL
+      config.models = [APIMART_NARRATION_TEXT_MODEL]
+    }
+    logTaskProgress('AIConfig', 'narration-text-config-selected', {
+      configId: config.id,
+      provider: config.provider,
+      model: config.model,
+      source: 'apimart-text',
+    })
+    return config
+  }
+
+  const image = getApimartImageConfig()
+  if (image?.apiKey) {
+    const config: AIConfig = {
+      provider: 'apimart',
+      baseUrl: image.baseUrl || APIMART_DEFAULT_BASE_URL,
+      apiKey: image.apiKey,
+      model: APIMART_NARRATION_TEXT_MODEL,
+      models: [APIMART_NARRATION_TEXT_MODEL],
+      settings: image.settings || apimartSettingsWithDefaultMirrors(),
+    }
+    logTaskProgress('AIConfig', 'narration-text-config-selected', {
+      provider: config.provider,
+      model: config.model,
+      source: 'apimart-image-key',
+    })
+    return config
+  }
+
+  logTaskWarn('AIConfig', 'narration-text-fallback-global', {})
+  return getTextConfig()
+}
+
 export function getAudioConfig(): AIConfig {
   const config = getActiveConfig('audio')
   if (!config) throw new Error('No active audio AI config — 请在设置中添加音频服务')
@@ -145,6 +206,12 @@ export function resolveVideoTaskConfig(record: {
   }
   if (provider === 'xyq_web') {
     return buildXyqVirtualConfig()
+  }
+  if (provider === 'coze_web') {
+    return buildCozeVirtualConfig()
+  }
+  if (provider === 'funshion_web') {
+    return buildFunshionVirtualConfig()
   }
   if (provider === 'doubao_training') {
     return buildDoubaoTrainingVirtualConfig()
@@ -204,16 +271,21 @@ export function getGeeknowImageFallbackConfig(excludeProvider?: string | null): 
   return row ? rowToAIConfig(row) : null
 }
 
-/** 橙盟余额不足时，取另一条视频配置作为备用 Key（通常为新账号） */
-export function getFallbackChengmengVideoConfig(excludeConfigId?: number | null): AIConfig | null {
+/** 橙盟余额不足时，取其它橙盟视频配置作为备用 Key（优先高 priority / 新 id） */
+export function listChengmengVideoFallbackConfigs(excludeConfigId?: number | null): AIConfig[] {
   const exclude = Number(excludeConfigId)
-  const rows = db.select().from(schema.aiServiceConfigs)
+  return db.select().from(schema.aiServiceConfigs)
     .all()
     .filter(r => r.serviceType === 'video' && r.provider === 'chengmeng')
     .filter(r => !Number.isFinite(exclude) || r.id !== exclude)
-    .sort((a, b) => (b.id || 0) - (a.id || 0))
-  const row = rows[0]
-  return row ? rowToAIConfig(row) : null
+    .filter(r => String(r.apiKey || '').trim() && r.apiKey !== '********')
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (b.id || 0) - (a.id || 0))
+    .map(rowToAIConfig)
+}
+
+/** @deprecated 使用 listChengmengVideoFallbackConfigs + 鉴权校验 */
+export function getFallbackChengmengVideoConfig(excludeConfigId?: number | null): AIConfig | null {
+  return listChengmengVideoFallbackConfigs(excludeConfigId)[0] || null
 }
 
 /** 备用 Key 接管后，将其设为唯一启用的橙盟视频配置 */

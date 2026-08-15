@@ -1,114 +1,73 @@
-import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
-import { v4 as uuid } from 'uuid'
-import { normalizeIndexTts2Voice } from './narration-voice.js'
-import { IndexTTS2Adapter, isGradioIndexTts2Url, synthesizeIndexTts2Gradio } from './adapters/indextts2.js'
-import { resolveIndexTts2RuntimeConfig } from './indextts2-config.js'
-import type { IndexTts2EmotionOptions } from './adapters/indextts2-gradio.js'
-import { trySyncStaticToOss } from '../utils/oss-entity-sync.js'
-import { getAudioDurationSeconds } from '../utils/audio-duration.js'
+import { findNarrationVoicePreset } from '../constants/narration-voices.js'
+import {
+  findCachedPresetVoicePath,
+  isRunningHubVoiceRef,
+} from './narration-voice.js'
+import {
+  generateRunningHubIndexTts,
+  type RunningHubEmotionVector,
+} from './runninghub-indextts2.js'
+import type { StudioTtsVoiceInput } from './tts-studio.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const STORAGE_ROOT = process.env.STORAGE_PATH || path.resolve(__dirname, '../../../data/static')
+export { findCachedPresetVoicePath, isRunningHubVoiceRef }
 
-const indexTts2Adapter = new IndexTTS2Adapter()
+export function resolveNarrationVoiceInput(voice?: string | null): StudioTtsVoiceInput {
+  const v = String(voice || '').trim()
+  if (!v) throw new Error('未选择旁白音色')
 
-async function saveAudioBuffer(buffer: Buffer, format = 'mp3') {
-  const audioDir = path.join(STORAGE_ROOT, 'audio')
-  fs.mkdirSync(audioDir, { recursive: true })
-  const filename = `${uuid()}.${format}`
-  const filePath = path.join(audioDir, filename)
-  fs.writeFileSync(filePath, buffer)
-  const relativePath = `static/audio/${filename}`
-  await trySyncStaticToOss(relativePath)
-  return relativePath
+  const assetMatch = /^asset:(\d+)$/i.exec(v)
+  if (assetMatch) {
+    return { voice_asset_id: Number(assetMatch[1]) }
+  }
+
+  if (/^https?:\/\//i.test(v)) {
+    return { voice_path: v }
+  }
+
+  const normalizedPath = v.replace(/^\/+/, '')
+  if (normalizedPath.startsWith('static/') || path.isAbsolute(v)) {
+    return { voice_path: normalizedPath.startsWith('static/') ? normalizedPath : v }
+  }
+
+  const preset = findNarrationVoicePreset(v)
+  const voiceKey = preset?.voice_id || v
+  const cached = findCachedPresetVoicePath(voiceKey)
+  if (cached) {
+    return { voice_path: cached, voice_id: voiceKey }
+  }
+
+  const label = preset?.name || voiceKey
+  throw new Error(
+    `音色「${label}」缺少参考音频。RunningHub IndexTTS2 需从音色库选择参考音色，`
+    + '不再使用 Gradio 内置 voice_01~12。',
+  )
 }
 
-async function readTtsAudioBuffer(resp: Response, adapter: IndexTTS2Adapter) {
-  const contentType = resp.headers.get('content-type') || ''
-
-  if (contentType.includes('audio') || contentType.includes('octet-stream')) {
-    const buffer = Buffer.from(await resp.arrayBuffer())
-    const ext = contentType.includes('wav') ? 'wav' : 'mp3'
-    return { buffer, format: ext }
-  }
-
-  const result = await resp.json()
-  const parsed = adapter.parseResponse(result) as ReturnType<IndexTTS2Adapter['parseResponse']> & { audioUrl?: string | null }
-
-  if (parsed.audioUrl) {
-    const audioResp = await fetch(parsed.audioUrl)
-    if (!audioResp.ok) {
-      const errText = await audioResp.text()
-      throw new Error(`IndexTTS2 下载音频失败 ${audioResp.status}: ${errText.slice(0, 200)}`)
-    }
-    const buffer = Buffer.from(await audioResp.arrayBuffer())
-    const ct = audioResp.headers.get('content-type') || ''
-    const format = parsed.format || (ct.includes('wav') ? 'wav' : 'mp3')
-    return { buffer, format }
-  }
-
-  if (!parsed.audioHex) throw new Error('IndexTTS2 响应无音频数据')
-  return {
-    buffer: Buffer.from(parsed.audioHex, 'hex'),
-    format: parsed.format || 'mp3',
-  }
-}
-
-/** 使用 IndexTTS2 API 合成单段旁白，返回相对路径与时长 */
+/** 使用 RunningHub IndexTTS2 合成单段旁白，返回相对路径与时长 */
 export async function generateNarrationTTS(opts: {
   text: string
   voice?: string
   configId?: number | null
-  emotion?: IndexTts2EmotionOptions
+  emotionVector?: RunningHubEmotionVector
+  emotionWeight?: number
 }): Promise<{ path: string; durationSec: number }> {
   const text = String(opts.text || '').trim()
   if (!text) throw new Error('旁白文本为空')
 
-  const config = resolveIndexTts2RuntimeConfig(opts.configId)
-  const voice = opts.voice || String((config as any).settings?.default_voice || 'voice_01')
-  const rawVoice = String(voice).trim()
-  const usePathVoice = /^https?:\/\//i.test(rawVoice)
-    || rawVoice.startsWith('static/')
-    || path.isAbsolute(rawVoice)
-  const normalizedVoice = usePathVoice ? rawVoice : normalizeIndexTts2Voice(rawVoice, rawVoice)
+  // configId 保留兼容字段；解说漫统一走 RunningHub 通道
+  void opts.configId
 
-  let buffer: Buffer
-  let format: string
+  const voiceInput = resolveNarrationVoiceInput(opts.voice)
+  const result = await generateRunningHubIndexTts({
+    text,
+    voice: voiceInput,
+    emotionVector: opts.emotionVector,
+    emotionWeight: opts.emotionWeight ?? 0.8,
+  })
 
-  if (isGradioIndexTts2Url(config.baseUrl)) {
-    const { audioUrl, format: gradioFormat } = await synthesizeIndexTts2Gradio({
-      baseUrl: config.baseUrl,
-      text,
-      voice: normalizedVoice,
-      emotion: opts.emotion,
-    })
-    const audioResp = await fetch(audioUrl)
-    if (!audioResp.ok) {
-      const errText = await audioResp.text()
-      throw new Error(`IndexTTS2 下载音频失败 ${audioResp.status}: ${errText.slice(0, 200)}`)
-    }
-    buffer = Buffer.from(await audioResp.arrayBuffer())
-    format = gradioFormat
-  } else {
-    const { url, method, headers, body } = indexTts2Adapter.buildGenerateRequest(config, {
-      text,
-      voice: normalizedVoice,
-      model: config.model,
-    })
-    const resp = await fetch(url, {
-      method,
-      headers,
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) {
-      const errText = await resp.text()
-      throw new Error(`IndexTTS2 API ${resp.status}: ${errText.slice(0, 300)}`)
-    }
-    ;({ buffer, format } = await readTtsAudioBuffer(resp, indexTts2Adapter))
+  return {
+    path: result.path,
+    durationSec: result.durationSec > 0 ? result.durationSec : 5,
   }
-  const relativePath = await saveAudioBuffer(buffer, format)
-  const durationSec = await getAudioDurationSeconds(relativePath)
-  return { path: relativePath, durationSec: durationSec > 0 ? durationSec : 5 }
 }

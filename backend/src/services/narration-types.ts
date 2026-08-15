@@ -8,8 +8,15 @@ export type NarrationCharacter = {
   image_url?: string
   image_generation_id?: number
   image_status?: 'generating' | 'completed' | 'failed'
-  /** TTS 音色 ID，全书固定不变 */
+  /** TTS 音色：asset:ID / static/...；旧 Gradio voice_01 已弃用 */
   voice_id?: string
+  /** 抽取/推断的音色画像，用于自动匹配音色库 */
+  voice_profile?: {
+    gender?: '男' | '女' | '中性'
+    age?: '少年' | '青年' | '中年' | '老年' | '未知'
+    tone?: string
+    desc?: string
+  }
 }
 
 export type NarrationScene = {

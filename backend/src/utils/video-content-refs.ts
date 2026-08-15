@@ -9,6 +9,7 @@ import { resolveSceneImageForStoryboard } from './scene-image-variants.js'
 import {
   resolvePropImageForStoryboard,
 } from './prop-image-variants.js'
+import { resolveCharacterVideoImageUrl } from '../services/seedance-portrait.js'
 
 export interface PromptImageLabel {
   index: number
@@ -181,11 +182,12 @@ export function buildReferenceCandidates(
   for (const charId of getStoryboardCharacterIds(sb.id)) {
     const char = chars.find(row => row.id === charId)
     if (!char) continue
+    const localUrl = resolveCharacterImageForStoryboard(char, characterImageRefs)
     items.push({
       key: `char:${char.id}`,
       source: 'character',
       label: char.name,
-      url: resolveCharacterImageForStoryboard(char, characterImageRefs),
+      url: resolveCharacterVideoImageUrl(char, localUrl),
       charId: char.id,
     })
   }

@@ -1,6 +1,6 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db, schema } from '../db/index.js'
-import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, type CreditAction, isVideoCreditAction, applyMinUserVideoCreditCost, CHENGMENG_SEEDANCE_2_0_CREDIT_COST } from '../constants/credit-actions.js'
+import { DEFAULT_CREDIT_PRICING, DEFAULT_USER_CREDITS, CREDIT_ACTIONS, VIDEO_BILLING_SECONDS, OFFICIAL_SEEDANCE_FAST_CREDITS_PER_SECOND, OFFICIAL_SEEDANCE_FAST_HD_CREDITS_PER_SECOND, OFFICIAL_SEEDANCE_2_0_CREDITS_PER_SECOND, OFFICIAL_SEEDANCE_2_5_CREDITS_PER_SECOND, type CreditAction, isVideoCreditAction, applyMinUserVideoCreditCost, CHENGMENG_SEEDANCE_2_0_CREDIT_COST } from '../constants/credit-actions.js'
 import { AISTARSLAB_DEFAULT_CREDIT_COST, isAistarslabPerModelCreditAction } from '../constants/aistarslab.js'
 import { CHENGMENG_MODEL_70_CREDIT_COST, isChengmengDynamicCreditAction } from '../constants/chengmeng.js'
 import { now } from '../utils/response.js'
@@ -8,12 +8,33 @@ import { getAppMeta, setAppMeta } from '../db/index.js'
 
 const CREDIT_PRICING_MIGRATION_KEY = 'credit_pricing_defaults_v2'
 const SEEDANCE_PER_SECOND_MIGRATION_KEY = 'credit_pricing_seedance_per_second_v1'
+const SEEDANCE_UNIT_FLOOR_FIX_KEY = 'credit_pricing_seedance_unit_floor_fix_v1'
+const OFFICIAL_SEEDANCE_FAST_50_KEY = 'credit_pricing_official_seedance_fast_50_v1'
+const OFFICIAL_SEEDANCE_FAST_51_KEY = 'credit_pricing_official_seedance_fast_51_v1'
+const OFFICIAL_SEEDANCE_FAST_HD_61_KEY = 'credit_pricing_official_seedance_fast_hd_61_v1'
+const OFFICIAL_SEEDANCE_2_0_80_KEY = 'credit_pricing_official_seedance_2_0_80_v1'
+const OFFICIAL_SEEDANCE_2_5_130_KEY = 'credit_pricing_official_seedance_2_5_130_v1'
+const OFFICIAL_SEEDANCE_ALIGN_XINGYUEMENG_KEY = 'credit_pricing_official_align_xingyuemeng_v1'
 const JIMENG_PRICING_LABEL_KEY = 'credit_pricing_jimeng_label_v1'
 const JIMENG_PER_MODEL_PRICING_KEY = 'credit_pricing_jimeng_per_model_v1'
+const JIMENG_PER_SECOND_MIGRATION_KEY = 'credit_pricing_jimeng_per_second_60_65_v3'
+/** 通道4 VIP：65→80 积分/秒，并启用单笔最低 800 */
+const JIMENG_VIP_80_MIN800_PRICING_KEY = 'credit_pricing_jimeng_vip_80_min800_v1'
+/** 通道4 VIP：有参考视频按 130/秒（取消最低 800） */
+const JIMENG_VIP_REF_VIDEO_130_PRICING_KEY = 'credit_pricing_jimeng_vip_ref_video_130_v1'
+/** 通道4 Fast：标价 60 · 8 折实收 48 */
+const JIMENG_FAST_80_OFF_PRICING_KEY = 'credit_pricing_jimeng_fast_80_off_v1'
+const JIMENG_SEEDANCE_25_PRICING_KEY = 'credit_pricing_jimeng_seedance25_v1'
+/** 按 VIP 未打折成本价：通道4/5 S2.5 = 130 积分/秒（39 元/30s） */
+const SEEDANCE_25_COST_BASED_PRICING_KEY = 'credit_pricing_seedance25_cost_based_130_130_v3'
 const AISTARSLAB_PRICING_FLAT_FIX_KEY = 'credit_pricing_aistarslab_flat_fix_v1'
 const AISTARSLAB_REF_VIDEO_PRICING_LABEL_KEY = 'credit_pricing_aistarslab_ref_video_v1'
 const MIN_VIDEO_CREDIT_FLOOR_KEY = 'credit_pricing_min_video_750_v1'
 const XYQ_PRICING_KEY = 'credit_pricing_xyq_300_500_750_900_v1'
+const COZE_PRICING_KEY = 'credit_pricing_coze_50_65_v1'
+const FUNSHION_PRICING_KEY = 'credit_pricing_funshion_60_80_v1'
+const XINGYUEMENG_PRICING_KEY = 'credit_pricing_xingyuemeng_official_estimate_v5'
+const AIGCCC_PRICING_KEY = 'credit_pricing_aigccc_480_620_v2'
 
 const IMAGE_12_PRICING_KEY = 'credit_pricing_image_12_v1'
 const NANO_BANANA_2_PRICING_KEY = 'credit_pricing_nano_banana_19_v1'
@@ -21,6 +42,11 @@ const APIMART_IMAGE_PRICING_KEY = 'credit_pricing_apimart_25_v1'
 const APIMART_IMAGE_LABEL_KEY = 'credit_pricing_apimart_label_v2'
 const APIMART_IMAGE_RESOLUTION_PRICING_KEY = 'credit_pricing_apimart_1k8_2k24_v2'
 const RESTORE_VIDEO_AFTER_FLAT12_KEY = 'credit_pricing_restore_video_after_flat12_v1'
+const SUNO_MUSIC_90_PRICING_KEY = 'credit_pricing_suno_music_90_v1'
+const MINIMAX_MUSIC_200_PRICING_KEY = 'credit_pricing_minimax_music_200_v1'
+const VIDEO_UPSCALE_SEEDVR2_6_PRICING_KEY = 'credit_pricing_video_upscale_seedvr2_6_v2'
+const VIDEO_UPSCALE_FUNSHION_2K_PRICING_KEY = 'credit_pricing_video_upscale_funshion_2k_v1'
+const SUBTITLE_ERASE_4_PRICING_KEY = 'credit_pricing_subtitle_erase_4_v1'
 
 const IMAGE_CREDIT_ACTIONS: CreditAction[] = [
   CREDIT_ACTIONS.IMAGE_GENERATE,
@@ -154,6 +180,68 @@ export function applyXyqCreditPricingMigration() {
   setAppMeta(XYQ_PRICING_KEY, now())
 }
 
+/** S通道7：Fast 50 / 满血 65 积分/秒 */
+export function applyCozeCreditPricingMigration() {
+  if (getAppMeta(COZE_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_COZE_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_COZE_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(COZE_PRICING_KEY, now())
+}
+
+/** S通道8：Fast 60 / 满血 80 积分/秒 */
+export function applyFunshionCreditPricingMigration() {
+  if (getAppMeta(FUNSHION_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_FUNSHION_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_FUNSHION_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(FUNSHION_PRICING_KEY, now())
+}
+
+/** S通道9：按星月梦上游价表（时长×清晰度）一口价；管理端单价仅作参考 */
+export function applyXingyuemengCreditPricingMigration() {
+  if (getAppMeta(XINGYUEMENG_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_XINGYUEMENG_SEEDANCE_2_5,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XINGYUEMENG_SEEDANCE_2_0_MINI,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XINGYUEMENG_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XINGYUEMENG_SEEDANCE_2_0_PRO,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(XINGYUEMENG_PRICING_KEY, now())
+}
+
+/** S通道6：Fast 480 / 满血 620 积分/条 */
+export function applyAigcccCreditPricingMigration() {
+  if (getAppMeta(AIGCCC_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_AIGCCC_MINI,
+    CREDIT_ACTIONS.VIDEO_GENERATE_AIGCCC_PRO,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(AIGCCC_PRICING_KEY, now())
+}
+
 /** 从旧即梦统一定价项复制单价到分项模型定价 */
 function migrateJimengPerModelPricing() {
   if (getAppMeta(JIMENG_PER_MODEL_PRICING_KEY)) return
@@ -264,6 +352,186 @@ export function migrateSeedancePricingToPerSecond() {
   setAppMeta(SEEDANCE_PER_SECOND_MIGRATION_KEY, ts)
 }
 
+/**
+ * 修复：全局「视频最低 750」曾误抬升通道2「每秒单价」为 750。
+ * 恢复为默认每秒单价（100），与按秒计费语义一致。
+ */
+export function fixSeedancePerSecondUnitFloor() {
+  if (getAppMeta(SEEDANCE_UNIT_FLOOR_FIX_KEY)) return
+  const ts = now()
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+    // 仅纠正被抬到保底价的「单价」（≥750 的按秒项几乎一定是误伤）
+    if (row && (row.cost ?? 0) >= 750) {
+      updateCreditPricing(action, def.defaultCost, def.label, def.description)
+    } else if (!row) {
+      updateCreditPricing(action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(SEEDANCE_UNIT_FLOOR_FIX_KEY, ts)
+}
+
+/** Suno 配乐：按次 90 积分（历史迁移，保留） */
+export function applySunoMusic90Pricing() {
+  if (getAppMeta(SUNO_MUSIC_90_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.MUSIC_GENERATE_SUNO)
+  updateCreditPricing(
+    CREDIT_ACTIONS.MUSIC_GENERATE_SUNO,
+    def?.defaultCost ?? 90,
+    def?.label || 'Suno 配乐',
+    def?.description || 'APIMart Suno 配乐生成（按次，默认 90 积分；一次通常返回 2 条候选）',
+  )
+  setAppMeta(SUNO_MUSIC_90_PRICING_KEY, now())
+}
+
+/** MiniMax 配乐：按次 200 积分（对齐上游约 1 元/次） */
+export function applyMinimaxMusic200Pricing() {
+  if (getAppMeta(MINIMAX_MUSIC_200_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.MUSIC_GENERATE_SUNO)
+  updateCreditPricing(
+    CREDIT_ACTIONS.MUSIC_GENERATE_SUNO,
+    def?.defaultCost ?? 200,
+    def?.label || 'MiniMax 配乐',
+    def?.description || 'MiniMax 官方 music_generation 配乐（按次，默认 200 积分；上游约 1 元/次）',
+  )
+  setAppMeta(MINIMAX_MUSIC_200_PRICING_KEY, now())
+}
+
+/** 视频超分：暂定 6 积分/秒（15s=90） */
+export function applyVideoUpscaleSeedvr26Pricing() {
+  if (getAppMeta(VIDEO_UPSCALE_SEEDVR2_6_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_UPSCALE_SEEDVR2)
+  const cost = def?.defaultCost ?? 6
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_UPSCALE_SEEDVR2,
+    cost,
+    def?.label || '视频超分',
+    def?.description || `工具箱 · 视频超分（按源视频秒数，默认 ${cost} 积分/秒；15s=90）`,
+  )
+  setAppMeta(VIDEO_UPSCALE_SEEDVR2_6_PRICING_KEY, now())
+}
+
+/** 通道8 橙星超分 2K：按次 40 积分 */
+export function applyVideoUpscaleFunshion2kPricing() {
+  if (getAppMeta(VIDEO_UPSCALE_FUNSHION_2K_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_UPSCALE_FUNSHION_2K)
+  const cost = def?.defaultCost ?? 40
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_UPSCALE_FUNSHION_2K,
+    cost,
+    def?.label || '通道8超分2K',
+    def?.description || `通道8 · 橙星后处理超分固定 2K（按次，默认 ${cost} 积分）`,
+  )
+  setAppMeta(VIDEO_UPSCALE_FUNSHION_2K_PRICING_KEY, now())
+}
+
+/** 去字幕/去水印：暂定 4 积分/秒 */
+export function applySubtitleErase4Pricing() {
+  if (getAppMeta(SUBTITLE_ERASE_4_PRICING_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.SUBTITLE_ERASE)
+  const cost = def?.defaultCost ?? 4
+  updateCreditPricing(
+    CREDIT_ACTIONS.SUBTITLE_ERASE,
+    cost,
+    def?.label || '去字幕/去水印',
+    def?.description || `工具箱 · RunningHub 去字幕/去水印（按源视频秒数，默认 ${cost} 积分/秒）`,
+  )
+  setAppMeta(SUBTITLE_ERASE_4_PRICING_KEY, now())
+}
+
+/** 通道2 Fast：统一按秒 50 积分 */
+export function applyOfficialSeedanceFast50Pricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_FAST_50_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST)
+  const cost = def?.defaultCost ?? OFFICIAL_SEEDANCE_FAST_CREDITS_PER_SECOND
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+    cost,
+    def?.label || '官方 Seedance 2.0 Fast（通道2）',
+    def?.description || `通道2 锁定 Fast 480p，${cost} 积分/秒`,
+  )
+  setAppMeta(OFFICIAL_SEEDANCE_FAST_50_KEY, now())
+}
+
+/** 通道2 Fast：统一按秒 51 积分 */
+export function applyOfficialSeedanceFast51Pricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_FAST_51_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST)
+  const cost = def?.defaultCost ?? OFFICIAL_SEEDANCE_FAST_CREDITS_PER_SECOND
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+    cost,
+    def?.label || '官方 Seedance 2.0 Fast 普通（通道2）',
+    def?.description || `通道2 Fast · 普通 480p，${cost} 积分/秒`,
+  )
+  setAppMeta(OFFICIAL_SEEDANCE_FAST_51_KEY, now())
+}
+
+/** 通道2 Fast 超分 720p：61 积分/秒 */
+export function applyOfficialSeedanceFastHd61Pricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_FAST_HD_61_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST_HD)
+  const cost = def?.defaultCost ?? OFFICIAL_SEEDANCE_FAST_HD_CREDITS_PER_SECOND
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST_HD,
+    cost,
+    def?.label || '官方 Seedance 2.0 Fast 超分（通道2）',
+    def?.description || `通道2 Fast · 超分 720p，${cost} 积分/秒`,
+  )
+  setAppMeta(OFFICIAL_SEEDANCE_FAST_HD_61_KEY, now())
+}
+
+/** 通道2 Seedance 2.0（标准版 · 480p）：80 积分/秒 */
+export function applyOfficialSeedanceStandard80Pricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_2_0_80_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0)
+  const cost = def?.defaultCost ?? OFFICIAL_SEEDANCE_2_0_CREDITS_PER_SECOND
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0,
+    cost,
+    def?.label || '官方 Seedance 2.0',
+    def?.description || `通道2 · Seedance 2.0 480p，${cost} 积分/秒`,
+  )
+  setAppMeta(OFFICIAL_SEEDANCE_2_0_80_KEY, now())
+}
+
+/** 通道2 Seedance 2.5：130 积分/秒 */
+export function applyOfficialSeedance25Pricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_2_5_130_KEY)) return
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_5)
+  const cost = def?.defaultCost ?? OFFICIAL_SEEDANCE_2_5_CREDITS_PER_SECOND
+  updateCreditPricing(
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_5,
+    cost,
+    def?.label || '官方 Seedance 2.5（通道2）',
+    def?.description || `通道2 · Seedance 2.5（4–30 秒），${cost} 积分/秒`,
+  )
+  setAppMeta(OFFICIAL_SEEDANCE_2_5_130_KEY, now())
+}
+
+/** 通道2：对齐通道9 时长×分辨率一口价，并写入 Mini */
+export function applyOfficialChannel2AlignXingyuemengPricing() {
+  if (getAppMeta(OFFICIAL_SEEDANCE_ALIGN_XINGYUEMENG_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_MINI,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_0_FAST_HD,
+    CREDIT_ACTIONS.VIDEO_GENERATE_SEEDANCE_2_5,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(OFFICIAL_SEEDANCE_ALIGN_XINGYUEMENG_KEY, now())
+}
+
 export interface ChargeContext {
   summary?: string
   dramaId?: number
@@ -284,8 +552,132 @@ export interface ChargeResult {
   message?: string
 }
 
+/** 通道4 VIP：80 积分/秒（覆盖 15s 上游 210）；短时长另有代码层最低 800 */
+export function applyJimengVip80Min800Pricing() {
+  if (getAppMeta(JIMENG_VIP_80_MIN800_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(JIMENG_VIP_80_MIN800_PRICING_KEY, now())
+}
+
+/** 通道4 VIP：有参考视频 130/秒；刷新文案并取消最低 800 */
+export function applyJimengVipRefVideo130Pricing() {
+  if (getAppMeta(JIMENG_VIP_REF_VIDEO_130_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(JIMENG_VIP_REF_VIDEO_130_PRICING_KEY, now())
+}
+
+/** 通道4 Fast：60→48（8折），并刷新兼容项文案 */
+export function applyJimengFast80OffPricing() {
+  if (getAppMeta(JIMENG_FAST_80_OFF_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+  }
+  setAppMeta(JIMENG_FAST_80_OFF_PRICING_KEY, now())
+}
+
+/** 通道4：按秒计费（Fast VIP 标价 60·实收 48 / VIP 80 积分/秒） */
+export function migrateJimengPricingToPerSecond() {
+  if (getAppMeta(JIMENG_PER_SECOND_MIGRATION_KEY)) return
+  const ts = now()
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0_FAST,
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_0,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (!def) continue
+    const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+    if (row) {
+      db.update(schema.creditPricing)
+        .set({
+          cost: def.defaultCost,
+          label: def.label,
+          description: def.description,
+          updatedAt: ts,
+        })
+        .where(eq(schema.creditPricing.action, action))
+        .run()
+    } else {
+      db.insert(schema.creditPricing).values({
+        action: def.action,
+        label: def.label,
+        description: def.description,
+        cost: def.defaultCost,
+        updatedAt: ts,
+      }).run()
+    }
+  }
+  setAppMeta(JIMENG_PER_SECOND_MIGRATION_KEY, ts)
+}
+
+/** 通道4：补齐 Seedance 2.5 按秒定价项 */
+function migrateJimengSeedance25Pricing() {
+  if (getAppMeta(JIMENG_SEEDANCE_25_PRICING_KEY)) return
+  const ts = now()
+  const action = CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_5
+  const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+  if (!def) return
+  const [row] = db.select().from(schema.creditPricing).where(eq(schema.creditPricing.action, action)).all()
+  if (!row) {
+    db.insert(schema.creditPricing).values({
+      action: def.action,
+      label: def.label,
+      description: def.description,
+      cost: def.defaultCost,
+      updatedAt: ts,
+    }).run()
+  } else if (!row.cost || row.cost <= 0) {
+    db.update(schema.creditPricing)
+      .set({
+        cost: def.defaultCost,
+        label: def.label,
+        description: def.description,
+        updatedAt: ts,
+      })
+      .where(eq(schema.creditPricing.action, action))
+      .run()
+  }
+  setAppMeta(JIMENG_SEEDANCE_25_PRICING_KEY, ts)
+}
+
+/** 通道4/5 S 2.5：按 VIP 未打折成本价重定价（均为 130 积分/秒 = 39 元/30s），覆盖旧默认 */
+function migrateSeedance25CostBasedPricing() {
+  if (getAppMeta(SEEDANCE_25_COST_BASED_PRICING_KEY)) return
+  for (const action of [
+    CREDIT_ACTIONS.VIDEO_GENERATE_JIMENG_SEEDANCE_2_5,
+    CREDIT_ACTIONS.VIDEO_GENERATE_XYQ_SEEDANCE_2_5,
+  ]) {
+    const def = DEFAULT_CREDIT_PRICING.find(item => item.action === action)
+    if (def) {
+      updateCreditPricing(def.action, def.defaultCost, def.label, def.description)
+    }
+  }
+  setAppMeta(SEEDANCE_25_COST_BASED_PRICING_KEY, now())
+}
+
 export function seedCreditPricing() {
   migrateSeedancePricingToPerSecond()
+  fixSeedancePerSecondUnitFloor()
   migrateJimengPricingLabel()
   migrateAistarslabPricingFlat()
   migrateAistarslabRefVideoPricingLabel()
@@ -302,6 +694,10 @@ export function seedCreditPricing() {
     }).run()
   }
   migrateJimengPerModelPricing()
+  migrateJimengPricingToPerSecond()
+  migrateJimengSeedance25Pricing()
+  migrateSeedance25CostBasedPricing()
+  applyAigcccCreditPricingMigration()
 }
 
 /** 一次性将已有库中的积分单价同步到最新默认值（不覆盖管理员后续手动调整前的首次迁移） */
@@ -385,7 +781,7 @@ export function chargeCredits(userId: number, action: string, context: ChargeCon
         ok: false,
         cost,
         balance,
-        message: `积分不足：本次需要 ${cost} 积分，当前余额 ${balance} 积分`,
+        message: `本站积分不足：本次需要 ${cost} 积分，当前余额 ${balance} 积分（与上游厂商余额无关）`,
       }
     }
 

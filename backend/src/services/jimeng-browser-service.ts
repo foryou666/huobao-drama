@@ -10,19 +10,21 @@ const SCRIPT_WHITELIST_DOMAINS = [
   'jianying.com',
   'byteimg.com',
   'bytetos.com',
-  'byteimg.com',
 ]
 
 const BLOCKED_RESOURCE_TYPES = new Set(['image', 'font', 'stylesheet', 'media'])
 const SESSION_IDLE_TIMEOUT_MS = 10 * 60 * 1000
 const BDMS_READY_TIMEOUT_MS = 30_000
 const JIMENG_HOME = `${JIMENG_BASE_URL}/ai-tool/generate?type=video`
+const FETCH_MAX_ATTEMPTS = 2
 
 interface BrowserSession {
   context: BrowserContext
   page: Page
   lastUsed: number
   idleTimer: ReturnType<typeof setTimeout> | null
+  /** 进行中的 evaluate 数量；>0 时禁止 idle 关闭 */
+  inFlight: number
 }
 
 function sessionKey(session: JimengWebSession): string {
@@ -30,10 +32,26 @@ function sessionKey(session: JimengWebSession): string {
   return createHash('sha256').update(raw).digest('hex').slice(0, 16)
 }
 
+function isClosedBrowserError(err: unknown): boolean {
+  const message = String((err as Error)?.message || err || '')
+  return /Target page, context or browser has been closed|Browser has been closed|Session closed|Protocol error.*Target closed/i.test(message)
+}
+
+function isPageAlive(page: Page | null | undefined): boolean {
+  try {
+    return !!page && !page.isClosed()
+  } catch {
+    return false
+  }
+}
+
 class JimengBrowserService {
   private browser: Browser | null = null
   private sessions = new Map<string, BrowserSession>()
   private launching: Promise<Browser> | null = null
+  /** 同一 Session 串行化，避免共用 page.evaluate 互相踩踏 */
+  private fetchChains = new Map<string, Promise<unknown>>()
+  private createChains = new Map<string, Promise<BrowserSession>>()
 
   private async loadPlaywright() {
     try {
@@ -77,6 +95,9 @@ class JimengBrowserService {
       }
       this.browser.on('disconnected', () => {
         this.browser = null
+        for (const session of this.sessions.values()) {
+          if (session.idleTimer) clearTimeout(session.idleTimer)
+        }
         this.sessions.clear()
       })
       return this.browser
@@ -93,6 +114,12 @@ class JimengBrowserService {
     session.lastUsed = Date.now()
     if (session.idleTimer) clearTimeout(session.idleTimer)
     session.idleTimer = setTimeout(() => {
+      const current = this.sessions.get(key)
+      if (!current || current !== session) return
+      if (current.inFlight > 0) {
+        this.resetIdleTimer(key, current)
+        return
+      }
       this.closeSession(key).catch(() => {})
     }, SESSION_IDLE_TIMEOUT_MS)
   }
@@ -143,33 +170,84 @@ class JimengBrowserService {
       page,
       lastUsed: Date.now(),
       idleTimer: null,
+      inFlight: 0,
     }
     this.resetIdleTimer(key, created)
     this.sessions.set(key, created)
     return created
   }
 
-  private async getSession(session: JimengWebSession): Promise<BrowserSession> {
+  private async getOrCreateSession(session: JimengWebSession, forceNew = false): Promise<BrowserSession> {
     const key = sessionKey(session)
-    const existing = this.sessions.get(key)
-    if (existing) {
-      this.resetIdleTimer(key, existing)
-      return existing
+    if (!forceNew) {
+      const existing = this.sessions.get(key)
+      if (existing && isPageAlive(existing.page)) {
+        this.resetIdleTimer(key, existing)
+        return existing
+      }
+      if (existing) {
+        await this.closeSession(key)
+      }
+    } else {
+      await this.closeSession(key)
     }
-    return this.createSession(key, session)
+
+    const pending = this.createChains.get(key)
+    if (pending) return pending
+
+    const creating = this.createSession(key, session).finally(() => {
+      if (this.createChains.get(key) === creating) this.createChains.delete(key)
+    })
+    this.createChains.set(key, creating)
+    return creating
   }
 
   private async closeSession(key: string) {
     const session = this.sessions.get(key)
     if (!session) return
     if (session.idleTimer) clearTimeout(session.idleTimer)
+    this.sessions.delete(key)
     try {
       await session.context.close()
     } catch { /* ignore */ }
-    this.sessions.delete(key)
   }
 
-  async fetch(
+  private async runEvaluate(
+    browserSession: BrowserSession,
+    url: string,
+    options: {
+      method?: string
+      headers?: Record<string, string>
+      body?: string
+    },
+  ) {
+    return browserSession.page.evaluate(
+      async ({ targetUrl, reqOptions }) => {
+        try {
+          const res = await fetch(targetUrl, {
+            method: reqOptions.method || 'POST',
+            headers: reqOptions.headers || {},
+            body: reqOptions.body,
+            credentials: 'include',
+          })
+          const text = await res.text()
+          return { ok: res.ok, status: res.status, text, finalUrl: res.url }
+        } catch (err: any) {
+          return { ok: false, status: 0, text: '', error: err?.message || String(err) }
+        }
+      },
+      {
+        targetUrl: url,
+        reqOptions: {
+          method: options.method || 'POST',
+          headers: options.headers || {},
+          body: options.body,
+        },
+      },
+    )
+  }
+
+  private async fetchOnce(
     session: JimengWebSession,
     url: string,
     options: {
@@ -177,35 +255,17 @@ class JimengBrowserService {
       headers?: Record<string, string>
       body?: string
     },
+    forceNewSession: boolean,
   ): Promise<any> {
     const key = sessionKey(session)
-    let browserSession = await this.getSession(session)
-
+    const browserSession = await this.getOrCreateSession(session, forceNewSession)
+    browserSession.inFlight += 1
+    this.resetIdleTimer(key, browserSession)
     try {
-      const result = await browserSession.page.evaluate(
-        async ({ targetUrl, reqOptions }) => {
-          try {
-            const res = await fetch(targetUrl, {
-              method: reqOptions.method || 'POST',
-              headers: reqOptions.headers || {},
-              body: reqOptions.body,
-              credentials: 'include',
-            })
-            const text = await res.text()
-            return { ok: res.ok, status: res.status, text, finalUrl: res.url }
-          } catch (err: any) {
-            return { ok: false, status: 0, text: '', error: err?.message || String(err) }
-          }
-        },
-        {
-          targetUrl: url,
-          reqOptions: {
-            method: options.method || 'POST',
-            headers: options.headers || {},
-            body: options.body,
-          },
-        },
-      )
+      if (!isPageAlive(browserSession.page)) {
+        throw new Error('Target page, context or browser has been closed')
+      }
+      const result = await this.runEvaluate(browserSession, url, options)
 
       if (result.error) {
         throw new Error(`浏览器签名请求失败: ${result.error}`)
@@ -219,9 +279,45 @@ class JimengBrowserService {
       }
 
       return payload
-    } catch (err) {
-      await this.closeSession(key)
-      throw err
+    } finally {
+      browserSession.inFlight = Math.max(0, browserSession.inFlight - 1)
+      if (this.sessions.get(key) === browserSession) {
+        this.resetIdleTimer(key, browserSession)
+      }
+    }
+  }
+
+  async fetch(
+    session: JimengWebSession,
+    url: string,
+    options: {
+      method?: string
+      headers?: Record<string, string>
+      body?: string
+    },
+  ): Promise<any> {
+    const key = sessionKey(session)
+    const prev = this.fetchChains.get(key) || Promise.resolve()
+    const run = prev.catch(() => {}).then(async () => {
+      let lastError: unknown
+      for (let attempt = 1; attempt <= FETCH_MAX_ATTEMPTS; attempt++) {
+        try {
+          return await this.fetchOnce(session, url, options, attempt > 1)
+        } catch (err) {
+          lastError = err
+          if (!isClosedBrowserError(err) || attempt >= FETCH_MAX_ATTEMPTS) {
+            throw err
+          }
+          await this.closeSession(key)
+        }
+      }
+      throw lastError
+    })
+    this.fetchChains.set(key, run)
+    try {
+      return await run
+    } finally {
+      if (this.fetchChains.get(key) === run) this.fetchChains.delete(key)
     }
   }
 

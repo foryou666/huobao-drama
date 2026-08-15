@@ -14,6 +14,7 @@ import type {
 import { joinProviderUrl } from './url'
 import { parseVideoContentRefs } from '../../utils/seedance-content.js'
 import { buildAistarslabOpenApiTaskPayload } from '../../utils/aistarslab-content.js'
+import { resolveAistarslabChannelModelConstraints } from '../../utils/aistarslab-video-options.js'
 import {
   AISTARSLAB_DEFAULT_BASE_URL,
   AISTARSLAB_DEFAULT_CHANNEL,
@@ -90,9 +91,12 @@ export class AistarslabVideoAdapter implements VideoProviderAdapter {
       }
     }
 
+    const channel = resolveChannel(config, record)
+    const model = resolveModel(config, record)
+    const constraints = resolveAistarslabChannelModelConstraints(channel, model)
     const body = buildAistarslabOpenApiTaskPayload({
-      channel: resolveChannel(config, record),
-      model: resolveModel(config, record),
+      channel,
+      model,
       prompt: record.prompt || '',
       seconds: record.duration ?? 15,
       aspectRatio: normalizeAistarslabAspectRatio(record.aspectRatio),
@@ -102,6 +106,10 @@ export class AistarslabVideoAdapter implements VideoProviderAdapter {
       lastFrameUrl: record.lastFrameUrl,
       referenceImageUrls,
       contentRefs: refs,
+      allowedResolutions: constraints.resolutions,
+      maxImages: constraints.maxImages,
+      maxVideos: constraints.maxVideos,
+      maxAudios: constraints.maxAudios,
     })
 
     return {

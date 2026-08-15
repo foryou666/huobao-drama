@@ -7,6 +7,7 @@ import { dramaVisibleToTeam, getSharedDramaIdsByTeam, userCanAccessDrama } from 
 import type { AuthUser } from '../middleware/auth.js'
 import { sanitizeUserFacingProviderError } from '../utils/provider-error-sanitize.js'
 import { canViewAllImageStudio } from '../utils/image-studio-access.js'
+import { resolveJimengAccountFromStyle } from '../utils/jimeng-web-video-options.js'
 
 function parseSizeAspectRatio(size?: string | null): string {
   const raw = String(size || '').trim()
@@ -49,6 +50,10 @@ export interface ImageLedgerQuery {
   mineOnly?: boolean
   studioOnly?: boolean
   userId?: number
+  /** 仅管理员后台「生图记录」页开启；普通图片工作台勿传 */
+  includeJimengAccount?: boolean
+  /** 模型过滤：精确匹配，或 'dream' / 'dream5.0-pro' 表示即梦生图 */
+  model?: string
 }
 
 function buildImageOwnerMaps() {
@@ -201,6 +206,17 @@ function buildImageLedgerSqlConditions(query: ImageLedgerQuery): SQL[] {
     const kw = `%${query.keyword.trim().replace(/[%_]/g, '')}%`
     conditions.push(sql`lower(${schema.imageGenerations.prompt}) like lower(${kw})`)
   }
+  if (query.model?.trim()) {
+    const needle = query.model.trim().toLowerCase()
+    if (needle === 'dream' || needle === 'dream5.0-pro' || needle === 'dream5.0 pro') {
+      conditions.push(or(
+        sql`lower(coalesce(${schema.imageGenerations.model}, '')) like '%dream5%'`,
+        eq(schema.imageGenerations.provider, 'jimeng_web'),
+      )!)
+    } else {
+      conditions.push(sql`lower(coalesce(${schema.imageGenerations.model}, '')) = ${needle}`)
+    }
+  }
 
   return conditions
 }
@@ -292,6 +308,7 @@ export function listImageLedger(query: ImageLedgerQuery) {
   )]
   const userMap = buildUserMap(ownerIds)
 
+  const revealJimengAccount = query.includeJimengAccount === true && query.user?.role === 'admin'
   const items = page.map((row) => {
     const sb = row.storyboardId ? sbMap.get(row.storyboardId) : null
     const ep = sb ? epMap.get(sb.episodeId) : null
@@ -299,6 +316,7 @@ export function listImageLedger(query: ImageLedgerQuery) {
     const rawImage = row.localPath || row.imageUrl
     const thumbFields = resolveThumbFields(rawImage)
     const operator = resolveOperatorFields(row, displayOwnerMaps, userMap)
+    const jimengAccount = revealJimengAccount ? resolveJimengAccountFromStyle(row.style) : null
     return toSnakeCase({
       id: row.id,
       storyboard_id: row.storyboardId,
@@ -331,6 +349,7 @@ export function listImageLedger(query: ImageLedgerQuery) {
       is_pinned: !!row.isPinned,
       pinned_at: row.pinnedAt || null,
       ...operator,
+      ...(jimengAccount || {}),
     })
   })
 

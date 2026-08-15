@@ -1,13 +1,17 @@
 /** 将火山方舟 / Seedance 官方 API 英文错误转为更易读的中文提示 */
 import { sanitizeUserFacingProviderError } from './provider-error-sanitize.js'
 
-export function formatVolcengineVideoError(raw: string, provider?: string): string {  const message = String(raw || '').trim()
+export function formatVolcengineVideoError(raw: string, provider?: string): string {
+  const message = String(raw || '').trim()
   if (!message) return '视频生成失败'
 
   const lower = message.toLowerCase()
 
   if (lower.includes('reference media mode requires audio role to be reference_audio')) {
     return '参考音频格式不符合官方要求（需 reference_audio），请刷新页面后重试；若仍失败请联系管理员更新后端'
+  }
+  if (lower.includes('invalid base64 audio_url') || (lower.includes('audio_url') && lower.includes('not valid'))) {
+    return '参考音频提交失败（方舟不接受当前音频编码）。请重新选择音色后重试；系统已改为优先使用公网音频链接'
   }
   if (lower.includes('reference media mode requires') && lower.includes('reference_image')) {
     return '参考图格式不符合官方要求，请确认已绑定角色/场景参考图并重试'
@@ -23,6 +27,13 @@ export function formatVolcengineVideoError(raw: string, provider?: string): stri
       return '火山方舟 API Key 无效或格式错误，请在「设置 → AI 配置」中更新「火山方舟 Seedance-视频」的 API Key'
     }
     return 'API 认证失败，请检查服务配置中的 API Key'
+  }
+  if (
+    lower.includes('safe experience mode')
+    || lower.includes('reached the set inference limit')
+    || (lower.includes('inference limit') && lower.includes('paused'))
+  ) {
+    return '当前火山账号已达到「安心体验模式」推理额度上限，模型服务已暂停。请到方舟控制台「模型开通 / 开通管理」调高额度或关闭安心体验模式，或在设置中切换到其他通道2 API Key 后重试'
   }
 
   return sanitizeUserFacingProviderError(message)

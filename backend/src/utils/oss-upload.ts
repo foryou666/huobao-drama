@@ -58,6 +58,8 @@ function getClient(): OSS {
       accessKeyId: process.env.OSS_ACCESS_KEY_ID!.trim(),
       accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET!.trim(),
       bucket: ossBucket(),
+      // 大视频 PUT 默认 60s 易超时，拖慢同机下载带宽
+      timeout: 10 * 60 * 1000,
     })
   }
   return client
@@ -190,6 +192,43 @@ export function signOssObjectKey(objectKey: string): string {
     expires: SIGNED_URL_EXPIRES_SEC,
     method: 'GET',
   }))
+}
+
+/** 下载用签名 URL：强制浏览器另存为（带文件名） */
+export function signOssObjectKeyForDownload(objectKey: string, filename: string): string {
+  const safe = String(filename || 'download.bin').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 180)
+  const ascii = safe.replace(/[^\x20-\x7E]+/g, '_') || 'download.bin'
+  const disposition = `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`
+  return applyPublicBase(getClient().signatureUrl(objectKey, {
+    expires: Math.min(SIGNED_URL_EXPIRES_SEC, 2 * 3600),
+    method: 'GET',
+    response: {
+      'content-disposition': disposition,
+    },
+  }))
+}
+
+/** 探测 objectKey 是否存在（用于下载直链，避免签无效 URL） */
+export async function headOssObjectKey(objectKey: string): Promise<boolean> {
+  try {
+    await getClient().head(objectKey)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function findExistingOssObjectKey(staticPath: string): Promise<string | null> {
+  if (!isOssConfigured()) return null
+  // 优先信任 DB 映射（与播放器 resolve 一致），避免多次 HEAD 拖慢下载按钮
+  const mapped = lookupOssObjectKey(staticPath)
+  if (mapped && !mapped.includes('unknown/asset/')) return mapped
+
+  for (const key of resolveOssObjectKeyCandidates(staticPath)) {
+    if (mapped && key === mapped) continue
+    if (await headOssObjectKey(key)) return key
+  }
+  return null
 }
 
 async function compressImageForOss(absPath: string) {

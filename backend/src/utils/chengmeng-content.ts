@@ -7,9 +7,9 @@ import {
   CHENGMENT_DEFAULT_MODEL_ID,
   CHENGMENT_DURATION_BOUNDS,
   CHENGMENT_PROMPT_MAX_LENGTH,
-  CHENGMENG_CHANNEL1_RESOLUTION,
-  CHENGMENG_VIDEO_MODELS,
   isChengmengVideoModelId,
+  remapChengmengChannel1ModelId,
+  resolveChengmengModelResolution,
 } from '../constants/chengmeng.js'
 import { ensureApiTrimmedAudioPath } from './audio-trim.js'
 import { normalizeVideoPromptFraming } from './video-prompt-framing.js'
@@ -116,16 +116,24 @@ export function normalizeChengmengAspectRatio(aspectRatio?: string | null, fallb
 
 export { CHENGMENT_PROMPT_MAX_LENGTH }
 
-function stripChengmengInlineTags(prompt: string) {
-  return String(prompt || '').trim()
-    .replace(/@图片\s*(\d+)/gi, '图片$1')
-    .replace(/@素材\s*(\d+)/gi, '素材$1')
-    .replace(/@音频\s*(\d+)/gi, '音频$1')
+/** 音色 → 音频（保留已有 @） */
+export function normalizeChengmengAudioLabels(prompt: string): string {
+  return String(prompt || '')
+    .replace(/@音色\s*(\d+)/gi, '@音频$1')
+    .replace(/(?<!@)音色\s*(\d+)/gi, '音频$1')
 }
 
-/** 工作台常用「音色N」，橙盟/Seedance 识别「音频N」 */
-export function normalizeChengmengAudioLabels(prompt: string): string {
-  return String(prompt || '').replace(/音色\s*(\d+)/gi, '音频$1')
+/**
+ * 上游识别 @图片N / @素材N / @音频N。
+ * 保留用户手写的 @；把正文里的「图片1是…」等补成 @；前端 @视频N 映射为橙盟 @素材N。
+ */
+export function ensureChengmengAtMentions(prompt: string): string {
+  return normalizeChengmengAudioLabels(prompt)
+    .replace(/@视频\s*(\d+)/gi, '@素材$1')
+    .replace(/(?<!@)图片\s*(\d+)/gi, '@图片$1')
+    .replace(/(?<!@)素材\s*(\d+)/gi, '@素材$1')
+    .replace(/(?<!@)视频\s*(\d+)/gi, '@素材$1')
+    .replace(/(?<!@)音频\s*(\d+)/gi, '@音频$1')
 }
 
 function formatVoicePromptLabel(label?: string | null): string {
@@ -138,9 +146,9 @@ function formatVoicePromptLabel(label?: string | null): string {
 function buildChengmengAudioHeader(refs: VideoContentRef[], prompt: string): string {
   const audios = refs.filter(ref => ref.type === 'audio')
   if (!audios.length) return ''
-  const normalizedPrompt = normalizeChengmengAudioLabels(prompt)
-  if (/音频\s*\d/i.test(normalizedPrompt)) return ''
-  const lines = audios.map((ref, index) => `音频${index + 1}是${formatVoicePromptLabel(ref.label)}`)
+  const normalizedPrompt = ensureChengmengAtMentions(prompt)
+  if (/@?音频\s*\d/i.test(normalizedPrompt)) return ''
+  const lines = audios.map((ref, index) => `@音频${index + 1}是${formatVoicePromptLabel(ref.label)}`)
   return `${lines.join('，')}。`
 }
 
@@ -153,8 +161,10 @@ export function buildChengmengTagPrefix(imageCount: number, videoCount: number, 
 }
 
 export function estimateChengmengPromptLength(prompt: string, imageCount: number, videoCount = 0, audioCount = 0) {
-  return buildChengmengTagPrefix(imageCount, videoCount, audioCount).length
-    + stripChengmengInlineTags(normalizeChengmengAudioLabels(prompt)).length
+  const text = ensureChengmengAtMentions(String(prompt || '').trim())
+  const hasMentions = /@(?:图片|素材|音频)\s*\d/i.test(text)
+  const prefixLen = hasMentions ? 0 : buildChengmengTagPrefix(imageCount, videoCount, audioCount).length
+  return prefixLen + text.length
 }
 
 export function formatChengmengPromptOverLimitMessage(
@@ -162,19 +172,17 @@ export function formatChengmengPromptOverLimitMessage(
   limit = CHENGMENT_PROMPT_MAX_LENGTH,
 ): string {
   const over = Math.max(0, sendLength - limit)
-  return `视频提示词约 ${sendLength} 字符，超过上限 ${limit} 字符（含 @图片N 前缀），超出 ${over} 字符。请精简后再生成，否则部分内容不会发送。`
+  return `视频提示词约 ${sendLength} 字符（含 @图片N 前缀），已超过建议 ${limit} 字符（超出 ${over}）。上游未规定硬上限，仍可提交，但过长可能影响生成质量。`
 }
 
+/** 橙盟未规定字数硬上限；保留函数兼容旧调用，不再抛错 */
 export function assertChengmengPromptLength(
-  prompt: string,
-  imageCount: number,
-  videoCount = 0,
-  audioCount = 0,
+  _prompt: string,
+  _imageCount: number,
+  _videoCount = 0,
+  _audioCount = 0,
 ): void {
-  const sendLength = estimateChengmengPromptLength(prompt, imageCount, videoCount, audioCount)
-  if (sendLength > CHENGMENT_PROMPT_MAX_LENGTH) {
-    throw new Error(formatChengmengPromptOverLimitMessage(sendLength))
-  }
+  /* no-op */
 }
 
 /** 与橙盟 adapter 一致：估算 @ 标签前缀所需的图片/素材/音频数量 */
@@ -244,9 +252,8 @@ export function truncateChengmengPromptBody(text: string, maxLen: number): strin
 }
 
 /**
- * 文档要求 prompt 内用 @图片1 / @素材1 / @音频1 关联资源；
- * 工作台提示词改为用户手写 @ 或纯描述；发送前统一剥标签后按数量补 @ 前缀，保证上游可识别。
- * 超过 CHENGMENT_PROMPT_MAX_LENGTH 时直接报错，禁止静默截断。
+ * 橙盟用 @图片N / @素材N / @音频N 关联素材。
+ * 保留前端手写的 @；把「图片1是…」等补成 @；仅当正文完全没有 @ 引用时，才按素材数量补前缀。
  */
 export function buildChengmengPrompt(
   prompt: string,
@@ -255,13 +262,14 @@ export function buildChengmengPrompt(
   audioCount = 0,
   contentRefs: VideoContentRef[] = [],
 ): string {
-  const normalizedPrompt = normalizeChengmengAudioLabels(prompt)
-  const audioHeader = buildChengmengAudioHeader(contentRefs, normalizedPrompt)
+  const withMentions = ensureChengmengAtMentions(prompt)
+  const audioHeader = buildChengmengAudioHeader(contentRefs, withMentions)
   const mergedPrompt = audioHeader
-    ? `${audioHeader}${normalizedPrompt}`.trim()
-    : normalizedPrompt
-  assertChengmengPromptLength(mergedPrompt, imageCount, videoCount, audioCount)
-  const text = normalizeVideoPromptFraming(stripChengmengInlineTags(mergedPrompt))
+    ? `${audioHeader}${withMentions}`.trim()
+    : withMentions
+  const text = normalizeVideoPromptFraming(ensureChengmengAtMentions(mergedPrompt)).trim()
+  // 注意：不能用 /@[图片素材音频]/ —— 字符类只匹配单字，匹配不到「@图片1」
+  if (/@(?:图片|素材|音频)\s*\d/i.test(text)) return text
   const prefix = buildChengmengTagPrefix(imageCount, videoCount, audioCount)
   return prefix ? `${prefix}${text}`.trim() : text
 }
@@ -318,12 +326,12 @@ export function normalizeChengmengResolution(value?: string | null): string {
   return '720p'
 }
 
-/** 发给橙盟 API 的分辨率：通道1 一律 480p（0.32 元/秒），不走配置里的 720p/1080p */
+/** 发给橙盟 API 的分辨率：按 model_id（32/53/71→720p；旧 70/77→480p） */
 export function resolveChengmengApiResolution(
-  _modelId: string,
+  modelId: string,
   _settingsResolution?: string | null,
 ): string {
-  return CHENGMENG_CHANNEL1_RESOLUTION
+  return resolveChengmengModelResolution(modelId || CHENGMENT_DEFAULT_MODEL_ID)
 }
 
 export type ChengmengVideoMode = 'references' | 'frames'
@@ -347,23 +355,14 @@ export function resolveChengmengModelIds(
 ) {
   const override = String(modelOverride || '').trim()
   if (isChengmengVideoModelId(override)) {
-    let modelId = override
-    // 通道1只接通 70；历史 77/49/32/53/31 一律回落到 70
-    if (override === '32' || override === '49' || override === '77'
-      || override === '53' || override === '31') {
-      modelId = CHENGMENT_DEFAULT_MODEL_ID
-    }
     return {
-      modelId,
+      modelId: remapChengmengChannel1ModelId(override),
       groupId: CHENGMENT_DEFAULT_GROUP_ID,
     }
   }
   const parsed = parseChengmengModelIds(config)
-  if (['53', '32', '31', '49', '77'].includes(parsed.modelId)) {
-    return {
-      modelId: CHENGMENT_DEFAULT_MODEL_ID,
-      groupId: CHENGMENT_DEFAULT_GROUP_ID,
-    }
+  return {
+    modelId: remapChengmengChannel1ModelId(parsed.modelId),
+    groupId: parsed.groupId || CHENGMENT_DEFAULT_GROUP_ID,
   }
-  return parsed
 }

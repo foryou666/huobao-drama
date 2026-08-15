@@ -206,6 +206,10 @@ export async function listAccessibleBoards(user: AuthUser, activeTeamId: number 
       is_shared_project: !!extra.is_shared_project,
       can_manage: !!extra.can_manage_drama,
       can_manage_drama: !!extra.can_manage_drama,
+      can_delete: !!extra.can_delete,
+      project_kind: extra.project_kind || null,
+      narration_job_id: extra.narration_job_id || null,
+      is_narration: !!extra.is_narration,
       node_count: nodeCount,
     }
   }).sort((a, b) => {

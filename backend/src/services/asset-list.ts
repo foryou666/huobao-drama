@@ -238,6 +238,10 @@ export function listEnrichedAssets(query: AssetListQuery) {
         const characterMedia = summarizeCharacterMediaForAssetList(char)
         payload.characterMedia = characterMedia
         payload.linkedCharacterId = char.id
+        payload.seedanceAssetId = char.seedanceAssetId
+        payload.seedanceAssetGroupId = char.seedanceAssetGroupId
+        payload.seedanceAssetStatus = char.seedanceAssetStatus
+        payload.portraitType = char.portraitType
         applyEntityUrlFallback(payload, char.imageUrl || char.localPath)
         if (!payload.url) {
           applyEntityUrlFallback(payload, resolveCharacterCoverUrl(characterMedia))

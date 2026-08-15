@@ -1,7 +1,9 @@
 import { getAppMeta, setAppMeta } from '../db/index.js'
-import { CHENGMENG_VIDEO_MODELS } from '../constants/chengmeng.js'
+import { CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS, CHENGMENG_VIDEO_MODELS } from '../constants/chengmeng.js'
+import { now } from './response.js'
 
 export const CHENGMENT_MODEL_ENABLED_META_KEY = 'chengmeng_model_enabled'
+const CHANNEL1_PREFERRED_ENABLE_MIGRATION_KEY = 'chengmeng_channel1_preferred_55_56_v2'
 
 /** 从积分 action 解析橙盟 model_id（含 53/32 历史键） */
 export function parseChengmengModelFromCreditAction(action?: string | null): string | null {
@@ -47,6 +49,15 @@ export function setChengmengModelEnabled(modelId: string, enabled: boolean) {
   const map = getChengmengModelEnabledMap()
   map[key] = enabled !== false
   setAppMeta(CHENGMENT_MODEL_ENABLED_META_KEY, JSON.stringify(map))
+}
+
+/** 通道1 开通 55/56（官转），其余首选保持开启 */
+export function migrateChengmengChannel1PreferredEnableIfNeeded() {
+  if (getAppMeta(CHANNEL1_PREFERRED_ENABLE_MIGRATION_KEY)) return
+  const map = getChengmengModelEnabledMap()
+  for (const id of CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS) map[id] = true
+  setAppMeta(CHENGMENT_MODEL_ENABLED_META_KEY, JSON.stringify(map))
+  setAppMeta(CHANNEL1_PREFERRED_ENABLE_MIGRATION_KEY, now())
 }
 
 export function filterEnabledChengmengModels<T extends { id: string }>(models: T[]): T[] {

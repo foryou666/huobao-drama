@@ -10,7 +10,7 @@ export interface VideoServicePreset {
   priority: number
 }
 
-/** 红果推荐一键写入的视频服务 */
+/** 影光工场推荐一键写入的视频服务 */
 export const SEEDANCE_VIDEO_PRESETS: VideoServicePreset[] = [
   {
     serviceType: 'video',
@@ -23,7 +23,7 @@ export const SEEDANCE_VIDEO_PRESETS: VideoServicePreset[] = [
   },
   {
     serviceType: 'video',
-    name: '红果视频 Seedance 2.0',
+    name: '影光工场视频 Seedance 2.0',
     label: '视频',
     provider: 'volcengine',
     baseUrl: SEEDANCE_CHATFIRE_BASE_URL,
@@ -32,7 +32,7 @@ export const SEEDANCE_VIDEO_PRESETS: VideoServicePreset[] = [
   },
   {
     serviceType: 'video',
-    name: '红果视频 Seedance 2.0 Fast',
+    name: '影光工场视频 Seedance 2.0 Fast',
     label: '视频',
     provider: 'volcengine',
     baseUrl: SEEDANCE_CHATFIRE_BASE_URL,
@@ -41,7 +41,7 @@ export const SEEDANCE_VIDEO_PRESETS: VideoServicePreset[] = [
   },
   {
     serviceType: 'video',
-    name: '红果视频 Seedance 1.5 Pro',
+    name: '影光工场视频 Seedance 1.5 Pro',
     label: '视频',
     provider: 'volcengine',
     baseUrl: SEEDANCE_CHATFIRE_BASE_URL,

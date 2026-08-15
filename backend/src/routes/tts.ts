@@ -12,6 +12,7 @@ import {
   getIndexTts2AdminConfig,
   saveIndexTts2AdminConfig,
   probeIndexTts2Api,
+  getIndexTts2ServerStatus,
 } from '../services/indextts2-config.js'
 import type { IndexTts2EmotionOptions } from '../services/adapters/indextts2-gradio.js'
 
@@ -121,6 +122,13 @@ app.post('/config/test', async (c) => {
       response_preview: '',
     })
   }
+})
+
+// GET /tts/status — TTS 服务器开机/关机状态（所有登录用户）
+app.get('/status', async (c) => {
+  const force = c.req.query('force') === '1' || c.req.query('force') === 'true'
+  const status = await getIndexTts2ServerStatus({ force })
+  return success(c, status)
 })
 
 // GET /tts — 历史记录

@@ -8,6 +8,11 @@ import {
   grokVideoModelLabel,
   isGrokVideoModel,
 } from '../constants/geeknow-grok.js'
+import {
+  findNarrationGrokChannelConfigRow,
+  listNarrationGrokChannelOptions,
+  resolveNarrationGrokConfigId,
+} from './narration-grok-channels.js'
 
 function isGeeknowProvider(provider?: string | null) {
   return String(provider || '').toLowerCase() === 'geeknow'
@@ -36,7 +41,9 @@ export function findGeeknowImageConfigRow() {
 }
 
 export function findGeeknowGrokVideoConfigRow() {
-  return findGeeknowVideoConfigRow() || findGeeknowImageConfigRow()
+  return findNarrationGrokChannelConfigRow('geeknow')
+    || findGeeknowVideoConfigRow()
+    || findGeeknowImageConfigRow()
 }
 
 export function isGeeknowConfigId(configId: unknown) {
@@ -55,9 +62,22 @@ export function resolveGrokVideoConfigId(body: Record<string, unknown>): number 
   const model = String(body.model || '').trim()
   if (!isGrokVideoModel(model)) return null
 
+  const channel = String(body.grok_channel || body.channel || '').trim()
+  if (channel) {
+    return resolveNarrationGrokConfigId({
+      channel,
+      model,
+      config_id: body.config_id,
+    })?.configId ?? null
+  }
+
   if (body.config_id != null) {
     const id = Number(body.config_id)
-    if (Number.isFinite(id) && isGeeknowConfigId(id)) return id
+    if (Number.isFinite(id)) {
+      // 允许三通道任一已配置 ID
+      const cfg = getConfigById(id, { includeInactive: true })
+      if (cfg) return id
+    }
   }
 
   return findGeeknowGrokVideoConfigRow()?.id ?? null
@@ -76,6 +96,19 @@ export function getGeeknowGrokVideoConfig() {
 }
 
 export function listGrokVideoModelOptions(configId?: number | null) {
+  return listLegacyGeeknowGrokModels(configId)
+}
+
+export {
+  GROK_VIDEO_MODEL_IDS,
+  isGrokVideoModel,
+  listNarrationGrokChannelOptions,
+  resolveNarrationGrokConfigId,
+  findNarrationGrokChannelConfigRow,
+}
+
+// keep local fallback used by Grok studio page when no channel specified
+export function listLegacyGeeknowGrokModels(configId?: number | null) {
   return [
     { id: GROK_VIDEO_MODELS.V1_5_PRO, label: grokVideoModelLabel(GROK_VIDEO_MODELS.V1_5_PRO) },
     { id: GROK_VIDEO_MODELS.V1_5_MAX, label: grokVideoModelLabel(GROK_VIDEO_MODELS.V1_5_MAX) },
@@ -92,5 +125,3 @@ export function listGrokVideoModelOptions(configId?: number | null) {
     }
   })
 }
-
-export { GROK_VIDEO_MODEL_IDS, isGrokVideoModel }

@@ -22,23 +22,13 @@ export interface GrokDurationBounds {
   defaultSec: number
 }
 
-/** Pro 最长 10s，Max 最长 15s（与 GeekNow 文档一致） */
-export function grokVideoDurationBounds(model?: string | null): GrokDurationBounds {
-  const m = String(model || '').trim().toLowerCase()
-  if (m.endsWith('-max')) {
-    return { min: GROK_VIDEO_SECONDS_MIN, max: 15, defaultSec: 15 }
-  }
-  if (m.endsWith('-pro')) {
-    return { min: GROK_VIDEO_SECONDS_MIN, max: 10, defaultSec: 10 }
-  }
-  return { min: GROK_VIDEO_SECONDS_MIN, max: 15, defaultSec: 6 }
-}
-
 export function isGrokVideoModel(model?: string | null): boolean {
   const normalized = String(model || '').trim().toLowerCase()
   if (!normalized) return false
-  return GROK_VIDEO_MODEL_IDS.some(id => id === normalized)
-    || /^grok-video-\d/.test(normalized)
+  if (GROK_VIDEO_MODEL_IDS.some(id => id === normalized)) return true
+  if (/^grok-video-\d/.test(normalized)) return true
+  if (/^grok-imagine-video/.test(normalized)) return true
+  return false
 }
 
 export function resolveGrokBillingSeconds(model?: string | null, duration?: number | null): number {
@@ -46,6 +36,21 @@ export function resolveGrokBillingSeconds(model?: string | null, duration?: numb
   const parsed = Math.round(Number(duration ?? defaultSec))
   if (!Number.isFinite(parsed)) return defaultSec
   return Math.min(max, Math.max(min, parsed))
+}
+
+/** Pro 最长 10s，Max 最长 15s；Imagine / 启灵泽 1.x 默认 6–10s */
+export function grokVideoDurationBounds(model?: string | null): GrokDurationBounds {
+  const m = String(model || '').trim().toLowerCase()
+  if (m.endsWith('-max') || m.includes('1080p')) {
+    return { min: GROK_VIDEO_SECONDS_MIN, max: 15, defaultSec: 15 }
+  }
+  if (m.includes('imagine')) {
+    return { min: 1, max: 15, defaultSec: 6 }
+  }
+  if (m === 'grok-video-1.0' || m === 'grok-video-1.5' || m.endsWith('-pro') || m.endsWith('-fast')) {
+    return { min: GROK_VIDEO_SECONDS_MIN, max: 10, defaultSec: 10 }
+  }
+  return { min: GROK_VIDEO_SECONDS_MIN, max: 15, defaultSec: 6 }
 }
 
 /** 工作台 9:16/16:9 → Grok aspect_ratio */
@@ -70,6 +75,13 @@ export function grokVideoModelLabel(modelId?: string | null): string {
     [GROK_VIDEO_MODELS.V1_5_MAX]: 'Grok 1.5 Max',
     [GROK_VIDEO_MODELS.V3_PRO]: 'Grok 3 Pro',
     [GROK_VIDEO_MODELS.V3_MAX]: 'Grok 3 Max',
+    'grok-video-1.0': 'Grok Video 1.0',
+    'grok-video-1.5': 'Grok Video 1.5',
+    'grok-imagine-video': 'Grok Imagine Video',
+    'grok-imagine-video-1.5': 'Grok Imagine 1.5',
+    'grok-imagine-video-1.5-fast': 'Grok Imagine 1.5 Fast',
+    'grok-imagine-video-1.5-1080p': 'Grok Imagine 1.5 1080p',
+    'grok-imagine-video-1.5-preview': 'Grok Imagine 1.5 Preview',
   }
   return map[id] || id || 'Grok Video'
 }

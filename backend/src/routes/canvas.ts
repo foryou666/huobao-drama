@@ -34,6 +34,7 @@ import {
   now,
   success,
 } from '../utils/response.js'
+import { ensureMissingNarrationLinkedDramas } from '../services/narration-drama-link.js'
 
 const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -59,6 +60,10 @@ function assertBoardAccess(c: any, boardId: number) {
 app.get('/boards', async (c) => {
   const user = getAuthUser(c)
   const activeTeamId = resolveActiveTeamId(c, user)
+  ensureMissingNarrationLinkedDramas({
+    userId: user.role === 'admin' ? null : user.id,
+    teamId: activeTeamId,
+  })
   ensureBoardsForAccessibleDramas(user, activeTeamId)
   const items = await listAccessibleBoards(user, activeTeamId)
   return success(c, { items })

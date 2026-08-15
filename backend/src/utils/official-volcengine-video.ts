@@ -1,7 +1,12 @@
 import { db, schema } from '../db/index.js'
 import { SEEDANCE_MODELS } from '../constants/seedance.js'
 
-const OFFICIAL_SEEDANCE_MODEL_IDS = [SEEDANCE_MODELS.V2_0, SEEDANCE_MODELS.V2_0_FAST] as const
+const OFFICIAL_SEEDANCE_MODEL_IDS = [
+  SEEDANCE_MODELS.V2_5,
+  SEEDANCE_MODELS.V2_0_MINI,
+  SEEDANCE_MODELS.V2_0,
+  SEEDANCE_MODELS.V2_0_FAST,
+] as const
 
 export function isOfficialSeedanceModel(model: unknown) {
   return OFFICIAL_SEEDANCE_MODEL_IDS.includes(String(model || '') as typeof OFFICIAL_SEEDANCE_MODEL_IDS[number])

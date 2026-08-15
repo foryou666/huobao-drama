@@ -4,18 +4,25 @@ import { v4 as uuidv4 } from 'uuid'
 import {
   JIMENG_DEFAULT_VIDEO_MODEL,
   JIMENG_DRAFT_VERSION_OMNI,
-  JIMENG_OMNI_MAX_TOTAL_REFS,
   JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS,
   JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS,
-  JIMENG_REF_LIMITS,
+  JIMENG_SEEDANCE_2_5_MAX_TOTAL_AUDIO_SECONDS,
+  JIMENG_SEEDANCE_2_5_MAX_TOTAL_VIDEO_SECONDS,
   JIMENG_VIDEO_REFERER,
   JIMENG_WEB_VERSION,
   getJimengOmniBenefitType,
+  isJimengSeedance25Model,
+  jimengRefLimitsForModel,
   jimengVideoModelLabel,
   normalizeJimengAspectRatio,
   resolveJimengBillingSeconds,
   resolveJimengInternalModel,
 } from '../constants/jimeng-web.js'
+import {
+  ensureS25DiscountRefVideo,
+  isS25SilentDiscountRefPath,
+  S25_DISCOUNT_REF_VIDEO_PATH,
+} from '../utils/s25-discount-ref.js'
 import { resolveJimengSessionForStyle, formatJimengSessionStyle } from '../utils/jimeng-web-video-options.js'
 import {
   jimengBrowserGenerateRequest,
@@ -135,6 +142,7 @@ function collectOmniContentRefs(record: VideoGenerationRecord): {
   const videos: VideoContentRef[] = []
   const audios: VideoContentRef[] = []
   const seen = new Set<string>()
+  const limits = jimengRefLimitsForModel(record.model)
 
   const pushUrl = (type: JimengMaterialType, url?: string | null, label?: string) => {
     const next = String(url || '').trim()
@@ -164,10 +172,31 @@ function collectOmniContentRefs(record: VideoGenerationRecord): {
     else if (ref.type === 'audio') pushUniqueRef(audios, seen, ref)
   }
 
+  // Seedance 2.5：无用户参考视频时静默附加短视频，触发上游参考视频优惠价
+  if (isJimengSeedance25Model(record.model) && videos.length === 0) {
+    const discountPath = ensureS25DiscountRefVideo()
+    if (discountPath) {
+      const maxTotal = limits.maxTotal
+      const currentTotal = images.length + audios.length
+      if (maxTotal != null && currentTotal >= maxTotal && images.length > 0) {
+        const dropped = images.pop()
+        if (dropped) seen.delete(`image:${dropped.url}`)
+      }
+      pushUniqueRef(videos, seen, {
+        type: 'video',
+        url: discountPath,
+        role: 'reference_video',
+        label: '',
+      })
+    } else {
+      logTaskWarn('JimengVideo', 's25-discount-ref-missing', { path: S25_DISCOUNT_REF_VIDEO_PATH })
+    }
+  }
+
   return {
-    images: images.slice(0, JIMENG_REF_LIMITS.images),
-    videos: videos.slice(0, JIMENG_REF_LIMITS.videos),
-    audios: audios.slice(0, JIMENG_REF_LIMITS.audios),
+    images: images.slice(0, limits.images),
+    videos: videos.slice(0, limits.videos),
+    audios: audios.slice(0, limits.audios),
   }
 }
 
@@ -182,11 +211,18 @@ function resolveSessionForRecord(record: VideoGenerationRecord) {
 async function uploadOmniMaterials(
   session: ReturnType<typeof resolveJimengSessionForStyle>,
   refs: { images: VideoContentRef[]; videos: VideoContentRef[]; audios: VideoContentRef[] },
+  model?: string | null,
 ): Promise<UploadedJimengMaterial[]> {
   const orderedRefs = [...refs.images, ...refs.videos, ...refs.audios]
   const materials: UploadedJimengMaterial[] = []
   let totalVideoDurationSec = 0
   let totalAudioDurationSec = 0
+  const maxVideoSec = isJimengSeedance25Model(model)
+    ? JIMENG_SEEDANCE_2_5_MAX_TOTAL_VIDEO_SECONDS
+    : JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS
+  const maxAudioSec = isJimengSeedance25Model(model)
+    ? JIMENG_SEEDANCE_2_5_MAX_TOTAL_AUDIO_SECONDS
+    : JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS
 
   for (const ref of orderedRefs) {
     const file = await readMediaBuffer(ref.url)
@@ -222,12 +258,12 @@ async function uploadOmniMaterials(
     })
   }
 
-  if (totalVideoDurationSec > JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS) {
-    throw new Error(`参考视频总时长 ${totalVideoDurationSec.toFixed(1)}s 超过 ${JIMENG_OMNI_MAX_TOTAL_VIDEO_SECONDS} 秒上限`)
+  if (totalVideoDurationSec > maxVideoSec) {
+    throw new Error(`参考视频总时长 ${totalVideoDurationSec.toFixed(1)}s 超过 ${maxVideoSec} 秒上限`)
   }
-  if (totalAudioDurationSec > JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS) {
+  if (totalAudioDurationSec > maxAudioSec) {
     throw new Error(
-      `参考音频总时长 ${totalAudioDurationSec.toFixed(1)}s 超过即梦 ${JIMENG_OMNI_MAX_TOTAL_AUDIO_SECONDS} 秒上限`
+      `参考音频总时长 ${totalAudioDurationSec.toFixed(1)}s 超过即梦 ${maxAudioSec} 秒上限`
       + '，请减少音色数量或换更短的参考音频后重试',
     )
   }
@@ -511,11 +547,12 @@ export async function submitJimengVideo(record: VideoGenerationRecord): Promise<
   const session = resolveSessionForRecord(record)
   const refs = collectOmniContentRefs(record)
   const totalCount = refs.images.length + refs.videos.length + refs.audios.length
-  if (totalCount > JIMENG_OMNI_MAX_TOTAL_REFS) {
-    throw new Error(`即梦全能参考素材总数不能超过 ${JIMENG_OMNI_MAX_TOTAL_REFS} 个`)
+  const limits = jimengRefLimitsForModel(record.model)
+  if (limits.maxTotal != null && totalCount > limits.maxTotal) {
+    throw new Error(`即梦全能参考素材合计不能超过 ${limits.maxTotal} 个`)
   }
 
-  const materials = totalCount > 0 ? await uploadOmniMaterials(session, refs) : []
+  const materials = totalCount > 0 ? await uploadOmniMaterials(session, refs, record.model) : []
   const payload = buildGeneratePayload(record, materials)
   const internalModel = resolveJimengInternalModel(record.model)
   logTaskPayload('JimengVideo', 'submit omni_reference', {
@@ -525,6 +562,8 @@ export async function submitJimengVideo(record: VideoGenerationRecord): Promise<
     upstreamModel: internalModel,
     benefitType: getJimengOmniBenefitType(internalModel),
     refCounts: { images: refs.images.length, videos: refs.videos.length, audios: refs.audios.length },
+    silentDiscountVideo: isJimengSeedance25Model(record.model)
+      && refs.videos.some(v => isS25SilentDiscountRefPath(v.url)),
   })
   const result = await jimengBrowserGenerateRequest<{ aigc_data?: { history_record_id?: string } }>(
     session,

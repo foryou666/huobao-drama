@@ -1,14 +1,16 @@
 import { eq, and, isNull } from 'drizzle-orm'
 import { db, schema, getAppMeta, setAppMeta } from '../db/index.js'
 import { now } from '../utils/response.js'
-import { CHENGMENT_DEFAULT_BASE_URL, CHENGMENT_DEFAULT_MODEL_ID } from '../constants/chengmeng.js'
+import {
+  CHENGMENT_DEFAULT_BASE_URL,
+  CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS,
+  remapChengmengChannel1ModelId,
+} from '../constants/chengmeng.js'
 import { logTaskProgress } from '../utils/task-logger.js'
 
 const BASE_URL_MIGRATION_KEY = 'chengmeng_base_url_v2'
 const KEY_ROTATION_META = 'chengmeng_api_key_rotation_v1'
-const MODEL_IDS_MIGRATION_KEY = 'chengmeng_model_ids_v4'
-
-const LEGACY_MODEL_IDS = new Set(['53', '32', '31', '15', '49'])
+const MODEL_IDS_MIGRATION_KEY = 'chengmeng_model_ids_v8'
 
 /** 将已保存的 cpolar 临时地址迁移到官方 API 网关 */
 export function migrateChengmengBaseUrlIfNeeded() {
@@ -30,17 +32,11 @@ export function migrateChengmengBaseUrlIfNeeded() {
   setAppMeta(BASE_URL_MIGRATION_KEY, `${ts}:${updated}`)
 }
 
-function remapLegacyChengmengModelId(modelId: string): string {
-  const id = String(modelId || '').trim()
-  if (id === '32' || id === '49') return '77'
-  if (LEGACY_MODEL_IDS.has(id)) return CHENGMENT_DEFAULT_MODEL_ID
-  return id || CHENGMENT_DEFAULT_MODEL_ID
-}
-
-/** 将 AI 配置中已下线的 model_id（53/49/32 等）迁移到新线路（70/77） */
+/** 将 AI 配置中的 model_id 收敛为通道1 开通线路（含 55 / 56） */
 export function migrateChengmengModelIdsIfNeeded() {
   if (getAppMeta(MODEL_IDS_MIGRATION_KEY)) return
 
+  const preferred = [...CHENGMENG_CHANNEL1_PREFERRED_MODEL_IDS]
   const rows = db.select().from(schema.aiServiceConfigs).all()
   const ts = now()
   let updated = 0
@@ -53,19 +49,14 @@ export function migrateChengmengModelIdsIfNeeded() {
       models = row.model ? [String(row.model)] : []
     }
     if (!models.length) {
-      models = [CHENGMENT_DEFAULT_MODEL_ID]
+      models = preferred
     } else {
-      models = models.map(remapLegacyChengmengModelId)
-      if (!models.includes(CHENGMENT_DEFAULT_MODEL_ID)) {
-        models = [CHENGMENT_DEFAULT_MODEL_ID, ...models]
+      models = models.map(remapChengmengChannel1ModelId)
+      for (const id of preferred) {
+        if (!models.includes(id)) models.push(id)
       }
-      // 去重并保留顺序
-      const seen = new Set<string>()
-      models = models.filter((id) => {
-        if (seen.has(id)) return false
-        seen.add(id)
-        return true
-      })
+      models = preferred.filter(id => models.includes(id))
+      if (!models.length) models = preferred
     }
     const next = JSON.stringify(models)
     if (next === row.model) continue

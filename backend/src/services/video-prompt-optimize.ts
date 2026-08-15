@@ -147,7 +147,7 @@ function buildSystemPrompt(
     ? `当前为专项优化（${focus}），只重点修改该专项相关内容，其余尽量保留。`
     : ''
   const action = mode === 'rewrite' ? '按用户要求重写' : '润色优化'
-  return `你是红果短剧平台的视频提示词优化专家。${focusLine}根据镜头上下文${action} video_prompt，使其更适合 AI 视频生成。
+  return `你是影光工场的视频提示词优化专家。${focusLine}根据镜头上下文${action} video_prompt，使其更适合 AI 视频生成。
 
 格式要求：${rule}
 

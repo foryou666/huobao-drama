@@ -12,7 +12,7 @@ import type {
   VideoPollResponse,
 } from './types'
 import { joinProviderUrl } from './url'
-import { seedanceDurationBounds, SEEDANCE_MODELS } from '../../constants/seedance.js'
+import { seedanceDurationBounds, SEEDANCE_MODELS, normalizeSeedanceResolution, isSeedance2FamilyModel } from '../../constants/seedance.js'
 import {
   buildSeedance2GenerateRequest,
   parseVideoContentRefs,
@@ -61,6 +61,9 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
       duration: this.normalizeDuration(record.duration, model),
       watermark: false,
     }
+    if (isSeedance2FamilyModel(model)) {
+      body.resolution = normalizeSeedanceResolution(record.resolution, model)
+    }
 
     return {
       url: joinProviderUrl(config.baseUrl, '/api/v3', '/contents/generations/tasks'),
@@ -96,9 +99,20 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
     }
   }
 
+  buildCancelRequest(config: AIConfig, taskId: string): ProviderRequest {
+    return {
+      url: joinProviderUrl(config.baseUrl, '/api/v3', `/contents/generations/tasks/${taskId}`),
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+      },
+      body: undefined,
+    }
+  }
+
   parsePollResponse(result: any): VideoPollResponse {
-    const status = result.status
-    if (status === 'succeeded') {
+    const status = String(result.status || '').toLowerCase()
+    if (status === 'succeeded' || status === 'success' || status === 'completed') {
       const videoUrl = result.content?.video_url
         || result.video_url
         || result.output?.video_url
@@ -108,13 +122,25 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
         videoUrl,
       }
     }
-    if (status === 'failed') {
+    if (status === 'failed' || status === 'error') {
       const raw = extractVolcengineApiErrorMessage(
         typeof result.error === 'string' ? result.error : JSON.stringify(result.error || result),
       ) || String(result.error?.message || result.message || 'Video generation failed')
       return { status: 'failed', error: formatVolcengineVideoError(raw, this.provider) }
     }
-    return { status: status || 'processing' }
+    if (status === 'cancelled' || status === 'canceled') {
+      return { status: 'cancelled', error: '任务已取消' }
+    }
+    if (status === 'expired') {
+      return { status: 'expired', error: '任务已过期' }
+    }
+    if (status === 'queued' || status === 'pending' || status === 'submitted') {
+      return { status: 'pending' }
+    }
+    if (status === 'running' || status === 'processing') {
+      return { status: 'processing' }
+    }
+    return { status: 'processing' }
   }
 
   extractVideoUrl(result: any): string | null {

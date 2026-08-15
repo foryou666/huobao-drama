@@ -1,10 +1,12 @@
 export function joinProviderUrl(baseUrl: string, requiredPrefix: string, path: string) {
   const normalizedBase = (baseUrl || '').replace(/\/+$/, '')
   const normalizedPrefix = normalizeSegment(requiredPrefix)
-  const normalizedPath = normalizeSegment(path)
+  const [rawPath, rawSearch = ''] = String(path || '').split('?')
+  const normalizedPath = normalizeSegment(rawPath)
+  const search = rawSearch ? (rawSearch.startsWith('?') ? rawSearch : `?${rawSearch}`) : ''
 
   if (!normalizedBase) {
-    return `${normalizedPrefix}${normalizedPath}`
+    return `${normalizedPrefix}${normalizedPath}${search}`
   }
 
   try {
@@ -15,12 +17,13 @@ export function joinProviderUrl(baseUrl: string, requiredPrefix: string, path: s
       : `${currentPath}${normalizedPrefix}`
 
     url.pathname = `${mergedPrefix}${normalizedPath}`.replace(/\/{2,}/g, '/')
+    url.search = search
     return url.toString()
   } catch {
     const basePath = normalizedBase.endsWith(normalizedPrefix)
       ? normalizedBase
       : `${normalizedBase}${normalizedPrefix}`
-    return `${basePath}${normalizedPath}`
+    return `${basePath}${normalizedPath}${search}`
   }
 }
 

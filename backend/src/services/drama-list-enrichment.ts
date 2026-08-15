@@ -8,6 +8,7 @@ import {
   toDeletionInfo,
 } from './deletion-guards.js'
 import { userCanManageDrama } from './drama-shares.js'
+import { parseDramaProjectMeta } from './narration-drama-meta.js'
 import type { AuthUser } from '../middleware/auth.js'
 
 type DramaRow = typeof schema.dramas.$inferSelect
@@ -214,6 +215,8 @@ export async function enrichDramaListItems(
     const cover34 = String(rawCovers['3:4'] || drama.thumbnail || '').trim() || null
     const cover43 = String(rawCovers['4:3'] || '').trim() || null
     const covers = { '3:4': cover34, '4:3': cover43 }
+    const { project_kind, narration_job_id } = parseDramaProjectMeta(drama)
+    const isNarration = project_kind === 'narration'
 
     return {
       ...toSnakeCase(drama),
@@ -226,12 +229,30 @@ export async function enrichDramaListItems(
       cover_3_4: cover34,
       cover_4_3: cover43,
       cover_url: cover34 || cover43 || null,
+      project_kind: project_kind || null,
+      narration_job_id,
+      is_narration: isNarration,
       shared_teams: sharesByDrama.get(drama.id) || [],
       is_shared_project: opts.activeTeamId != null && drama.teamId !== opts.activeTeamId,
       owner_team_name: drama.teamId ? (teamMap.get(drama.teamId) ?? null) : null,
       can_manage_drama: userCanManageDrama(drama, opts.user),
       is_archived: drama.status === 'archived',
       ...deletion,
+      // 解说漫：仅平台管理员可删除
+      ...(isNarration
+        ? (opts.user?.role === 'admin'
+          ? {
+              can_delete: true,
+              delete_block_reason: null,
+              content_summary: deletion.content_summary
+                ? `解说漫 · ${deletion.content_summary}`
+                : '解说漫任务',
+            }
+          : {
+              can_delete: false,
+              delete_block_reason: '仅平台管理员可删除解说漫',
+            })
+        : {}),
     }
   })
 }

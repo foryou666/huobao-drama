@@ -6,7 +6,13 @@ import { generateImage } from '../services/image-generation.js'
 import { logTaskError, logTaskPayload, logTaskStart, logTaskSuccess } from '../utils/task-logger.js'
 import { denyUnlessAdmin, getAuthUser } from '../middleware/auth.js'
 import { logActivity } from '../services/activity.js'
-import { tryChargeUser, tryChargeImageUser, tryRefundCharge, CREDIT_ACTIONS } from '../utils/credit-charge.js'
+import {
+  tryChargeUser,
+  tryChargeImageUser,
+  tryRefundCharge,
+  tryPreflightBatchImageCharge,
+  CREDIT_ACTIONS,
+} from '../utils/credit-charge.js'
 import { getActionCost } from '../services/credits.js'
 import { resolveBillingImageModel } from '../utils/image-billing.js'
 import { getActiveConfig, getConfigById } from '../services/ai.js'
@@ -15,7 +21,27 @@ import { parseStudioImageResolution, STUDIO_IMAGE_RESOLUTIONS } from '../constan
 import {
   APIMART_IMAGE_1K_CREDIT_COST,
   APIMART_IMAGE_2K_CREDIT_COST,
+  DREAM50_PRO_IMAGE_1K_CREDIT_COST,
+  DREAM50_PRO_IMAGE_2K_CREDIT_COST,
+  DREAM50_PRO_IMAGE_4K_CREDIT_COST,
 } from '../constants/credit-actions.js'
+import {
+  JIMENG_IMAGE_RESOLUTIONS,
+  JIMENG_IMAGE_DEFAULT_RESOLUTION,
+  JIMENG_IMAGE_ASPECT_OPTIONS,
+  JIMENG_IMAGE_DEFAULT_ASPECT,
+  JIMENG_IMAGE_QUANTITIES,
+  JIMENG_IMAGE_DEFAULT_QUANTITY,
+  JIMENG_STUDIO_IMAGE_MODEL_DREAM50_PRO,
+  JIMENG_STUDIO_IMAGE_MODEL_LABEL,
+  encodeJimengImageQuality,
+  isJimengDream50ProModel,
+  parseJimengImageAspectRatio,
+  parseJimengImageQuantity,
+  parseJimengImageResolution,
+  resolveJimengImageSize,
+} from '../constants/jimeng-web-image.js'
+import { listJimengWebSessions } from '../services/jimeng-web-session.js'
 import { resolveActiveTeamId } from '../services/team-access.js'
 import { getTeamMemberUserIds } from '../services/team-audit.js'
 import { attachGeneratedImageToEntity } from '../services/image-entity-attach.js'
@@ -53,8 +79,10 @@ function resolveImageConfig(body: Record<string, unknown>, model?: string) {
 function formatImageRecord(row: typeof schema.imageGenerations.$inferSelect | null | undefined) {
   if (!row) return null
   const rawImage = row.localPath || row.imageUrl
+  // 不向前端工作台返回 style（内含 jimeng_session），避免截图/抓包泄露账号绑定
+  const { style: _style, ...rest } = row
   return toSnakeCase({
-    ...row,
+    ...rest,
     errorMsg: sanitizeUserFacingProviderError(row.errorMsg),
     display_image_url: resolveDisplayMediaUrl(rawImage),
   })
@@ -84,20 +112,53 @@ app.post('/', async (c) => {
 
   imageConfig = resolveImageConfig(body, model) || imageConfig
 
-  const studioResolution = isStudio ? parseStudioImageResolution(String(body.resolution || '')) : null
-  if (isStudio && body.resolution != null && String(body.resolution).trim() && !studioResolution) {
-    return badRequest(c, '分辨率仅支持 1k 或 2k')
+  const dreamModel = isJimengDream50ProModel(model)
+  if (dreamModel && !listJimengWebSessions().length) {
+    return badRequest(c, 'dream5.0 pro 需先配置即梦通道4 Session，请联系管理员')
   }
-  const resolution = studioResolution || parseStudioImageResolution(String(body.resolution || '')) || undefined
 
-  const billed = tryChargeImageUser(c, CREDIT_ACTIONS.IMAGE_GENERATE, model, {
+  let resolution: string | undefined
+  let dreamAspect = JIMENG_IMAGE_DEFAULT_ASPECT
+  let dreamIntelligent = false
+  let quantity = 1
+  if (dreamModel) {
+    const requested = String(body.resolution || '').trim()
+    if (requested && !JIMENG_IMAGE_RESOLUTIONS.includes(requested as any)) {
+      return badRequest(c, 'dream5.0 pro 分辨率仅支持 1k / 2k / 4k')
+    }
+    resolution = parseJimengImageResolution(requested || JIMENG_IMAGE_DEFAULT_RESOLUTION)
+    dreamAspect = parseJimengImageAspectRatio(String(body.aspect_ratio || ''))
+    dreamIntelligent = dreamAspect === '智能'
+    quantity = parseJimengImageQuantity(body.quantity ?? body.count)
+  } else {
+    const studioResolution = isStudio ? parseStudioImageResolution(String(body.resolution || '')) : null
+    if (isStudio && body.resolution != null && String(body.resolution).trim() && !studioResolution) {
+      return badRequest(c, '分辨率仅支持 1k 或 2k')
+    }
+    resolution = studioResolution || parseStudioImageResolution(String(body.resolution || '')) || undefined
+  }
+
+  const billingResolution = resolution || (isStudio ? (dreamModel ? JIMENG_IMAGE_DEFAULT_RESOLUTION : '1k') : undefined)
+  const chargeContext = {
     summary: isStudio ? '工作台图片生成' : '生成镜头图',
     dramaId: body.drama_id ? Number(body.drama_id) : undefined,
     resourceType: isStudio ? 'image_studio' : 'storyboard',
     resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
-  }, imageConfig?.provider, resolution || (isStudio ? '1k' : undefined))
-  if (billed.error) return billed.error
+  }
 
+  if (dreamModel && quantity > 1) {
+    const preflight = tryPreflightBatchImageCharge(
+      c,
+      CREDIT_ACTIONS.IMAGE_GENERATE,
+      quantity,
+      model,
+      imageConfig?.provider,
+      billingResolution,
+    )
+    if (preflight.error) return preflight.error
+  }
+
+  const pendingRefundTxIds: number[] = []
   try {
     let configId: number | undefined = resolveImageConfigId(body) ?? (body.config_id != null ? Number(body.config_id) : undefined)
     let dramaId: number | undefined = body.drama_id ? Number(body.drama_id) : undefined
@@ -109,8 +170,15 @@ app.post('/', async (c) => {
       }
     }
 
-    const size = body.size
-      || (body.aspect_ratio ? getImageSizeForAspectRatio(body.aspect_ratio) : undefined)
+    let size = body.size
+      ? String(body.size)
+      : (body.aspect_ratio ? getImageSizeForAspectRatio(String(body.aspect_ratio)) : undefined)
+    let storedResolution = resolution || (isStudio ? '1k' : undefined)
+    if (dreamModel) {
+      const sizeInfo = resolveJimengImageSize(dreamAspect, resolution)
+      size = body.size ? String(body.size) : `${sizeInfo.width}x${sizeInfo.height}`
+      storedResolution = encodeJimengImageQuality(sizeInfo.resolution, dreamIntelligent)
+    }
 
     const referenceImages = Array.isArray(body.reference_images)
       ? body.reference_images.map(String).filter(Boolean)
@@ -139,64 +207,120 @@ app.post('/', async (c) => {
       frameType: body.frame_type,
       imageType,
       studio: isStudio,
+      quantity,
+      aspectRatio: dreamModel ? dreamAspect : body.aspect_ratio,
     })
     logTaskPayload('ImageAPI', 'request body', body)
-    const id = await generateImage({
-      storyboardId: body.storyboard_id,
-      dramaId,
-      sceneId: body.scene_id,
-      characterId: body.character_id,
-      prompt: body.prompt,
-      model,
-      size,
-      resolution: resolution || (isStudio ? '1k' : undefined),
-      referenceImages,
-      frameType: body.frame_type,
-      imageType,
-      configId,
-      creditTransactionId: billed.charge.transactionId,
-    })
 
-    const [record] = db.select().from(schema.imageGenerations)
-      .where(eq(schema.imageGenerations.id, id)).all()
-    logTaskSuccess('ImageAPI', 'generate', { generationId: id, provider: record?.provider })
-    logActivity(getAuthUser(c), {
+    const records: ReturnType<typeof formatImageRecord>[] = []
+    const linkedTxIds: number[] = []
+    let lastBalance = 0
+    let totalCost = 0
+    const authUser = getAuthUser(c)
+
+    for (let i = 0; i < quantity; i++) {
+      const billed = tryChargeImageUser(
+        c,
+        CREDIT_ACTIONS.IMAGE_GENERATE,
+        model,
+        {
+          ...chargeContext,
+          dramaId,
+          summary: quantity > 1
+            ? `${isStudio ? '工作台图片生成' : '生成镜头图'}（${i + 1}/${quantity}）`
+            : chargeContext.summary,
+        },
+        imageConfig?.provider,
+        billingResolution,
+      )
+      if (billed.error) {
+        return billed.error
+      }
+      const txId = Number(billed.charge.transactionId)
+      if (Number.isFinite(txId) && txId > 0) pendingRefundTxIds.push(txId)
+      lastBalance = billed.charge.balance
+      totalCost += billed.charge.cost
+
+      const id = await generateImage({
+        storyboardId: body.storyboard_id,
+        dramaId,
+        sceneId: body.scene_id,
+        characterId: body.character_id,
+        prompt: body.prompt,
+        model,
+        size,
+        resolution: storedResolution,
+        referenceImages,
+        frameType: body.frame_type,
+        imageType,
+        configId,
+        creditTransactionId: Number.isFinite(txId) && txId > 0 ? txId : undefined,
+      })
+      // 任务已入队，失败由任务自身退款，勿在此处退
+      if (Number.isFinite(txId) && txId > 0) {
+        pendingRefundTxIds.pop()
+        linkedTxIds.push(txId)
+      }
+
+      const [record] = db.select().from(schema.imageGenerations)
+        .where(eq(schema.imageGenerations.id, id)).all()
+      records.push(formatImageRecord(record))
+      logTaskSuccess('ImageAPI', 'generate', { generationId: id, provider: record?.provider, index: i + 1, quantity })
+    }
+
+    logActivity(authUser, {
       action: 'image.generate',
-      summary: isStudio ? '工作台图片生成' : '生成镜头图片',
+      summary: quantity > 1
+        ? `${isStudio ? '工作台图片生成' : '生成镜头图片'} ×${quantity}`
+        : (isStudio ? '工作台图片生成' : '生成镜头图片'),
       resourceType: isStudio ? 'image_studio' : 'storyboard',
       resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
       dramaId,
-      creditCost: billed.charge.cost,
+      creditCost: totalCost,
       metadata: {
-        generation_id: id,
+        generation_id: records[0]?.id,
+        generation_ids: records.map(item => item?.id).filter(Boolean),
         frame_type: body.frame_type,
         image_type: imageType,
-        credit_tx_id: billed.charge.transactionId,
+        credit_tx_ids: linkedTxIds,
         studio: isStudio,
+        quantity,
+        aspect_ratio: dreamModel ? dreamAspect : body.aspect_ratio,
       },
     })
     invalidateImageOwnerMapsCache()
+    const primary = records[0]
     return created(c, {
-      ...formatImageRecord(record),
-      credits_balance: billed.charge.balance,
+      ...primary,
+      items: records,
+      quantity: records.length,
+      credits_balance: lastBalance,
+      credit_cost: totalCost,
     })
   } catch (err: any) {
-    tryRefundCharge(billed.charge.transactionId, {
-      summary: '图片生成失败退款',
-      dramaId: body.drama_id ? Number(body.drama_id) : undefined,
-      resourceType: isStudio ? 'image_studio' : 'storyboard',
-      resourceId: body.storyboard_id ? Number(body.storyboard_id) : undefined,
-      metadata: { reason: err.message },
-    })
+    for (const txId of pendingRefundTxIds) {
+      tryRefundCharge(txId, {
+        ...chargeContext,
+        summary: '图片生成失败退款',
+        metadata: { reason: err.message },
+      })
+    }
     logTaskError('ImageAPI', 'generate', { error: err.message })
     return badRequest(c, sanitizeUserFacingProviderError(err.message))
   }
 })
 
-const STUDIO_IMAGE_MODELS = ['gpt-image-2'] as const
+const STUDIO_IMAGE_MODELS = ['gpt-image-2', JIMENG_STUDIO_IMAGE_MODEL_DREAM50_PRO] as const
 
 function resolveStudioModels() {
+  // Image 2 保持首位，作为默认
   return [...STUDIO_IMAGE_MODELS]
+}
+
+function studioModelLabel(id: string): string {
+  if (isJimengDream50ProModel(id)) return JIMENG_STUDIO_IMAGE_MODEL_LABEL
+  if (id === 'gpt-image-2') return 'Image 2'
+  return id
 }
 
 function resolveImageModel(body: Record<string, unknown>, config: ReturnType<typeof getActiveConfig>) {
@@ -246,6 +370,10 @@ app.get('/studio/capabilities', async (c) => {
   }
   const credit1k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_1K) || APIMART_IMAGE_1K_CREDIT_COST
   const credit2k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_APIMART_2K) || APIMART_IMAGE_2K_CREDIT_COST
+  const dream1k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_DREAM50_PRO_1K) || DREAM50_PRO_IMAGE_1K_CREDIT_COST
+  const dream2k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_DREAM50_PRO_2K) || DREAM50_PRO_IMAGE_2K_CREDIT_COST
+  const dream4k = getActionCost(CREDIT_ACTIONS.IMAGE_GENERATE_DREAM50_PRO_4K) || DREAM50_PRO_IMAGE_4K_CREDIT_COST
+  const jimengReady = listJimengWebSessions().length > 0
   return success(c, {
     max_reference_images: maxReferenceImages,
     supports_reference: config ? supportsImageReference(config.provider, defaultModel) : false,
@@ -253,6 +381,33 @@ app.get('/studio/capabilities', async (c) => {
     provider: config?.provider || null,
     model: defaultModel,
     models: studioModels,
+    model_options: studioModels.map(id => {
+      const dream = isJimengDream50ProModel(id)
+      return {
+        id,
+        label: studioModelLabel(id),
+        default: id === 'gpt-image-2',
+        available: dream ? jimengReady : true,
+        resolutions: dream
+          ? JIMENG_IMAGE_RESOLUTIONS.map(res => ({
+              id: res,
+              label: res === '1k' ? '标清 1K' : res === '4k' ? '超清 4K' : '高清 2K',
+              credit_cost: res === '4k' ? dream4k : res === '1k' ? dream1k : dream2k,
+            }))
+          : STUDIO_IMAGE_RESOLUTIONS.map(res => ({
+              id: res,
+              label: res.toUpperCase(),
+              credit_cost: res === '2k' ? credit2k : credit1k,
+            })),
+        default_resolution: dream ? JIMENG_IMAGE_DEFAULT_RESOLUTION : '1k',
+        aspect_ratios: dream ? [...JIMENG_IMAGE_ASPECT_OPTIONS] : ['16:9', '9:16'],
+        default_aspect_ratio: dream ? JIMENG_IMAGE_DEFAULT_ASPECT : '16:9',
+        quantities: dream ? [...JIMENG_IMAGE_QUANTITIES] : [1],
+        default_quantity: JIMENG_IMAGE_DEFAULT_QUANTITY,
+        max_reference_images: dream ? 10 : maxReferenceImages,
+        supports_reference: true,
+      }
+    }),
     resolutions: STUDIO_IMAGE_RESOLUTIONS.map(id => ({
       id,
       label: id.toUpperCase(),
@@ -261,9 +416,47 @@ app.get('/studio/capabilities', async (c) => {
     default_resolution: '1k',
     aspect_ratios: ['16:9', '9:16'],
     default_aspect_ratio: '16:9',
+    quantities: [1],
+    default_quantity: 1,
     can_view_all_studio: true,
     user_filter_options: canViewAll ? userFilterOptions : [],
   })
+})
+
+// GET /images/admin/records — 管理员生图记录（含即梦通道4账号，勿用于工作台）
+app.get('/admin/records', async (c) => {
+  const denied = denyUnlessAdmin(c)
+  if (denied) return denied
+  const user = getAuthUser(c)
+  const activeTeamId = resolveActiveTeamId(c, user)
+  const dramaId = c.req.query('drama_id') ? Number(c.req.query('drama_id')) : undefined
+  const status = c.req.query('status') || undefined
+  const keyword = c.req.query('keyword') || undefined
+  const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
+  const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
+  const userIdParam = c.req.query('user_id') ? Number(c.req.query('user_id')) : undefined
+  const model = String(c.req.query('model') || '').trim() || undefined
+  const studioOnlyRaw = c.req.query('studio_only')
+  const studioOnly = studioOnlyRaw == null || studioOnlyRaw === ''
+    ? true
+    : !['0', 'false', 'no'].includes(String(studioOnlyRaw).toLowerCase())
+
+  const result = listImageLedger({
+    user,
+    activeTeamId,
+    dramaId: Number.isFinite(dramaId) ? dramaId : undefined,
+    status,
+    keyword,
+    limit,
+    offset,
+    mineOnly: false,
+    studioOnly,
+    userId: userIdParam && Number.isFinite(userIdParam) && userIdParam > 0 ? userIdParam : undefined,
+    includeJimengAccount: true,
+    model,
+  })
+
+  return success(c, result)
 })
 
 // GET /images/ledger — 图片生成流水

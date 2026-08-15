@@ -333,6 +333,10 @@ export const videoGenerations = sqliteTable('video_generations', {
   taskId: text('task_id'),
   errorMsg: text('error_msg'),
   creditTransactionId: integer('credit_transaction_id'),
+  upstreamEstimatedCostYuan: real('upstream_estimated_cost_yuan'),
+  upstreamActualCostYuan: real('upstream_actual_cost_yuan'),
+  upstreamBillId: text('upstream_bill_id'),
+  upstreamBillSyncedAt: text('upstream_bill_synced_at'),
   configId: integer('config_id'),
   userId: integer('user_id'),
   width: integer('width'),
@@ -384,7 +388,10 @@ export const users = sqliteTable('users', {
   role: text('role').notNull().default('user'),
   isActive: integer('is_active', { mode: 'boolean' }).default(true),
   creditsBalance: integer('credits_balance').default(10000),
+  /** JSON string[] of allowed login IPs/CIDRs; null/empty = unrestricted */
+  allowedIps: text('allowed_ips'),
   lastLoginAt: text('last_login_at'),
+  lastLoginIp: text('last_login_ip'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 })
@@ -392,6 +399,8 @@ export const users = sqliteTable('users', {
 export const teams = sqliteTable('teams', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
+  /** JSON string[] applied to all members at login (merged with user allowlist) */
+  allowedIps: text('allowed_ips'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 })
@@ -580,6 +589,7 @@ export const narrationJobs = sqliteTable('narration_jobs', {
   analysisJson: text('analysis_json'),
   narratorVoice: text('narrator_voice'),
   ttsConfigId: integer('tts_config_id'),
+  grokChannel: text('grok_channel').default('geeknow'),
   grokModel: text('grok_model').default('grok-video-3-pro'),
   aspectRatio: text('aspect_ratio').default('9:16'),
   jianyingDraftPath: text('jianying_draft_path'),
@@ -643,12 +653,94 @@ export const ttsGenerations = sqliteTable('tts_generations', {
   emotionText: text('emotion_text'),
   emotionVector: text('emotion_vector'),
   emotionWeight: real('emotion_weight'),
+  /** 情感参考音频本地路径（IndexTTS2 第二路音频，可选） */
+  emotionAudioPath: text('emotion_audio_path'),
   audioPath: text('audio_path'),
   durationSec: real('duration_sec'),
   status: text('status').default('completed'),
   errorMsg: text('error_msg'),
+  provider: text('provider'),
+  remoteTaskId: text('remote_task_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
+})
+
+/** 配乐生成记录（MiniMax 官方；历史可能为 APIMart Suno） */
+export const musicGenerations = sqliteTable('music_generations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id').notNull(),
+  teamId: integer('team_id'),
+  dramaId: integer('drama_id'),
+  /** 权属订单编号，如 YG-BGM-20260801-000123 */
+  orderNo: text('order_no'),
+  prompt: text('prompt').notNull(),
+  title: text('title'),
+  style: text('style'),
+  negativeTags: text('negative_tags'),
+  vocalGender: text('vocal_gender'),
+  instrumental: integer('instrumental', { mode: 'boolean' }).default(false),
+  customMode: integer('custom_mode', { mode: 'boolean' }).default(false),
+  version: text('version'),
+  audioPath: text('audio_path'),
+  coverPath: text('cover_path'),
+  durationSec: real('duration_sec'),
+  clipsJson: text('clips_json'),
+  status: text('status').default('pending'),
+  errorMsg: text('error_msg'),
+  provider: text('provider'),
+  remoteTaskId: text('remote_task_id'),
+  creditTxId: integer('credit_tx_id'),
+  /** private=本人可见 team=团队可见 public=全站可见 */
+  visibility: text('visibility').default('public'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+/** RunningHub 去字幕/去水印任务 */
+export const subtitleEraseJobs = sqliteTable('subtitle_erase_jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  title: text('title').notNull(),
+  userId: integer('user_id').notNull(),
+  teamId: integer('team_id'),
+  status: text('status').notNull().default('queued'),
+  /** subtitle | watermark */
+  eraseMode: text('erase_mode').default('subtitle'),
+  sourceVideoPath: text('source_video_path'),
+  outputVideoPath: text('output_video_path'),
+  remoteTaskId: text('remote_task_id'),
+  durationSec: real('duration_sec'),
+  maxSide: integer('max_side'),
+  fileSize: integer('file_size'),
+  instanceType: text('instance_type').default('plus'),
+  creditTransactionId: integer('credit_transaction_id'),
+  progress: integer('progress').default(0),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  deletedAt: text('deleted_at'),
+})
+
+/** RunningHub Seedvr2 视频超分任务 */
+export const videoUpscaleJobs = sqliteTable('video_upscale_jobs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  title: text('title').notNull(),
+  userId: integer('user_id').notNull(),
+  teamId: integer('team_id'),
+  /** 关联 video_generations.id（通道2卡片超分） */
+  videoGenerationId: integer('video_generation_id'),
+  status: text('status').notNull().default('queued'),
+  sourceVideoPath: text('source_video_path'),
+  outputVideoPath: text('output_video_path'),
+  remoteTaskId: text('remote_task_id'),
+  durationSec: real('duration_sec'),
+  fileSize: integer('file_size'),
+  instanceType: text('instance_type').default('plus'),
+  creditTransactionId: integer('credit_transaction_id'),
+  progress: integer('progress').default(0),
+  errorMsg: text('error_msg'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  deletedAt: text('deleted_at'),
 })
 
 /** 项目画布：一剧一板，实体指针归项目，布局归画布 */
@@ -693,6 +785,49 @@ export const canvasEdges = sqliteTable('canvas_edges', {
   toNodeKey: text('to_node_key').notNull(),
   edgeType: text('edge_type').notNull().default('link'),
   layoutJson: text('layout_json'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+})
+
+/** 虚拟人像认证流水（软取消保留，便于误操作后重新认证） */
+export const portraitCertRecords = sqliteTable('portrait_cert_records', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  characterId: integer('character_id').notNull(),
+  dramaId: integer('drama_id'),
+  outfitId: text('outfit_id'),
+  scope: text('scope').notNull().default('primary'),
+  characterName: text('character_name'),
+  outfitLabel: text('outfit_label'),
+  dramaTitle: text('drama_title'),
+  imageUrl: text('image_url'),
+  seedanceAssetId: text('seedance_asset_id'),
+  seedanceAssetGroupId: text('seedance_asset_group_id'),
+  status: text('status').notNull().default('processing'),
+  failedReason: text('failed_reason'),
+  configId: integer('config_id'),
+  configName: text('config_name'),
+  apiKeyMasked: text('api_key_masked'),
+  createdBy: integer('created_by'),
+  createdByName: text('created_by_name'),
+  cancelledBy: integer('cancelled_by'),
+  cancelledByName: text('cancelled_by_name'),
+  createdAt: text('created_at').notNull(),
+  activatedAt: text('activated_at'),
+  cancelledAt: text('cancelled_at'),
+  cancelReason: text('cancel_reason'),
+  replacedById: integer('replaced_by_id'),
+  metadata: text('metadata'),
+})
+
+/** 3D 导演台场景快照（按用户 + instance_id） */
+export const directorDeskScenes = sqliteTable('director_desk_scenes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  instanceId: text('instance_id').notNull(),
+  userId: integer('user_id').notNull(),
+  dramaId: integer('drama_id'),
+  episodeId: integer('episode_id'),
+  storyboardId: integer('storyboard_id'),
+  stateJson: text('state_json').notNull(),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 })

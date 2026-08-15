@@ -14,6 +14,17 @@ import {
 } from '../services/jimeng-web-session.js'
 import { validateJimengSession } from '../services/jimeng-web-client.js'
 import { getJimengSessionStatus, listJimengSessionSummaries } from '../utils/jimeng-web-video-options.js'
+import {
+  clearJimengForceSessionId,
+  resolveLiveJimengForceSessionId,
+  setJimengForceSessionId,
+} from '../services/jimeng-session-binding.js'
+import {
+  listJimengAccessSettingsForAdmin,
+  setJimengAccessSettings,
+  type JimengTeamAccessRule,
+} from '../utils/jimeng-access-settings.js'
+import { logActivity } from '../services/activity.js'
 
 const app = new Hono<{ Variables: AuthVariables }>()
 
@@ -24,12 +35,25 @@ async function validateSessionEntry(session: ReturnType<typeof getJimengWebSessi
   return validateJimengSession(session)
 }
 
+function withForceFlags<T extends { id: string }>(items: T[]) {
+  const forceId = resolveLiveJimengForceSessionId()
+  return {
+    force_session_id: forceId,
+    items: items.map(item => ({
+      ...item,
+      is_force: !!forceId && item.id === forceId,
+    })),
+  }
+}
+
 // GET /jimeng/sessions — 全部 Session（不含 Cookie 明文）
 app.get('/sessions', async (c) => {
   const items = await listJimengSessionSummaries()
+  const withForce = withForceFlags(items)
   return success(c, {
     active_id: getActiveJimengSessionId(),
-    items,
+    force_session_id: withForce.force_session_id,
+    items: withForce.items,
     configured: items.length > 0,
   })
 })
@@ -38,10 +62,12 @@ app.get('/sessions', async (c) => {
 app.get('/session', async (c) => {
   const status = await getJimengSessionStatus()
   const items = await listJimengSessionSummaries()
+  const withForce = withForceFlags(items)
   return success(c, {
     ...status,
     active_id: getActiveJimengSessionId(),
-    sessions: items,
+    force_session_id: withForce.force_session_id,
+    sessions: withForce.items,
   })
 })
 
@@ -96,22 +122,49 @@ app.put('/session/:id/active', async (c) => {
   }
 })
 
+// PUT /jimeng/session/:id/force — 强制全员发布使用此 Session
+app.put('/session/:id/force', (c) => {
+  const id = String(c.req.param('id') || '').trim()
+  if (!id) return badRequest(c, 'id is required')
+  try {
+    const forceId = setJimengForceSessionId(id)
+    return success(c, {
+      force_session_id: forceId,
+      forced: true,
+    })
+  } catch (err: any) {
+    return badRequest(c, err.message)
+  }
+})
+
+// DELETE /jimeng/force-session — 取消强制，恢复按用户+项目分配
+app.delete('/force-session', (c) => {
+  clearJimengForceSessionId()
+  return success(c, {
+    force_session_id: null,
+    forced: false,
+  })
+})
+
 // DELETE /jimeng/session/:id — 删除单个
 app.delete('/session/:id', (c) => {
   const id = String(c.req.param('id') || '').trim()
   if (!id) return badRequest(c, 'id is required')
   const ok = deleteJimengWebSession(id)
   if (!ok) return notFound(c, 'Session 不存在')
+  // 强制号被删时 resolveLive 会自动清除 meta
   return success(c, {
     deleted: true,
     active_id: getActiveJimengSessionId(),
+    force_session_id: resolveLiveJimengForceSessionId(),
   })
 })
 
 // DELETE /jimeng/session — 清除全部（兼容旧前端）
 app.delete('/session', (c) => {
   clearJimengWebSession()
-  return success(c, { cleared: true })
+  clearJimengForceSessionId()
+  return success(c, { cleared: true, force_session_id: null })
 })
 
 // POST /jimeng/session/validate — 验证当前启用 Session
@@ -129,6 +182,37 @@ app.post('/session/:id/validate', async (c) => {
   if (!session) return notFound(c, 'Session 不存在')
   const valid = await validateSessionEntry(session)
   return success(c, { valid, id: session.id, user: getAuthUser(c).username })
+})
+
+// GET /jimeng/access-settings — 通道4 团队提交成功率
+app.get('/access-settings', (c) => success(c, listJimengAccessSettingsForAdmin()))
+
+// PUT /jimeng/access-settings — 保存通道4 团队提交成功率
+app.put('/access-settings', async (c) => {
+  const body = await c.req.json().catch(() => ({}))
+  const teamsInput = Array.isArray(body.teams) ? body.teams : []
+  const teams: JimengTeamAccessRule[] = teamsInput.map((item: any) => ({
+    team_id: Number(item?.team_id ?? item?.teamId),
+    success_rate: Number(item?.success_rate ?? item?.successRate),
+  })).filter((item: JimengTeamAccessRule) => Number.isFinite(item.team_id) && item.team_id > 0)
+
+  const saved = setJimengAccessSettings({
+    enabled: body.enabled !== false && body.enabled !== 0 && body.enabled !== '0',
+    default_success_rate: Number(body.default_success_rate ?? body.defaultSuccessRate),
+    teams,
+  })
+
+  logActivity(getAuthUser(c), {
+    action: 'jimeng.access_settings.update',
+    summary: `更新通道4团队提交成功率（默认 ${saved.default_success_rate}% · ${saved.teams.length} 条团队规则）`,
+    metadata: {
+      enabled: saved.enabled,
+      default_success_rate: saved.default_success_rate,
+      teams: saved.teams,
+    },
+  })
+
+  return success(c, listJimengAccessSettingsForAdmin())
 })
 
 export default app
