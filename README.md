@@ -1,4 +1,4 @@
-# 🎬 红果短剧 - AI 短剧生成平台
+# 🎬 影光工场 - AI 影视创作与导演工作站
 
 <div align="center">
 
@@ -16,7 +16,7 @@
 
 ## 📖 项目简介
 
-红果短剧 是一个基于 AI 的短剧自动化生产平台，实现从剧本生成、角色设计、分镜制作到视频合成的全流程自动化。
+影光工场是一个基于 AI 的影视自动化生产平台，实现从剧本生成、角色设计、分镜制作到视频合成的全流程自动化。
 
 ### 🎯 核心价值
 
@@ -152,7 +152,7 @@ cp configs/config.example.yaml configs/config.yaml
 
 ```yaml
 app:
-  name: "红果短剧 API"
+  name: "影光工场 API"
   version: "1.0.0"
   debug: true
 
@@ -486,7 +486,7 @@ cd ../frontend && npm run build
 
 ## 👨‍💻 关于我们
 
-**红果短剧**
+**影光工场**
 
 - 🏠 **位置**: 中国南京
 - 🚀 **状态**: 创业中
@@ -517,6 +517,6 @@ cd ../frontend && npm run build
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=chatfire-AI/huobao-drama&type=date&legend=top-left)](https://www.star-history.com/#chatfire-AI/huobao-drama&type=date&legend=top-left)
-Made with ❤️ by 红果短剧 Team
+Made with ❤️ by 影光工场 Team
 
 </div>
