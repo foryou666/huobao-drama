@@ -27,9 +27,11 @@ frontend/dist-backups/
 *.swo
 *~
 
-# Environment
+# Environment / secrets
 .env
 .env.local
+.env.*
+!.env.example
 backend/certs/*.pem
 backend/certs/*.key
 tmp/alipay-certs/
@@ -61,12 +63,91 @@ data/seed/*.db-wal
 data/seed/*.db-shm
 data/seed/*.sql
 
-# Config
+# Config (local secrets; commit example only)
 configs/config.yaml
 
-# Misc
+# Misc local scratch
 tmp/
 temp/
 .superpowers/
 /CLAUDE.md
 /AGENTS.md
+
+# Local drama assets / extraction dumps (not product source)
+artifacts/
+assets/
+output/
+outputs/
+work_extract/
+
+# Screenplay / review dumps at repo root
+*.docx
+*.zip
+/review_*.json
+/script_review_*
+/english_dialogue*
+/.codex_extract_docx.py
+/tmp_*.py
+/tmp_*.mjs
+/tmp_*.js
+/tmp_*.json
+/build_storyboard_prompts.py
+/scripts/
+
+# One-off deploy probes & remote upsert dumps
+deploy/probe-*
+deploy/check-*
+deploy/submit-*
+deploy/poll-*
+deploy/snip-*
+deploy/find-*
+deploy/analyze-*
+deploy/verify-*
+deploy/wait-*
+deploy/export-*
+deploy/mix-*
+deploy/resubmit-*
+deploy/import-*
+deploy/fetch-*
+deploy/apply-*
+deploy/finish-*
+deploy/patch-*
+deploy/filter-*
+deploy/list-*
+deploy/_tmp_*
+deploy/remote-upsert-*
+deploy/remote-*.cjs
+deploy/*.json
+!deploy/package.json
+!deploy/package-lock.json
+
+# Backend one-off probes / audits
+backend/scripts/probe-*
+backend/scripts/audit-*
+backend/scripts/format-*
+backend/scripts/submit-*
+backend/scripts/stats-*
+backend/scripts/verify-*
+backend/scripts/export-*
+backend/scripts/reattach-*
+backend/scripts/ensure-*
+backend/scripts/fix-*
+
+# Local tools scratch / one-off screenplay helpers
+tools/**/tmp-*
+tools/**/*.log
+tools/analyze_*.py
+tools/audit_*.py
+tools/build_*.py
+tools/extract_*.py
+tools/finalize_*.py
+tools/inspect_*.py
+tools/make_*.py
+tools/print_*.py
+
+# Local screenplay markdown dumps at repo root
+/*诱*.md
+/*角色*.md
+/*人物*.md
+/*剧本*.md
+/*提示词*.md
